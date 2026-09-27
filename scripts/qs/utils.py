@@ -8,6 +8,7 @@ discovery, commit/PR plumbing).
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -25,6 +26,7 @@ def run(
     capture: bool = True,
     cwd: str | None = None,
     stdin: int | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a command, returning the completed process.
 
@@ -34,6 +36,10 @@ def run(
     which ``stdin=None`` preserves exactly. Callers that launch children
     *concurrently* pass ``subprocess.DEVNULL`` so two of them cannot race
     for the same terminal on an auth prompt (review fix QS-291 #01 S2).
+
+    ``env`` (QS-340) is merged **over** ``os.environ`` — the given keys
+    are added or overridden, everything else is inherited. ``None`` (the
+    default) inherits the environment unchanged.
     """
     return subprocess.run(
         cmd,
@@ -42,6 +48,7 @@ def run(
         check=check,
         cwd=cwd,
         stdin=stdin,
+        env={**os.environ, **env} if env is not None else None,
     )
 
 

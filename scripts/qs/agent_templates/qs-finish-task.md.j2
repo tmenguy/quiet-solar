@@ -79,7 +79,7 @@ there's nothing to merge, just clean up.
 python scripts/qs/context.py
 ```
 
-Capture `issue`, `branch`, `pr_number`, `pr_url`, `worktree`.
+Capture `issue`, `branch`, `pr_number`, `pr_url`, `worktree`, `scale`.
 
 ## Branch on PR state
 
@@ -92,6 +92,37 @@ The user is abandoning the task or cleaning up after `/setup-task` /
 The user is abandoning the task or cleaning up after `setup-task` /
 `create-plan` without an implementation. Skip merge logic entirely.
 [% endif %]
+
+**Epic worktree (`scale` is `epic`, QS-340).** An epic never has a PR,
+so Case A is always its path; its short-lived worktree is discarded once
+the epic document is on `main`. Differences from the task path below:
+
+- Steps 1–2 are replaced by one probe:
+  ```bash
+  python scripts/qs/epic_doc.py status --issue {{issue}}
+  ```
+  `safe_to_discard: true` → safe to remove (the landed document is not
+  "unpushed work", even though the branch never pushed it). Otherwise
+  show what would be lost — notably an unlanded `docs/epics/QS-{{issue}}.md`
+  (`local_modified`, `diff`) — and ask
+  `"Force-delete and lose this work? (yes / no)"`, as for a task.
+- Step 4 also deletes the local branch, so a re-entry starts fresh from
+  `origin/main`:
+  ```bash
+  python scripts/qs/cleanup_worktree.py \
+      --work-dir "{{worktree}}" \
+      --issue {{issue}} \
+      --force --delete-branch
+  ```
+- Step 5 (remote-branch delete) is unchanged.
+- Step 6 reports instead:
+  ```text
+  ✅ epic session closed — doc on `main`, issue #{{issue}} stays open.
+  ✅ Worktree and branch {{branch}} removed (local + remote).
+  ```
+- Never close the epic issue.
+
+For a task:
 
 1. Inspect the worktree for unsaved work:
    ```bash
@@ -400,4 +431,6 @@ The standard merge flow.
 - Refuse to delete `main` / `master` even if asked.
 - In Case A, if the user has unsaved work, ALWAYS show what would be
   lost before asking for force-delete authorization.
+- Never close the epic issue (QS-340) — an epic stays open for its
+  lifetime.
 [% endblock %]

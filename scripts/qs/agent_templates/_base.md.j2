@@ -16,7 +16,8 @@ effort: [[ effort ]]
 [% if facts_state == "bound" %]
 - Issue: #[[ issue ]] — [[ title ]]
 - Branch: [[ branch ]] · Worktree: [[ worktree ]]
-- Lane: [[ lane if lane else lane_none ]] · Story (path; may not exist yet): [[ story_file ]]
+- Lane: [[ lane if lane else lane_none ]][% if not (lane or "").startswith("epic-") %] · Story (path; may not exist yet): [[ story_file ]][% endif %]
+
 
 Volatile facts (PR number, latest review fix, story existence) are not rendered — run `python scripts/qs/context.py` for those.
 [% elif facts_state == "lookup_failed" %]

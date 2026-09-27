@@ -54,6 +54,7 @@ _FORBIDDEN_RELEASE_INVOCATION = re.compile(
 _TWO_BLOCK_ORCHESTRATORS = [
     "qs-setup-task.md",
     "qs-create-plan.md",
+    "qs-decompose-epic.md",
     "qs-diagnose-task.md",
     "qs-implement-task.md",
     "qs-implement-setup-task.md",
@@ -76,6 +77,8 @@ _HARDCODED_FALLBACK = [
     ("qs-review-task.md", "/finish-task"),
     ("qs-diagnose-task.md", "/{{NEXT_PHASE}}"),
     ("qs-verify-task.md", "/finish-task"),
+    # QS-340: the epic × factory lane hands off straight to finish-task.
+    ("qs-decompose-epic.md", "/finish-task"),
 ]
 
 
@@ -270,6 +273,7 @@ def test_forbidden_release_regex_ignores_prose_mention() -> None:
 _GUI_BLOCK_ORCHESTRATORS = [
     "qs-setup-task.md",
     "qs-create-plan.md",
+    "qs-decompose-epic.md",
     "qs-diagnose-task.md",
     "qs-implement-task.md",
     "qs-implement-setup-task.md",
@@ -759,6 +763,29 @@ def test_shared_orchestrator_carries_both_lane_branches(
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+
+
+# QS-340: qs-setup-task routes the epic × factory lane to decompose-epic.
+# Routing-specific tokens: `epic-factory` alone already appears in step 1c.
+# The OpenCode routing parenthetical spells `/decompose-epic`.
+_EPIC_ROUTING = {
+    "qs-setup-task.md": ("/decompose-epic", "NEXT_PHASE = decompose-epic"),
+}
+
+
+@pytest.mark.parametrize(
+    "harness_dir", _ROUTING_HARNESS_DIRS, ids=lambda p: p.parent.name.lstrip(".")
+)
+@pytest.mark.parametrize("filename", sorted(_EPIC_ROUTING))
+def test_setup_task_carries_the_epic_factory_routing_branch(
+    harness_dir: Path, filename: str,
+) -> None:
+    body = (harness_dir / filename).read_text(encoding="utf-8")
+    for token in _EPIC_ROUTING[filename]:
+        assert token in body, (
+            f"{harness_dir / filename}: missing the epic-factory routing "
+            f"token {token!r} (QS-340)."
+        )
 
 
 def _find_fallback_line(body: str) -> str | None:

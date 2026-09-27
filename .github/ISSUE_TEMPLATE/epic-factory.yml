@@ -1,5 +1,5 @@
 name: Epic (factory / dev pipeline)
-description: A large dev-pipeline initiative decomposed into child tasks (no branch/worktree of its own)
+description: A large dev-pipeline initiative decomposed into child tasks (no PR; a short-lived docs-only worktree)
 labels: ["scale:epic", "target:factory", "area:dev-pipeline"]
 body:
   - type: textarea

@@ -551,7 +551,7 @@ def test_main_in_process(tmp_path: Path, capsys, monkeypatch) -> None:
     assert rc == 0
     out = capsys.readouterr().out
     assert str(tmp_path / ".claude" / "agents") in out
-    assert len(list((tmp_path / ".claude" / "agents").glob("*.md"))) == 21
+    assert len(list((tmp_path / ".claude" / "agents").glob("*.md"))) == 22
 
 
 def test_main_render_error(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -570,7 +570,7 @@ def test_main_subprocess(tmp_path: Path) -> None:
         cwd=REPO_ROOT, capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert len(list((tmp_path / ".opencode" / "agents").glob("*.md"))) == 21
+    assert len(list((tmp_path / ".opencode" / "agents").glob("*.md"))) == 22
 
 
 # ---------------------------------------------------------------------------
@@ -582,10 +582,10 @@ def test_registry_invariants() -> None:
     assert r.LANE_AWARE <= r.ORCHESTRATORS
     assert set() == r.ORCHESTRATORS & r.SUBAGENTS
     union = r.ORCHESTRATORS | r.SUBAGENTS
-    assert len(union) == 21
+    assert len(union) == 22
     glob = {p.name.removesuffix(".md.j2") for p in TEMPLATES_DIR.glob("*.md.j2") if not p.name.startswith("_")}
     assert glob == union
-    assert len(r.ORCHESTRATORS) == 9
+    assert len(r.ORCHESTRATORS) == 10
     assert len(r.SUBAGENTS) == 12
 
 
@@ -616,11 +616,42 @@ def test_all_templates_render_both_modes(tmp_path: Path) -> None:
         out = _render_real(tmp_path, bound=bound)
         for hdir in (".claude", ".opencode"):
             files = list((out / hdir / "agents").glob("*.md"))
-            assert len(files) == 21
+            assert len(files) == 22
             for f in files:
                 text = f.read_text()
                 assert "[[" not in text
                 assert "[%" not in text
+
+
+_EPIC_FACTORY_LABELS = ["target:factory", "scale:epic"]
+
+
+def test_all_templates_render_bound_to_an_epic_factory_context(tmp_path: Path) -> None:
+    """QS-340: an epic × factory worktree is a real task worktree now —
+    every template must render bound to it, for both harnesses."""
+    out = _render_real(tmp_path, bound=True, labels=_EPIC_FACTORY_LABELS)
+    for hdir in (".claude", ".opencode"):
+        files = list((out / hdir / "agents").glob("*.md"))
+        assert len(files) == 22
+        for f in files:
+            text = f.read_text()
+            assert "[[" not in text
+            assert "[%" not in text
+        decompose = (out / hdir / "agents" / "qs-decompose-epic.md").read_text()
+        assert "## Lane protocol (rendered from docs/workflow/lanes/epic-factory.md)" in decompose
+
+
+def test_epic_lane_task_facts_carry_no_story_path(tmp_path: Path) -> None:
+    """An epic writes no story file: the bound facts drop the Story path
+    for ``epic-*`` lanes (and keep it for every task lane)."""
+    epic = _render_real(tmp_path, bound=True, labels=_EPIC_FACTORY_LABELS)
+    task = _render_real(tmp_path, bound=True)
+    for stem in r.ORCHESTRATORS:
+        for hdir in (".claude", ".opencode"):
+            epic_text = (epic / hdir / "agents" / f"{stem}.md").read_text()
+            assert "- Lane: epic-factory\n" in epic_text, stem
+            assert "Story (path" not in epic_text, stem
+            assert "Story (path" in (task / hdir / "agents" / f"{stem}.md").read_text(), stem
 
 
 def test_claude_frontmatter_contract(tmp_path: Path) -> None:
@@ -697,7 +728,10 @@ def test_lane_aware_inlining_bound(tmp_path: Path) -> None:
 
 def test_lane_aware_fallback_unbound(tmp_path: Path) -> None:
     out = _render_real(tmp_path, bound=False)
-    readonly = {"qs-create-plan", "qs-diagnose-task", "qs-review-task", "qs-verify-task"}
+    readonly = {
+        "qs-create-plan", "qs-decompose-epic", "qs-diagnose-task", "qs-review-task",
+        "qs-verify-task",
+    }
     for stem in r.LANE_AWARE:
         text = (out / ".claude" / "agents" / f"{stem}.md").read_text()
         assert "**Lane (QS-332).** Also capture `lane`" in text

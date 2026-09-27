@@ -17,6 +17,9 @@ Source of truth:
   ``parent_epic``: from one ``gh issue view <N>`` call (QS-332 — the
   axis parsing lives in :mod:`targets`)
 - ``story_file``: ``docs/stories/QS-<N>.story.md`` (if it exists)
+- ``parent_epic_doc``: ``docs/epics/QS-<parent_epic>.md`` (if a parent
+  epic is declared and its document exists in this worktree — QS-340;
+  it may be older than ``main``)
 - ``pr_number``: from ``gh pr list --head <branch>`` (if open)
 - ``worktree``: current working directory
 - ``harness``: from :mod:`scripts.qs.harness`
@@ -203,10 +206,14 @@ def build_context(issue_override: int | None = None) -> dict:
         raise pr_exc
 
     # QS-332: the lane axes are APPENDED after the existing keys, in this
-    # order — labels, kind, target, scale, lane, parent_epic. That order is
-    # the emission contract `tests/qs/test_context.py`'s byte-identity pin
-    # is written against; do not reorder.
+    # order — labels, kind, target, scale, lane, parent_epic, then
+    # parent_epic_doc (QS-340). That order is the emission contract
+    # `tests/qs/test_context.py`'s byte-identity pin is written against; do
+    # not reorder.
     axes = targets.parse_axes(fields["labels"])
+    parent_epic = targets.parse_parent_epic(fields["body"])
+    repo_root = get_repo_root()
+    parent_doc = repo_root / "docs" / "epics" / f"QS-{parent_epic}.md" if parent_epic else None
     return {
         "harness": detect_harness(),
         "branch": branch,
@@ -217,13 +224,15 @@ def build_context(issue_override: int | None = None) -> dict:
         "latest_review_fix": str(review_fix_path) if review_fix_path else "",
         "pr_number": pr_info["pr_number"] if pr_info else None,
         "pr_url": pr_info["url"] if pr_info else "",
-        "worktree": str(get_repo_root()),
+        "worktree": str(repo_root),
         "labels": fields["labels"],
         "kind": axes["kind"],
         "target": axes["target"],
         "scale": axes["scale"],
         "lane": axes["lane"],
-        "parent_epic": targets.parse_parent_epic(fields["body"]),
+        "parent_epic": parent_epic,
+        # Same shape as ``story_file``: absolute path when it exists, else "".
+        "parent_epic_doc": str(parent_doc) if parent_doc and parent_doc.is_file() else "",
     }
 
 

@@ -129,6 +129,9 @@ move between four modes; DIAGNOSE is the durable default.
 
 ### DIAGNOSE (default)
 
+- **Parent epic.** If `parent_epic_doc` from `context.py` is non-empty,
+  read that epic document before scoping — it may be older than `main`;
+  `git show origin/main:docs/epics/QS-<parent_epic>.md` gives the latest.
 - **Evidence gathering.** Ask the user for production data *before*
   theorising. Pick from the checklists in your lane file (generic:
   versions, timeline, expected vs observed, frequency/determinism,

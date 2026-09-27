@@ -42,6 +42,7 @@ LANE_READ_AGENT_NAMES: tuple[str, ...] = (
     "qs-review-task",
     "qs-diagnose-task",
     "qs-verify-task",
+    "qs-decompose-epic",
 )
 
 IMPLEMENT_AGENT_NAMES: tuple[str, ...] = (
@@ -65,6 +66,7 @@ LANE_BLOCK_TERMINALS: dict[str, str] = {
     "qs-review-task": "on the fallback.\n",
     "qs-diagnose-task": "adopt it\nas the current diagnosis state (resume, don't restart).\n",
     "qs-verify-task": "on the fallback.\n",
+    "qs-decompose-epic": "on the fallback.\n",
 }
 
 
@@ -98,25 +100,40 @@ def test_setup_task_carries_the_declaration_step(harness_dir: Path) -> None:
 
 
 @pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
-def test_setup_task_epic_lane_creates_no_worktree(harness_dir: Path) -> None:
-    """Review-fix #04 (must-fix): step 2 used to run `setup_task.py`
-    unconditionally, cutting a branch + worktree even for an epic lane —
-    contradicting the epic model this very PR establishes ("No implement
-    phase; no branch, worktree, or PR"; output = a rationale doc on
-    `main` + child issues). The prompt must stop before step 2 for an
-    epic; `setup_task.py` enforces the same invariant machine-side."""
+def test_setup_task_epic_product_stops_epic_factory_routes_to_decompose(
+    harness_dir: Path,
+) -> None:
+    """QS-340 (was review-fix #04's "epic creates no worktree"): the epic ×
+    product lane still stops before step 2 — no branch, worktree, or PR —
+    while the epic × factory lane now runs step 2 like a task, with
+    ``NEXT_PHASE = decompose-epic`` (a short-lived docs-only worktree).
+    ``setup_task.py`` enforces the same split machine-side."""
     # Whitespace-normalised: the prose wraps mid-clause, so a naive
     # substring scan would pass vacuously (the trap
     # `test_workflow_no_desktop_fallback_by_necessity.py` documents).
     body = " ".join(_body(harness_dir, "qs-setup-task").split())
     assert "no branch, worktree, or PR" in body, (
-        f"{harness_dir / 'qs-setup-task.md'}: the epic lane must not reach "
-        "the branch/worktree step"
+        f"{harness_dir / 'qs-setup-task.md'}: the epic × product lane must "
+        "not reach the branch/worktree step"
     )
-    # The terminal state is named, so the agent doesn't improvise one.
+    assert "#339" in body
     assert "child issues" in body
-    # And the step-2 header states the precondition it now carries.
-    assert "Set up branch and worktree + emit launcher (tasks only)" in body
+    assert "NEXT_PHASE = decompose-epic" in body
+    assert "short-lived docs-only worktree" in body
+    # The step-2 header no longer claims to be task-only.
+    assert "### 2. Set up branch and worktree + emit launcher" in body
+    assert "(tasks only)" not in body
+    assert "`--no-worktree` is refused for an epic" in body
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
+def test_setup_task_declares_the_parent_epic_as_a_section(harness_dir: Path) -> None:
+    """QS-340 gap 6: a stray ``Refs #N`` is read as the parent epic by the
+    parser fallback, so setup-task declares the parent with the structured
+    ``### Parent epic`` section instead."""
+    body = _body(harness_dir, "qs-setup-task")
+    assert "### Parent epic" in body
+    assert "Refs #{{epic}}" not in body
 
 
 @pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
@@ -199,3 +216,56 @@ def test_implement_variants_carry_ask_and_backfill(
     # longer always the printed shape).
     assert "apply the remediation the gate printed" in body
     assert "run the exact `gh issue edit <N> --add-label ...` command" not in body
+
+
+# --- (d) QS-340: qs-decompose-epic safety sentinels -------------------------
+
+_DECOMPOSE_TEMPLATE = REPO_ROOT / "scripts" / "qs" / "agent_templates" / "qs-decompose-epic.md.j2"
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
+def test_decompose_epic_refuses_outside_the_epic_factory_lane(harness_dir: Path) -> None:
+    body = " ".join(_body(harness_dir, "qs-decompose-epic").split())
+    assert 'scale == "epic"' in body and 'target == "factory"' in body, (
+        f"{harness_dir / 'qs-decompose-epic.md'}: the refusal guard must name "
+        "both axes it checks"
+    )
+    assert "Refuse unless" in body
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
+def test_decompose_epic_hands_off_only_after_a_successful_land(harness_dir: Path) -> None:
+    body = " ".join(_body(harness_dir, "qs-decompose-epic").split())
+    assert "Hand off to `finish-task` only after `epic_doc.py land` succeeded" in body
+
+
+def test_decompose_epic_body_never_mentions_story_files() -> None:
+    """An epic writes no story file. Pinned on the template SOURCE's body
+    block: the rendered file's shared Reference map lists ``docs/stories/``
+    for every orchestrator, which is not this agent's own prose."""
+    source = _DECOMPOSE_TEMPLATE.read_text(encoding="utf-8")
+    body = source.split("[% block body %]", 1)[1].split("[% endblock %]", 1)[0]
+    assert "docs/stories/" not in body
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
+@pytest.mark.parametrize("agent_name", ["qs-create-plan", "qs-diagnose-task"])
+def test_child_planners_read_the_parent_epic_doc(harness_dir: Path, agent_name: str) -> None:
+    """QS-340 gap 8: a child's planning phase reads its parent epic's doc."""
+    body = _body(harness_dir, agent_name)
+    assert "`parent_epic_doc`" in body
+    assert "git show origin/main:docs/epics/QS-<parent_epic>.md" in body
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
+def test_finish_task_case_a_has_the_epic_variant(harness_dir: Path) -> None:
+    """QS-340: an epic never has a PR, so Case A is its path — probed by
+    ``epic_doc.py status`` (the landed doc is not unpushed work), cleaned
+    with ``--delete-branch``, and the epic issue is never closed."""
+    body = " ".join(_body(harness_dir, "qs-finish-task").split())
+    assert "python scripts/qs/epic_doc.py status --issue {{issue}}" in body
+    assert "`safe_to_discard: true`" in body
+    assert "--force --delete-branch" in body or "--force \\ --delete-branch" in body
+    assert "epic session closed — doc on `main`, issue #{{issue}} stays open" in body
+    assert "Never close the epic issue" in body
+    assert "`scale`" in body

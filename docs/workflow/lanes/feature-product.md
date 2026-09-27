@@ -1,5 +1,12 @@
 # Phase protocols
 
+**Epics.** An epic (`scale:epic`) is an umbrella over several tasks,
+not a task: it has no implement phase and no PR, and the phases below do
+not apply to it. The epic × factory lane runs
+`setup → decompose → finish` in a short-lived docs-only worktree — see
+`docs/workflow/lanes/epic-factory.md`. Its children are ordinary tasks
+in their own lanes.
+
 Each phase's agent is rendered per worktree from a Jinja template
 under `scripts/qs/agent_templates/` into `.claude/agents/` and
 `.opencode/agents/` (QS-357). Agents discover volatile task

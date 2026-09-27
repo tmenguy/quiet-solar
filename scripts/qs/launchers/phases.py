@@ -85,6 +85,8 @@ class UnknownPhaseError(ValueError):
 PHASE_TO_AGENT: dict[str, str] = {
     "setup-task": "qs-setup-task",
     "create-plan": "qs-create-plan",
+    # QS-340: the epic × factory lane decomposes instead of planning.
+    "decompose-epic": "qs-decompose-epic",
     # QS-335: bug × product lane replaces create-plan with diagnose-task.
     "diagnose-task": "qs-diagnose-task",
     "implement-task": "qs-implement-task",

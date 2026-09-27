@@ -18,11 +18,19 @@ The **bug × product** lane (QS-335) diverges into a diagnose-first flow:
 (`setup → diagnose → fix → verify → finish`). See
 [lanes/bug-product.md](lanes/bug-product.md).
 
+The **epic × factory** lane (QS-340) has no implement phase and no PR:
+`setup → decompose → finish`. `decompose-epic` drafts and reviews the
+rationale document `docs/epics/QS-<N>.md`, files the children whose turn
+has come, lands the document on `main` by direct commit and syncs the
+epic issue; `finish-task` discards the short-lived docs-only worktree.
+See [lanes/epic-factory.md](lanes/epic-factory.md).
+
 | Phase            | Where it runs        | What it produces                            |
 | ---------------- | -------------------- | ------------------------------------------- |
 | `setup-task`     | main checkout        | issue, branch `QS_<N>`, worktree            |
 | `create-plan`    | worktree             | story file at `docs/stories/QS-<N>.story.md` via an interactive discuss/review/finalize loop, committed at finalize |
 | `diagnose-task`  | worktree             | bug × product lane only — replaces `create-plan`: diagnosis story (root cause, red-test spec) via an interactive diagnose/review/finalize loop |
+| `decompose-epic` | worktree             | epic × factory lane only — replaces `create-plan` … `review-task`: epic document on `main` (direct commit), children filed just in time, epic issue synced |
 | `implement-task` | worktree             | TDD code, green quality gate, PR opened     |
 | `review-task`    | worktree             | parallel adversarial review, fix-plan loop  |
 | `verify-task`    | worktree             | bug × product lane only — replaces `review-task`: fix-verification review, fix-plan loop |
@@ -81,10 +89,11 @@ The pipeline runs two fundamentally different kinds of agent, and the
 launcher distinction matters.
 
 **Phase orchestrators** (`qs-setup-task`, `qs-create-plan`,
-`qs-diagnose-task`, `qs-implement-task`, `qs-implement-setup-task`,
-`qs-review-task`, `qs-verify-task`, `qs-finish-task`, `qs-release`;
-`qs-diagnose-task` / `qs-verify-task` run only in the bug × product
-lane) are meant to run as **interactive
+`qs-decompose-epic`, `qs-diagnose-task`, `qs-implement-task`,
+`qs-implement-setup-task`, `qs-review-task`, `qs-verify-task`,
+`qs-finish-task`, `qs-release`; `qs-diagnose-task` / `qs-verify-task`
+run only in the bug × product lane, `qs-decompose-epic` only in the
+epic × factory lane) are meant to run as **interactive
 `claude --agent qs-<phase>` sessions**. Claude Code launches a fresh
 session whose system prompt IS the agent body, and the user converses
 with the persona mid-flight — answering clarifying questions in
@@ -175,7 +184,17 @@ their lane file early in the session (falling back to
 [phase-protocols.md](phase-protocols.md) when the lane is undeclared —
 pre-existing worktrees only). The lane files start as byte-identical
 copies of `phase-protocols.md` (enforced by
-`tests/qs/docs/test_lanes.py`); they diverge one PR per lane (#335–#340).
+`tests/qs/docs/test_lanes.py`) and diverge one PR per lane (#335–#340);
+`bug-product.md` and `epic-factory.md` have diverged, the rest are still
+copies. An **epic** (`scale:epic`, no kind) is an umbrella, not a task:
+in the epic × factory lane it runs `setup → decompose → finish` in a
+short-lived docs-only worktree, never opens a PR, and its issue stays
+open for its lifetime; the children are filed just in time, each as its
+own task lane declaring the parent with a `### Parent epic` section, and
+a child worktree's `context.py` exposes the parent's document as
+`parent_epic_doc`. The document reaches `main` only through
+`python scripts/qs/epic_doc.py land` (see project-rules.md → "Epic
+documents").
 The quality gate enforces the declaration (missing declaration fails)
 and surfaces cross-target diffs as a loud warning — purpose, not path,
 is the classifier, so a crossing never fails the gate.

@@ -26,6 +26,10 @@ agent can run directly instead — see
   - bug × product lane (QS-335): **`qs-create-plan`** is replaced by
     **`qs-diagnose-task`** and **`qs-review-task`** by **`qs-verify-task`**
     (see [lanes/bug-product.md](lanes/bug-product.md))
+  - epic × factory lane (QS-340): **`qs-setup-task`** →
+    **`qs-decompose-epic`** → **`qs-finish-task`** — no implement phase,
+    no PR; the epic document lands on `main` by direct commit (see
+    [lanes/epic-factory.md](lanes/epic-factory.md))
 
 Agents are defined by one Jinja template per agent under
 `scripts/qs/agent_templates/` and rendered per worktree into

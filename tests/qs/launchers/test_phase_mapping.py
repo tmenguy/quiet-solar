@@ -16,6 +16,7 @@ import pytest
 _KNOWN_PHASES = (
     "setup-task",
     "create-plan",
+    "decompose-epic",
     "diagnose-task",
     "implement-task",
     "implement-setup-task",

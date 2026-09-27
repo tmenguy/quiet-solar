@@ -248,6 +248,7 @@ def test_stdout_is_byte_identical(
         "scale": "",
         "lane": "",
         "parent_epic": None,
+        "parent_epic_doc": "",
     }
     assert capsys.readouterr().out == json.dumps(expected, indent=2) + "\n"
 
@@ -260,9 +261,11 @@ def test_stdout_is_byte_identical_labelled_task(
     """The labelled-task twin of the byte pin (QS-332).
 
     Pins the appended-key emission contract — ``labels``, ``kind``,
-    ``target``, ``scale``, ``lane``, ``parent_epic``, in that order after
-    the pre-existing keys — with every axis populated and the parent epic
-    resolved from the body's ``Refs`` line.
+    ``target``, ``scale``, ``lane``, ``parent_epic``, ``parent_epic_doc``
+    (QS-340), in that order after the pre-existing keys — with every axis
+    populated and the parent epic resolved from the body's ``Refs`` line
+    (its doc does not exist in ``tmp_path``, so ``parent_epic_doc`` is
+    ``""``).
     """
     import utils  # type: ignore[import-not-found]
 
@@ -293,8 +296,46 @@ def test_stdout_is_byte_identical_labelled_task(
         "scale": "task",
         "lane": "feature-factory",
         "parent_epic": 321,
+        "parent_epic_doc": "",
     }
     assert capsys.readouterr().out == json.dumps(expected, indent=2) + "\n"
+
+
+@pytest.mark.parametrize(
+    ("body", "doc_exists", "expected_suffix"),
+    [
+        ("### Parent epic\n\n#321\n", True, "docs/epics/QS-321.md"),
+        ("### Parent epic\n\n#321\n", False, None),
+        ("no parent here\n", True, None),
+    ],
+    ids=["set-and-exists", "set-but-missing", "unset"],
+)
+def test_parent_epic_doc_resolves_like_story_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    body: str,
+    doc_exists: bool,
+    expected_suffix: str | None,
+) -> None:
+    """QS-340 gap 8: a child worktree finds its parent epic's document the
+    way it finds ``story_file`` — an absolute path when it exists, else
+    ``""``."""
+    import context  # type: ignore[import-not-found]
+    import utils  # type: ignore[import-not-found]
+
+    if doc_exists:
+        (tmp_path / "docs" / "epics").mkdir(parents=True)
+        (tmp_path / "docs" / "epics" / "QS-321.md").write_text("# Epic\n")
+    fake_run, _recorder = _make_fake_run(branch="QS_42", repo_root=tmp_path, body=body)
+    monkeypatch.setattr(utils, "run", fake_run)
+
+    ctx = context.build_context()
+    keys = list(ctx)
+    assert keys[keys.index("parent_epic") + 1] == "parent_epic_doc"
+    if expected_suffix is None:
+        assert ctx["parent_epic_doc"] == ""
+    else:
+        assert ctx["parent_epic_doc"] == str(tmp_path / expected_suffix)
 
 
 def test_null_body_from_the_api_degrades_to_no_parent_epic(

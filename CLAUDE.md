@@ -26,6 +26,7 @@ fan-out" for the rationale.
 | Setup task           | `claude --agent qs-setup-task`               | `/setup-task`            | main checkout |
 | Create plan          | `claude --agent qs-create-plan`              | `/create-plan`           | worktree      |
 | Diagnose task        | `claude --agent qs-diagnose-task`            | `/diagnose-task`         | worktree      |
+| Decompose epic       | `claude --agent qs-decompose-epic`           | `/decompose-epic`        | worktree      |
 | Implement (product)  | `claude --agent qs-implement-task`           | `/implement-task`        | worktree      |
 | Implement (dev-env)  | `claude --agent qs-implement-setup-task`     | `/implement-setup-task`  | worktree      |
 | Review task          | `claude --agent qs-review-task`              | `/review-task`           | worktree      |
@@ -37,6 +38,10 @@ The **bug × product** lane diverges (QS-335): `setup → diagnose → fix
 (implement) → verify → finish` — `diagnose-task` replaces `create-plan`
 and `verify-task` replaces `review-task` for that lane only (see
 [docs/workflow/lanes/bug-product.md](docs/workflow/lanes/bug-product.md)).
+The **epic × factory** lane (QS-340) is `setup → decompose → finish` in a
+short-lived docs-only worktree — no PR; the epic document lands on `main`
+via `scripts/qs/epic_doc.py land` (see
+[docs/workflow/lanes/epic-factory.md](docs/workflow/lanes/epic-factory.md)).
 
 Agents are rendered per worktree from one Jinja template each under
 [scripts/qs/agent_templates/](scripts/qs/agent_templates/) into the

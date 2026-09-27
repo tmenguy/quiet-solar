@@ -18,6 +18,10 @@ Usage::
 
     # Dry run
     python scripts/qs/cleanup_worktree.py --work-dir /path --issue 42 --dry-run
+
+    # Also delete the local QS_<N> branch (QS-340 — the epic × factory
+    # lane, so a re-entry starts fresh from origin/main)
+    python scripts/qs/cleanup_worktree.py --work-dir /path --issue 42 --force --delete-branch
 """
 
 from __future__ import annotations
@@ -104,6 +108,29 @@ def remove_worktree(work_dir: Path) -> str | None:
     return error
 
 
+_PROTECTED_BRANCHES = frozenset({"main", "master"})
+
+
+def delete_local_branch(main_wt: Path, branch: str) -> tuple[bool, str | None]:
+    """``git branch -D <branch>`` in the main worktree; ``(deleted, error)``.
+
+    Runs with ``cwd=main_wt`` so it works even when the process cwd was
+    the (now removed) worktree. Refuses ``main`` / ``master``.
+    """
+    if branch in _PROTECTED_BRANCHES:
+        return False, f"refusing to delete protected branch: {branch}"
+    result = subprocess.run(
+        ["git", "-C", str(main_wt), "branch", "-D", branch],
+        capture_output=True,
+        text=True,
+        cwd=str(main_wt),
+        check=False,
+    )
+    if result.returncode != 0:
+        return False, result.stderr.strip() or f"git branch -D {branch} exited {result.returncode}"
+    return True, None
+
+
 def main() -> None:  # noqa: C901
     parser = argparse.ArgumentParser(description="Clean up a git worktree.")
     parser.add_argument("--work-dir", required=True)
@@ -111,7 +138,13 @@ def main() -> None:  # noqa: C901
     parser.add_argument("--force", action="store_true", help="Skip safety checks.")
     parser.add_argument("--push-first", action="store_true", help="Push before cleanup.")
     parser.add_argument("--dry-run", action="store_true", help="Print plan; don't act.")
+    parser.add_argument(
+        "--delete-branch",
+        action="store_true",
+        help="Also delete the local QS_<N> branch after removing the worktree.",
+    )
     args = parser.parse_args()
+    branch_name = f"QS_{args.issue}"
 
     work_dir = Path(args.work_dir).resolve()
 
@@ -127,6 +160,7 @@ def main() -> None:  # noqa: C901
             "status": "dry_run",
             "would_remove_worktree": str(work_dir),
             "would_push": bool(args.push_first),
+            "would_delete_branch": branch_name if args.delete_branch else None,
             "issue": args.issue,
         })
         return
@@ -173,7 +207,21 @@ def main() -> None:  # noqa: C901
             })
             return
 
+    # Resolve the main worktree BEFORE the removal: afterwards the process
+    # cwd may be gone and `git worktree list` dies (QS-340).
+    main_wt: Path | None = None
+    branch_error: str | None = None
+    if args.delete_branch:
+        try:
+            main_wt = get_main_worktree()
+        except (RuntimeError, subprocess.CalledProcessError, OSError) as exc:
+            branch_error = f"Could not determine main worktree: {exc}"
+
     wt_error = remove_worktree(work_dir)
+
+    branch_deleted = False
+    if main_wt is not None:
+        branch_deleted, branch_error = delete_local_branch(main_wt, branch_name)
     status = "error" if wt_error else "removed"
     message = (
         f"Worktree removal failed: {wt_error}"
@@ -184,6 +232,8 @@ def main() -> None:  # noqa: C901
         "status": status,
         "worktree_path": str(work_dir),
         "worktree_remove_error": wt_error,
+        "branch_deleted": branch_deleted,
+        "branch_delete_error": branch_error,
         "message": message,
     })
 

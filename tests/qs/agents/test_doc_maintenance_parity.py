@@ -48,6 +48,7 @@ DOC_MAINTENANCE_AGENT_NAMES: tuple[str, ...] = (
     "qs-review-task",
     "qs-diagnose-task",
     "qs-verify-task",
+    "qs-decompose-epic",
 )
 
 # Both harnesses to mirror across.

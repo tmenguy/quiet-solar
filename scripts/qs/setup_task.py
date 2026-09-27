@@ -80,23 +80,37 @@ def check_declaration(issue: int) -> list[str]:
     return labels
 
 
-def refuse_if_epic(issue: int, labels: list[str]) -> None:
-    """Refuse to cut a branch/worktree for a ``scale:epic`` issue.
+def refuse_if_epic(
+    issue: int,
+    labels: list[str],
+    next_cmd: str = "/create-plan",
+    *,
+    no_worktree: bool = False,
+) -> None:
+    """Refuse to cut a branch/worktree for a ``scale:epic`` issue — except
+    the epic × factory lane's short-lived docs-only worktree (QS-340).
 
-    QS-332 review-fix #04 (must-fix). The epic model
-    (:doc:`docs/epics/QS-321`) is explicit: an epic has **no implement
-    phase; no branch, worktree, or PR** — its output is a rationale
-    document on ``main`` plus child issues. Step 2 of the setup agent used
-    to run this script unconditionally, so picking an epic lane (or
-    passing an existing epic via ``--issue N``) cut a worktree anyway.
+    QS-332 review-fix #04 (must-fix): an epic has **no implement phase and
+    no PR** — its output is a rationale document on ``main`` plus child
+    issues. QS-340 codifies the epic × factory lane
+    (``docs/workflow/lanes/epic-factory.md``): its ``decompose-epic``
+    session runs in a short-lived worktree that is discarded once the
+    document is on ``main``. So ``scale:epic`` is allowed **only** when the
+    next phase is ``decompose-epic``, the target is ``factory`` and a
+    worktree is cut (``--no-worktree`` would run the session on the main
+    checkout). Everything else is refused as before — epic × product waits
+    for #339.
 
-    Machine-enforced here rather than prompt-obeyed, matching the story's
-    "machine-checked rather than prompt-obeyed" philosophy, and enforced
-    for ``--no-worktree`` too: that flag still creates a **branch**, which
-    the model forbids as well. Consumes ``check_declaration``'s labels —
-    no extra ``gh`` call.
+    ``next_cmd`` is normalised exactly like
+    ``launchers.phases.resolve_agent_for_next_cmd`` (one leading ``/``
+    stripped, so ``//decompose-epic`` stays refused). Consumes
+    ``check_declaration``'s labels — no extra ``gh`` call.
     """
-    if targets.parse_axes(labels)["scale"] != "epic":
+    axes = targets.parse_axes(labels)
+    if axes["scale"] != "epic":
+        return
+    phase = next_cmd[1:] if next_cmd.startswith("/") else next_cmd
+    if phase == "decompose-epic" and axes["target"] == "factory" and not no_worktree:
         return
     output_json({
         "error": (
@@ -104,13 +118,17 @@ def refuse_if_epic(issue: int, labels: list[str]) -> None:
         ),
         "scale": "epic",
         "detail": (
-            "An epic has no implement phase and no branch, worktree, or PR. "
-            "Its output is a rationale document on `main` plus child issues: "
-            "decompose it into child tasks (each child is its own task lane, "
-            "carrying `Refs #<epic>`) and run setup-task on those instead."
+            "An epic has no implement phase and no PR. Its output is a "
+            "rationale document on `main` plus child issues. For an epic × "
+            "factory issue, run setup-task with `--next-cmd decompose-epic` "
+            "and a worktree (no `--no-worktree`): the decompose-epic session "
+            "files each child as its own task lane, declaring the parent with "
+            "a `### Parent epic` section. The epic × product lane is not "
+            "codified yet (#339)."
         ),
     })
     sys.exit(1)
+
 
 # Public mapping (review-fix #04 SF1) — promoted to match the
 # round-3 SF1 rename of next_step.LAUNCHERS. The two dispatch tables
@@ -126,19 +144,21 @@ LAUNCHERS = {
 }
 
 
-def _fail_render(exc: Exception, work_dir: str, issue: int, title: str) -> None:
+def _fail_render(exc: Exception, work_dir: str, issue: int, title: str, next_cmd: str) -> None:
     """Emit the JSON render-failure error and exit 1 (QS-357).
 
     The branch/worktree already exist, so the remedy is to render by hand
     and then rebuild the launcher payload from the existing worktree — the
-    ``detail`` names both commands verbatim.
+    ``detail`` names both commands verbatim, with the real next phase
+    (QS-340: one leading ``/`` stripped, as ``next_step.py`` expects).
     """
+    phase = next_cmd[1:] if next_cmd.startswith("/") else next_cmd
     output_json({
         "error": "agent render failed",
         "detail": (
             f"{exc}. Remedy: python scripts/qs/render_agents.py --work-dir "
             f"{work_dir}, then python scripts/qs/next_step.py --next-cmd "
-            f"create-plan --work-dir {work_dir} --issue {issue} --title "
+            f"{phase} --work-dir {work_dir} --issue {issue} --title "
             f"{title!r} for the launcher"
         ),
     })
@@ -177,10 +197,11 @@ def main() -> None:
 
     # QS-332 B2: an issue must be born in exactly one lane; refuse an
     # undeclared/inconsistent one before touching git. Review-fix #04:
-    # and refuse an EPIC outright — no branch, no worktree (the labels
-    # come from the same fetch, so this costs no extra `gh` call).
+    # and refuse an EPIC — except the epic × factory decompose-epic
+    # worktree (QS-340). The labels come from the same fetch, so this
+    # costs no extra `gh` call.
     labels = check_declaration(issue)
-    refuse_if_epic(issue, labels)
+    refuse_if_epic(issue, labels, args.next_cmd, no_worktree=args.no_worktree)
 
     main_dir = get_main_worktree()
 
@@ -225,9 +246,9 @@ def main() -> None:
         )
         render_agents.render_all(work_dir, context=render_context)
     except ImportError as exc:
-        _fail_render(exc, work_dir, issue, title)
+        _fail_render(exc, work_dir, issue, title, args.next_cmd)
     except render_agents.RenderError as exc:
-        _fail_render(exc, work_dir, issue, title)
+        _fail_render(exc, work_dir, issue, title, args.next_cmd)
 
     # Apply the legacy-alias mapping (review fix #01 N8): argparse
     # accepted aliases via ``choices=harness_choices()``; canonicalize

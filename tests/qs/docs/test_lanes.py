@@ -37,7 +37,7 @@ LANES = (
 # Lane files allowed to diverge from phase-protocols.md. EMPTY at QS-332
 # merge; a lane PR adds its own basename (e.g. "bug-product.md") as its
 # first act, then writes its divergence.
-DIVERGED: frozenset[str] = frozenset({"bug-product.md"})
+DIVERGED: frozenset[str] = frozenset({"bug-product.md", "epic-factory.md"})
 
 # QS-335: required headings / sentinel lines pinned for the diverged
 # bug × product lane file. Headings and sentinel lines ONLY — never
@@ -72,6 +72,27 @@ BUG_PRODUCT_SENTINELS: tuple[str, ...] = (
     "`qs-review-regression-proof`",
     # escalation procedure
     "through the iceberg escalation",
+)
+
+# QS-340: required headings / sentinel lines pinned for the diverged
+# epic × factory lane file (same headings-only discipline as above).
+EPIC_FACTORY_SENTINELS: tuple[str, ...] = (
+    # diverged flow banner
+    "setup → decompose → finish",
+    # the three phase sections of the epic flow
+    "## `setup-task` (agent: `qs-setup-task`)",
+    "## `decompose-epic` (agent: `qs-decompose-epic`)",
+    "## `finish-task` (agent: `qs-finish-task`)",
+    # the epic doc template and the issue-body conventions
+    "### Epic doc template",
+    "### Issue-body conventions",
+    # the two script-owned FINALIZE writers
+    "epic_doc.py land",
+    "epic_doc.py sync-issue",
+    # just-in-time child filing
+    "**File children just in time**",
+    # the landing rule
+    "never through `create_pr.py`",
 )
 
 
@@ -115,3 +136,24 @@ def test_bug_product_lane_carries_required_sentinels(sentinel: str) -> None:
     """
     text = (LANES_DIR / "bug-product.md").read_text(encoding="utf-8")
     assert sentinel in text, f"bug-product.md missing sentinel: {sentinel!r}"
+
+
+@pytest.mark.parametrize("sentinel", EPIC_FACTORY_SENTINELS)
+def test_epic_factory_lane_carries_required_sentinels(sentinel: str) -> None:
+    """The diverged epic × factory lane pins its headings / sentinel lines (QS-340)."""
+    text = (LANES_DIR / "epic-factory.md").read_text(encoding="utf-8")
+    assert sentinel in text, f"epic-factory.md missing sentinel: {sentinel!r}"
+
+
+def test_epic_factory_sentinels_avoid_the_banned_phrase() -> None:
+    """No sentinel may pin the phrase the desktop-fallback test bans."""
+    assert not [s for s in EPIC_FACTORY_SENTINELS if "by necessity" in s]
+
+
+def test_epic_factory_lane_holds_no_next_step_fence() -> None:
+    """The lane file is harness-agnostic prose: the hand-off block lives in
+    the ``qs-decompose-epic`` template, never as a ``next_step.py`` fence
+    here (a fence would need a per-harness ``--harness`` flag)."""
+    text = (LANES_DIR / "epic-factory.md").read_text(encoding="utf-8")
+    fences = text.split("```")[1::2]
+    assert not [f for f in fences if "next_step.py" in f]

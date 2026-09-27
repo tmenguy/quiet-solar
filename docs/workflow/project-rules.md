@@ -226,8 +226,9 @@ The agent-facing documentation hierarchy lives under
 via `covers:` frontmatter. The drift checker
 `scripts/qs/check_doc_drift.py` validates that every `covers:` path
 exists and flags docs whose source was modified without a
-co-modification. The six orchestrator agents
+co-modification. The seven orchestrator agents
 ([qs-create-plan](../../scripts/qs/agent_templates/qs-create-plan.md.j2),
+[qs-decompose-epic](../../scripts/qs/agent_templates/qs-decompose-epic.md.j2),
 [qs-diagnose-task](../../scripts/qs/agent_templates/qs-diagnose-task.md.j2),
 [qs-implement-task](../../scripts/qs/agent_templates/qs-implement-task.md.j2),
 [qs-implement-setup-task](../../scripts/qs/agent_templates/qs-implement-setup-task.md.j2),
@@ -286,6 +287,7 @@ which phase to use — infer from context.
 | "Setup task 3.2" / describe feature / "work on issue #42"    | `claude --agent qs-setup-task` on main   | `/setup-task`      |
 | "Create plan" (inside worktree)                              | `claude --agent qs-create-plan`          | `/create-plan`     |
 | "Diagnose task" (bug × product lane)                         | `claude --agent qs-diagnose-task`        | `/diagnose-task`   |
+| "Decompose epic" (epic × factory lane, in the epic worktree) | `claude --agent qs-decompose-epic`       | `/decompose-epic`  |
 | "Implement task" (inside worktree)                           | `claude --agent qs-implement-task`       | `/implement-task`  |
 | "Review PR #5" or "review task"                              | `claude --agent qs-review-task`          | `/review-task`     |
 | "Verify task" (bug × product lane)                           | `claude --agent qs-verify-task`          | `/verify-task`     |
@@ -298,6 +300,13 @@ The **bug × product** lane (QS-335) runs a diagnose-first flow:
 that lane only. `qs-setup-task` / `qs-implement-task` resolve the next
 phase from the lane; see
 [lanes/bug-product.md](lanes/bug-product.md).
+
+The **epic × factory** lane (QS-340) runs `setup → decompose → finish`:
+`qs-setup-task` cuts a short-lived docs-only worktree and routes to
+`decompose-epic`, which lands the epic document and files the children;
+`finish-task` discards the worktree. No PR, no implement phase; see
+[lanes/epic-factory.md](lanes/epic-factory.md) and "Epic documents"
+below.
 
 See [overview.md](overview.md) section "Orchestrators are interactive
 sessions; sub-agents are parallel fan-out" for the rationale.
@@ -315,7 +324,9 @@ Every task is born in exactly one of **6 lanes** — {bug, feature, epic}
 for epics. `scale:task` is the implicit CLI default but is always
 applied explicitly as a label. The lane protocol files live in
 `docs/workflow/lanes/<lane>.md`; `python scripts/qs/context.py` exposes
-`labels`, `kind`, `target`, `scale`, `lane`, `parent_epic`. The domain
+`labels`, `kind`, `target`, `scale`, `lane`, `parent_epic`,
+`parent_epic_doc` (the parent's `docs/epics/QS-<N>.md` when it exists
+in the worktree — QS-340). The domain
 module is `scripts/qs/targets.py` (path classification, declaration
 truth table, parent-epic parsing) — one machine-readable definition,
 consumed by `fetch_issue.py`, `setup_task.py`, and the quality gate.
@@ -327,8 +338,28 @@ classifier (a product-declared fix that must also enhance a test tool
 stays a product task). The warning lists the crossing files and always
 prints the split recommendation; splitting is at human discretion.
 `create_pr.py` auto-appends `Refs #<epic>` toward a declared parent
-epic and machine-injects a `## Lane note` when the diff crosses the
-declared target.
+epic, machine-injects a `## Lane note` when the diff crosses the
+declared target, and refuses a `scale:epic` issue outright (QS-340).
+
+### Epic documents
+
+An epic's rationale document `docs/epics/QS-<N>.md` reaches `main` by
+**direct commit, `docs/epics/` only**, through
+`python scripts/qs/epic_doc.py land` only — **never through
+`create_pr.py`**, whose `Fixes #<N>` would close the epic (it refuses
+an epic issue for that reason). `land` refuses any changed path outside
+`docs/epics/`, a stale `docs/agents/` document (`check_doc_drift.py`),
+and a path `main` changed since the worktree's base; it builds the
+commit on `origin/main` through a temporary index and leaves the working
+tree untouched until the push is verified. If a `docs/epics/` path ever
+becomes `tests/qs`-pinned, `--quick tests/qs` joins the gate.
+Amendments to an existing epic document follow the same rule, or ride a
+child's own PR when that child changes the design. The epic issue body
+is written by `epic_doc.py sync-issue` only (additive: rationale link,
+`- [ ] #N` child lines). **Precondition**: `main`'s branch protection
+has `enforce_admins: false`, so the maintainer's direct push is
+accepted; a rejected push surfaces as `status: push-rejected`, and the
+documented last resort is a hand-opened PR carrying `Refs #<N>`.
 
 **Commit authorization**: agents are authorized to commit and push as
 part of their defined workflow steps (e.g., the implement-task agent
