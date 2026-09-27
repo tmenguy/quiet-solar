@@ -900,13 +900,16 @@ class QSChargerGroup(LogOnChangeMixin):
                 # ever being enabled must not block the whole group: isolate it (its
                 # target is re-armed through the group later, see `_ensure_correct_state`)
                 # and keep its expected amps reserved for the other members' budget.
-                self.log_info_on_change(
-                    f"start_stuck:{charger.name}",
-                    True,
-                    time,
-                    "ensure_correct_state dyn group: %s start is stuck, isolated from the group budget",
-                    charger.name,
-                )
+                if probe_only:
+                    _LOGGER.debug("ensure_correct_state dyn group: %s start is stuck, isolated", charger.name)
+                else:
+                    self.log_info_on_change(
+                        f"start_stuck:{charger.name}",
+                        True,
+                        time,
+                        "ensure_correct_state dyn group: %s start is stuck, isolated from the group budget",
+                        charger.name,
+                    )
                 reserved = QSChargerStatus(charger).get_amps_from_values(
                     charger._expected_amperage.value, charger._expected_num_active_phases.value
                 )
@@ -1471,6 +1474,17 @@ class QSChargerGroup(LogOnChangeMixin):
             do_reset_allocation = True
             should_do_reset_allocation = True
 
+            _, current_ok, has_phase_changes = await self._do_prepare_and_shave_budgets(
+                actionable_chargers, do_reset_allocation, time
+            )
+        if current_ok is False and self._isolated_reserved_amps != [0.0, 0.0, 0.0]:
+            # QS-376: reducing the members over the limit always wins over the amps reserved
+            # for isolated (start-stuck) members: drop the reservation for this cycle.
+            _LOGGER.warning(
+                "budgeting_algorithm_minimize_diffs: can't shave with %s A reserved for isolated chargers, releasing it",
+                self._isolated_reserved_amps,
+            )
+            self._isolated_reserved_amps = [0.0, 0.0, 0.0]
             _, current_ok, has_phase_changes = await self._do_prepare_and_shave_budgets(
                 actionable_chargers, do_reset_allocation, time
             )
@@ -5067,7 +5081,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         # QS-376: the charger wants to charge, is not charging, and its start retries
         # are exhausted: nothing will change until its target is re-armed.
         return (
-            self._expected_charge_state.value is True
+            not self.is_in_state_reset()
+            and self._expected_charge_state.value is True
             and self.is_charge_enabled(time) is not True
             and not self._expected_charge_state.can_launch()
         )
@@ -6287,7 +6302,7 @@ class QSChargerOCPP(QSChargerGeneric):
         if self.charger_pause_resume_switch is None:
             return False
         switch_state = self.hass.states.get(self.charger_pause_resume_switch)
-        if switch_state is None or switch_state.state != STATE_UNAVAILABLE:
+        if switch_state is None or switch_state.state != STATE_UNAVAILABLE or self.charger_status_sensor is None:
             return False
         status_state = self.hass.states.get(self.charger_status_sensor)
         return status_state is not None and status_state.state in (

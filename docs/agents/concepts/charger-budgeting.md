@@ -333,13 +333,21 @@ block the whole group forever. Three pieces now contain it:
   `_is_current_acceptable[_and_diff]`, which adds that reservation to
   both the new and the estimated amps, so the others are never given
   amps the isolated charger may still draw if its start lands late. The
-  *want to stop but still charging* direction keeps blocking the group.
+  reservation never prevents a reduction: if shaving cannot fit with it,
+  `budgeting_algorithm_minimize_diffs` drops it for that cycle and shaves
+  again. It only covers the charger-group budget: a non-charger load in
+  the same dynamic group checks `is_delta_current_acceptable` directly.
+  The *want to stop but still charging* direction keeps blocking the
+  group.
 - **Re-arm through the group (F2)** — in the start branch of
   `_ensure_correct_state`, once `CHARGER_START_RETRY_REARM_S` (15 min)
   has passed since the last launch, the target goes back to `False` and
   is settled in the same call. The charger rejoins as an idle member; a
   new start comes only from `apply_budgets` (`set(True)` resets the retry
-  counter), after the usual 10 min off→on spacing.
+  counter). For green commands this waits for the usual 10 min off→on
+  spacing. A forced command (consign / `CMD_ON` / price) never offers 0 A,
+  so its next budget pass restarts it (rounds of ~20 min instead of
+  ~30 min).
 - **OCPP nudge (F4)** — `_on_charger_fault_cycle(time)` runs in
   `check_load_activity_and_constraints` right after the QS-346 machine
   (no-op by default). `QSChargerOCPP` sends a connector-less

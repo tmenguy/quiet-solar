@@ -120,7 +120,8 @@ def _status_nudges(hass) -> int:
     return sum(
         1
         for c in hass.services.async_call.await_args_list
-        if c.args[:2] == ("ocpp", "trigger_custom_message") and c.args[2].get("requested_message") == "StatusNotification"
+        if c.args[:2] == ("ocpp", "trigger_custom_message")
+        and c.args[2].get("requested_message") == "StatusNotification"
     )
 
 
@@ -255,7 +256,9 @@ async def test_ocpp_unavailable_charge_control_is_a_fault():
     first_ok = -(-CHARGER_FAULT_NOTIFY_DEBOUNCE_S // 7) * 7
     assert notified_at == [first_ok]
     title, message = home.async_notify_all_mobile_apps.await_args.args
-    assert message == (f"{STUCK_NAME}: charge control unavailable, ID.buzz cannot be started — unplug and replug the car")
+    assert message == (
+        f"{STUCK_NAME}: charge control unavailable, ID.buzz cannot be started — unplug and replug the car"
+    )
 
     # switch available again -> no fault
     states.set(SWITCH, "off", t)
@@ -307,7 +310,8 @@ async def test_ocpp_unavailable_charge_control_sends_status_nudge():
     nudge = next(
         c
         for c in hass.services.async_call.await_args_list
-        if c.args[:2] == ("ocpp", "trigger_custom_message") and c.args[2].get("requested_message") == "StatusNotification"
+        if c.args[:2] == ("ocpp", "trigger_custom_message")
+        and c.args[2].get("requested_message") == "StatusNotification"
     )
     assert nudge.args[2] == {"devid": STUCK_NAME, "requested_message": "StatusNotification"}
 
@@ -382,3 +386,75 @@ async def test_isolated_charger_amps_are_reserved_in_group_current_checks():
     new_amps = [1, 2, 3]
     group._is_current_acceptable(new_amps, None, t)
     assert dg.is_current_acceptable.call_args.kwargs["new_amps"] is new_amps
+
+
+async def _isolate_stuck_in_group():
+    hass, home, states, stuck = _build_stuck_charger(switch_state="off")
+    healthy, cs_healthy = _make_healthy(hass, home)
+    group = _make_charger_group(home, [stuck, healthy])
+    t = T0
+    while t <= FOURTH_LAUNCH:
+        await group.ensure_correct_state(t)
+        t += STEP
+    assert group._isolated_reserved_amps == _reserved(stuck, 6)
+    return hass, home, states, stuck, group, cs_healthy, t
+
+
+@pytest.mark.asyncio
+async def test_reservation_never_prevents_a_current_reduction():
+    """QS-376 review EC1: if shaving cannot fit with the reservation, reductions win."""
+    _hass, _home, _states, _stuck, group, cs_healthy, t = await _isolate_stuck_in_group()
+
+    seen_reserved = []
+
+    async def _shave(actionable, do_reset_allocation, time):
+        seen_reserved.append(list(group._isolated_reserved_amps))
+        return actionable, group._isolated_reserved_amps == [0.0, 0.0, 0.0], False
+
+    group._do_prepare_and_shave_budgets = AsyncMock(side_effect=_shave)
+    group.get_budget_diffs = MagicMock(return_value=(0.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]))
+    res = await group.budgeting_algorithm_minimize_diffs([], 0.0, 0.0, False, t)
+
+    assert res[0] is not False
+    assert len(seen_reserved) == 3
+    assert seen_reserved[0] == seen_reserved[1] != [0.0, 0.0, 0.0]
+    assert seen_reserved[2] == [0.0, 0.0, 0.0]
+
+
+@pytest.mark.asyncio
+async def test_shave_failure_without_reservation_still_fails():
+    """QS-376 review EC1: with nothing reserved the failure path is unchanged (no extra retry)."""
+    hass, home, _states, _stuck = _build_stuck_charger(switch_state="off")
+    group = _make_charger_group(home, [])
+    group._do_prepare_and_shave_budgets = AsyncMock(return_value=([], False, False))
+    res = await group.budgeting_algorithm_minimize_diffs([], None, None, False, T0)
+    assert res[0] is False
+    assert group._do_prepare_and_shave_budgets.await_count == 2
+
+
+def test_start_stuck_is_false_in_state_reset():
+    """QS-376 review EC4: a charger in state reset is never 'start stuck' (no None amps reserved)."""
+    _hass, _home, _states, stuck = _build_stuck_charger(switch_state="off")
+    stuck._expected_charge_state._num_launched = 4
+    assert stuck.is_start_stuck(T0) is True
+    stuck._inner_amperage = None
+    assert stuck.is_start_stuck(T0) is False
+
+
+def test_charge_control_check_without_status_sensor():
+    """QS-376 review EC5: no status sensor -> not the held-control condition, no HA lookup of None."""
+    hass, _home, _states, charger = _build_stuck_charger(switch_state="unavailable")
+    assert charger._is_charge_control_unavailable_while_plugged(T0) is True
+    charger.charger_status_sensor = None
+    assert charger._is_charge_control_unavailable_while_plugged(T0) is False
+    assert all(c.args != (None,) for c in hass.states.get.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_group_probe_does_not_claim_the_start_stuck_info_line():
+    """QS-376 review EC7: a group-level probe logs the isolation at DEBUG, not via the INFO throttle."""
+    _hass, _home, _states, stuck, group, _cs, t = await _isolate_stuck_in_group()
+    group._log_on_change_state = None
+    await group.ensure_correct_state(t, probe_only=True)
+    assert group._log_on_change_state is None or f"start_stuck:{stuck.name}" not in group._log_on_change_state
+    assert group._isolated_reserved_amps == _reserved(stuck, 6)
