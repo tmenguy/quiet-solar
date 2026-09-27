@@ -279,3 +279,11 @@ def test_finish_task_case_a_has_the_epic_variant(harness_dir: Path) -> None:
     assert "without a successful probe" in body
     assert '`status: "branch-checked-out-elsewhere"`' in body
     assert '`status: "removed-branch-kept"`' in body
+    # S3 (fix plan #03): the force-delete prompt lists what would be lost using
+    # the probe's `changed` and `unpushed_commits` fields.
+    assert "`changed`" in body and "`unpushed_commits`" in body
+    # S5 (fix plan #03): the error bullet names the actual set fields, not a
+    # single hardcoded worktree_remove_error, and states a refusal touched
+    # nothing.
+    assert "STOP and surface `message`" in body
+    assert "On a refusal" in body

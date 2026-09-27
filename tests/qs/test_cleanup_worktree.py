@@ -366,7 +366,10 @@ def test_dir_gone_retry_main_worktree_lookup_failure(
     def boom():
         raise RuntimeError("no worktrees at all")
 
-    monkeypatch.setattr(cleanup_worktree, "get_main_worktree", boom)
+    # N2: the retry path now resolves the main worktree via
+    # ``_main_worktree_or_fallback`` — patch that so BOTH the cwd lookup and the
+    # script-location fallback are simulated as failing.
+    monkeypatch.setattr(cleanup_worktree, "_main_worktree_or_fallback", boom)
     out = _run_main(
         monkeypatch, capsys, ["--work-dir", str(work), "--issue", "77", "--force", "--delete-branch"]
     )
@@ -440,3 +443,246 @@ def test_branch_delete_failure_is_reported(main_and_worktree, monkeypatch, capsy
     )
     assert out["status"] == "removed-branch-kept"
     assert "could not remove ref" in out["branch_delete_error"]
+
+
+# --- S1: detached stale registration on the dir-gone retry path -------------
+
+
+def test_dir_gone_detached_registration_keeps_the_branch(
+    main_and_worktree, monkeypatch, capsys
+) -> None:
+    """S1: dir gone + a stale DETACHED registration proves nothing — the branch
+    is kept (consistent with the live detached path), never force-deleted by a
+    mistyped --issue."""
+    import shutil
+
+    main, work = main_and_worktree
+    monkeypatch.chdir(main)
+    subprocess.run(["git", "-C", str(work), "checkout", "--detach"], check=True, capture_output=True)
+    shutil.rmtree(work)  # dir gone; the registration is now detached and stale
+    out = _run_main(
+        monkeypatch, capsys, ["--work-dir", str(work), "--issue", "77", "--force", "--delete-branch"]
+    )
+    assert out["status"] == "removed-branch-kept"
+    assert out["branch_deleted"] is False
+    assert "QS_77" in _branches(main)  # kept: a detached registration proves nothing
+    assert "detached" in out["branch_delete_error"]
+
+
+# --- M1: never rmtree the main checkout or an unregistered path --------------
+
+
+def test_m1_refuses_to_remove_the_main_checkout(main_and_worktree, monkeypatch, capsys) -> None:
+    """M1: --work-dir <main> must never delete the main checkout (.git and all)."""
+    main, work = main_and_worktree
+    _git(main, "checkout", "-q", "-b", "QS_9")  # put main on a QS_ branch
+    monkeypatch.chdir(main)
+    out = _run_main(
+        monkeypatch, capsys, ["--work-dir", str(main), "--issue", "9", "--force", "--delete-branch"]
+    )
+    assert out["status"] == "error"
+    assert main.exists() and (main / ".git").exists()
+
+
+def test_m1_refuses_a_subdirectory_of_a_linked_worktree(
+    main_and_worktree, monkeypatch, capsys
+) -> None:
+    """M1: a subdirectory of a worktree is not itself a registered worktree."""
+    main, work = main_and_worktree
+    sub = work / "sub"
+    sub.mkdir()
+    (sub / "keep.txt").write_text("keep\n")
+    monkeypatch.chdir(main)
+    out = _run_main(
+        monkeypatch, capsys, ["--work-dir", str(sub), "--issue", "77", "--force", "--delete-branch"]
+    )
+    assert out["status"] == "error"
+    assert sub.exists()
+
+
+def test_m1_refuses_an_unrelated_clone(main_and_worktree, monkeypatch, capsys) -> None:
+    """M1: an unrelated clone that happens to be on QS_N is not registered in this
+    repo's worktree list — refuse."""
+    main, work = main_and_worktree
+    other = main.parent / "unrelated"
+    other.mkdir()
+    _git(other, "init", "-q", "-b", "main")
+    (other / "a.txt").write_text("x\n")
+    _git(other, "add", ".")
+    _git(other, "commit", "-q", "-m", "init")
+    _git(other, "checkout", "-q", "-b", "QS_77")
+    monkeypatch.chdir(main)  # the process runs from THIS repo's main checkout
+    out = _run_main(
+        monkeypatch, capsys, ["--work-dir", str(other), "--issue", "77", "--force", "--delete-branch"]
+    )
+    assert out["status"] == "error"
+    assert other.exists()
+
+
+def test_m1_refuses_when_main_worktree_undeterminable(
+    main_and_worktree, monkeypatch, capsys
+) -> None:
+    """M1 (c): with no resolvable main worktree, ownership can't be proven — refuse
+    and touch nothing (never rmtree)."""
+    import cleanup_worktree
+
+    main, work = main_and_worktree
+    monkeypatch.chdir(main)
+
+    def boom():
+        raise RuntimeError("No git worktrees found")
+
+    monkeypatch.setattr(cleanup_worktree, "get_main_worktree", boom)
+    out = _run_main(
+        monkeypatch, capsys, ["--work-dir", str(work), "--issue", "77", "--force", "--delete-branch"]
+    )
+    assert out["status"] == "error"
+    assert work.exists()
+
+
+# --- M1: remove_worktree is itself a gatekeeper (non-delete-branch path) -----
+
+
+def test_remove_worktree_refuses_the_main_checkout(main_and_worktree, monkeypatch) -> None:
+    import cleanup_worktree
+
+    main, _work = main_and_worktree
+    monkeypatch.chdir(main)
+    error = cleanup_worktree.remove_worktree(main)
+    assert error is not None and "main checkout" in error
+    assert main.exists() and (main / ".git").exists()
+
+
+def test_remove_worktree_refuses_an_unregistered_path(main_and_worktree, monkeypatch) -> None:
+    import cleanup_worktree
+
+    main, work = main_and_worktree
+    sub = work / "sub"
+    sub.mkdir()
+    monkeypatch.chdir(main)
+    error = cleanup_worktree.remove_worktree(sub)
+    assert error is not None and "not a registered linked worktree" in error
+    assert sub.exists()
+
+
+def test_remove_worktree_refuses_an_unreadable_registration(
+    main_and_worktree, monkeypatch
+) -> None:
+    import cleanup_worktree
+
+    main, work = main_and_worktree
+    monkeypatch.chdir(main)
+    monkeypatch.setattr(cleanup_worktree, "_registered_branch", lambda mw, wd: ("unreadable", None))
+    error = cleanup_worktree.remove_worktree(work)
+    assert error is not None and "unreadable" in error
+    assert work.exists()
+
+
+def test_remove_worktree_refuses_when_main_undeterminable(main_and_worktree, monkeypatch) -> None:
+    import cleanup_worktree
+
+    main, work = main_and_worktree
+    monkeypatch.chdir(main)
+
+    def boom():
+        raise RuntimeError("No git worktrees found")
+
+    monkeypatch.setattr(cleanup_worktree, "get_main_worktree", boom)
+    error = cleanup_worktree.remove_worktree(work)
+    assert error is not None and "Could not determine main worktree" in error
+    assert work.exists()
+
+
+def test_non_delete_branch_removal_refuses_the_main_checkout(
+    main_and_worktree, monkeypatch, capsys
+) -> None:
+    """M1: the plain removal path (no --delete-branch) is guarded by
+    remove_worktree too."""
+    main, work = main_and_worktree
+    monkeypatch.chdir(main)
+    out = _run_main(monkeypatch, capsys, ["--work-dir", str(main), "--issue", "77", "--force"])
+    assert out["status"] == "error"
+    assert main.exists() and (main / ".git").exists()
+
+
+# --- N1: _current_branch is not confused by a same-named tag ----------------
+
+
+def test_current_branch_ignores_a_same_named_tag(main_and_worktree) -> None:
+    """N1: with a tag QS_77 alongside branch QS_77, `git branch --show-current`
+    still returns the bare branch name (rev-parse --abbrev-ref would say
+    heads/QS_77)."""
+    import cleanup_worktree
+
+    main, work = main_and_worktree
+    subprocess.run(["git", "-C", str(work), "tag", "QS_77"], check=True, capture_output=True)
+    assert cleanup_worktree._current_branch(work) == "QS_77"
+
+
+def test_current_branch_is_none_when_detached(main_and_worktree) -> None:
+    import cleanup_worktree
+
+    main, work = main_and_worktree
+    subprocess.run(["git", "-C", str(work), "checkout", "--detach"], check=True, capture_output=True)
+    assert cleanup_worktree._current_branch(work) is None
+
+
+def test_current_branch_is_none_when_read_fails(tmp_path) -> None:
+    """A non-git directory makes `git branch --show-current` exit non-zero → None."""
+    import cleanup_worktree
+
+    not_a_repo = tmp_path / "plain"
+    not_a_repo.mkdir()
+    assert cleanup_worktree._current_branch(not_a_repo) is None
+
+
+# --- N2: main-worktree fallback resolves from the script's own location ------
+
+
+def test_main_worktree_or_fallback_uses_script_location(monkeypatch) -> None:
+    """N2: when the cwd lookup fails, the fallback anchors at this script's repo."""
+    import cleanup_worktree
+
+    def boom():
+        raise RuntimeError("cwd gone")
+
+    monkeypatch.setattr(cleanup_worktree, "get_main_worktree", boom)
+    result = cleanup_worktree._main_worktree_or_fallback()
+    assert result.exists()
+
+
+def test_main_worktree_or_fallback_reraises_when_both_fail(monkeypatch) -> None:
+    """N2: if the fallback listing also fails, the original error propagates."""
+    import cleanup_worktree
+
+    def boom():
+        raise RuntimeError("boom-original")
+
+    monkeypatch.setattr(cleanup_worktree, "get_main_worktree", boom)
+    real_run = subprocess.run
+
+    def fake_run(cmd, *a, **k):
+        if "worktree" in cmd and "list" in cmd:
+            return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal")
+        return real_run(cmd, *a, **k)
+
+    monkeypatch.setattr(cleanup_worktree.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="boom-original"):
+        cleanup_worktree._main_worktree_or_fallback()
+
+
+# --- N5: _registered_branch compares resolved paths -------------------------
+
+
+def test_registered_branch_resolves_symlinked_paths(main_and_worktree, tmp_path) -> None:
+    """N5: a path reaching the worktree through a symlink still matches its
+    registration (byte-different string, same resolved directory)."""
+    import cleanup_worktree
+
+    main, work = main_and_worktree
+    alias = tmp_path / "alias"
+    alias.symlink_to(work.parent)  # alias -> <repo>-worktrees
+    via_link = alias / work.name
+    assert str(via_link) != str(work)
+    kind, branch = cleanup_worktree._registered_branch(main, via_link)
+    assert kind == "branch" and branch == "QS_77"

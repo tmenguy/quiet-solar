@@ -118,7 +118,9 @@ explicit REVIEW intent**; it is never automatic.
    the target is always inherited from the epic, never set per child —
    and a body in the child form of the conventions below.
 3. **Land the document**: `python scripts/qs/epic_doc.py land --issue
-   <N> --message "…"` — one direct commit on `main`, `docs/epics/` only.
+   <N> --message "…"` — one direct commit on `main`, landing **only the
+   epic's own `docs/epics/QS-<N>.md`**; any other changed path is refused
+   (`out-of-scope`).
 4. **Sync the epic issue**: `python scripts/qs/epic_doc.py sync-issue
    --issue <N>`; its JSON must report `state: OPEN`.
 5. **Hand off** to `finish-task`, which discards the worktree.
@@ -132,10 +134,11 @@ carrying `Refs #<N>` — never through `create_pr.py`, whose
 
 ### The landing rule
 
-An epic document reaches `main` by **direct commit, `docs/epics/`
-only**, through `epic_doc.py land` only — never through `create_pr.py`.
-`land` refuses a non-epic issue, any changed path outside
-`docs/epics/`, a stale `docs/agents/` doc (`check_doc_drift.py`), and a
+An epic document reaches `main` by **direct commit, landing only the
+epic's own `docs/epics/QS-<N>.md`**, through `epic_doc.py land` only —
+never through `create_pr.py`. `land` refuses a non-epic issue, any other
+changed path (`out-of-scope`), a stale `docs/agents/` doc
+(`check_doc_drift.py`), and a
 path that `main` changed since the worktree's base (the `conflict`
 refusal carries the current `origin/main` content; merge it into the
 local file, then re-run with `--merged <path>=<blob>`). The working
@@ -235,8 +238,10 @@ To file the next wave, or to amend the document: `setup-task --issue
 show the JSON, and never offer force-delete without a successful probe;
 `status: ok` with `safe_to_discard: true` → the landed document is not
 "unpushed work", clean up; `status: ok` with `safe_to_discard: false` →
-show what would be lost (notably an unlanded `docs/epics/QS-<N>.md`) and
-ask. Cleanup runs `cleanup_worktree.py … --force --delete-branch` so a
+show what would be lost — the `changed` paths and `unpushed_commits`
+count the probe reports (notably an unlanded `docs/epics/QS-<N>.md`, but
+also any other uncommitted edit or local commit) — and ask. Cleanup runs
+`cleanup_worktree.py … --force --delete-branch` so a
 re-entry starts fresh from `origin/main`; the remote `QS_<N>` branch is
 deleted as for any task. Branch on the cleanup JSON `status`:
 `removed-branch-kept` or `branch-checked-out-elsewhere` mean the local

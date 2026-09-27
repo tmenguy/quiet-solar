@@ -12,10 +12,11 @@ not prose:
   worktree safe to discard?). ``--sync`` fast-forwards a reused worktree
   that is behind ``origin/main`` and holds nothing local.
 - ``land --issue N --message MSG [--merged P=<blob>]... [--dry-run]`` —
-  the **only** way an epic document reaches ``main``: every changed path
-  under ``docs/epics/``, no stale ``docs/agents/`` doc, no path ``main``
-  changed since the worktree's base (unless merged against the current
-  ``main`` blob). The landing commit is built on ``origin/main`` with
+  the **only** way an epic document reaches ``main``: it lands **only the
+  epic's own** ``docs/epics/QS-<N>.md``; any other changed path is refused
+  (``out-of-scope``). It also refuses a stale ``docs/agents/`` doc, and a
+  path ``main`` changed since the worktree's base (unless merged against
+  the current ``main`` blob). The landing commit is built on ``origin/main`` with
   plumbing through a temporary index, so the working tree is **never
   modified before the push is verified** — a failure cannot lose the
   draft.
@@ -274,6 +275,9 @@ def cmd_status(issue: int, *, sync: bool) -> dict:
     # docs/agents/ / templates (S4).
     doc_differs = not _git_flag(root, ["diff", "--quiet", "HEAD", "origin/main", "--", doc])
     behind = int(_git_ok(root, ["rev-list", "--count", "HEAD..origin/main"]).strip()) > 0
+    # S3: local commits not on origin/main — so a false ``safe_to_discard`` can be
+    # explained even when the delta is not the epic doc (a lane edit, a note).
+    unpushed_commits = int(_git_ok(root, ["rev-list", "--count", "origin/main..HEAD"]).strip())
     ancestor = _git_flag(root, ["merge-base", "--is-ancestor", "HEAD", "origin/main"])
     main_blobs = {p: _main_blob(root, p) for p in changed}
     local_blobs = {p: _worktree_blob(root, p) for p in changed}
@@ -297,6 +301,8 @@ def cmd_status(issue: int, *, sync: bool) -> dict:
         # snapshot fields computed above are stale — report the post-sync truth.
         local_modified = doc_differs = landed_not_reset = False
         safe_to_discard = True
+        changed = []
+        unpushed_commits = 0
     diff = ""
     if local_modified:
         before = _blob_content(root, main_sha) or ""
@@ -321,6 +327,8 @@ def cmd_status(issue: int, *, sync: bool) -> dict:
         "landed_not_reset": landed_not_reset,
         "safe_to_discard": safe_to_discard,
         "synced": synced,
+        "changed": changed,
+        "unpushed_commits": unpushed_commits,
         "mode": "RESUME" if on_main else "DECOMPOSE",
         "diff": diff,
     }
@@ -494,11 +502,11 @@ def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
     if dry_run:
         return {"status": "ok-dry-run", "paths": changed, "drift": report, "warnings": warnings}
 
+    # N4: under the single-path N6 scope, ``_build_commit`` can never return
+    # ``None`` here — the only changed path is the doc, and the already-landed
+    # shortcut above already returned when its bytes equalled main, so the built
+    # tree always differs from ``origin/main``'s.
     sha = _build_commit(root, changed, message)
-    if sha is None:
-        _reset_to_main(root)
-        return {"status": "already-landed", "paths": changed, "reset": True}
-
     push = _git(root, ["push", "origin", f"{sha}:refs/heads/main"])
     if push.returncode != 0:
         detail = (push.stderr or push.stdout or "").strip()
@@ -509,7 +517,7 @@ def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
             hint = (
                 "main is protected (branch protection or a repository ruleset): "
                 "land cannot push directly. Open the documented hand-opened PR "
-                "carrying `Refs #<N>` (never create_pr.py, whose `Fixes #<N>` "
+                f"carrying `Refs #{issue}` (never create_pr.py, whose `Fixes #{issue}` "
                 "would close the epic) — see the epic-factory lane doc."
             )
         elif re.search(r"non-fast-forward|fetch first", low):
@@ -760,19 +768,33 @@ def sync_body(body: str, rows: list[Row], *, link: str | None) -> tuple[str, lis
         else:
             is_owned = _owned_by_heading(content, start)
         owned = unfiled if is_owned else []
-        extra = task_lines + [f"- (not filed) {c}" for c in owned]
+        owned_texts = [f"- (not filed) {c}" for c in owned]
+        extra = task_lines + owned_texts
         if is_owned and anchor in section_blocks:
-            # S7(b): owned (not filed) lines can be spread across several blocks
-            # of the section (a list split by a blank line). Strip them from
-            # every block and append the regenerated block once to the anchor.
-            # Splices run back-to-front so an earlier edit can't shift a later
-            # block's indices.
+            # S7(b)/S2: owned (not filed) lines can be spread across several
+            # blocks of the section (a list split by a blank line). Strip them
+            # from every block, then regenerate: the newly filed task lines go
+            # to the anchor, while the regenerated (not filed) lines are
+            # re-appended to the block that ALREADY held them (S2 — so an
+            # unchanged table never relocates them, and an unchanged table yields
+            # an unchanged body), falling back to the anchor when no block held
+            # any. Splices run back-to-front so an earlier edit can't shift a
+            # later block's indices.
+            owned_blocks = [
+                (s, e)
+                for s, e in section_blocks
+                if any(_OWNED_RE.match(content[k]) for k in range(s, e))
+            ]
+            owned_target = owned_blocks[0] if owned_blocks else anchor
             edits: list[tuple[int, int, list[Line]]] = []
             for s, e in section_blocks:
                 kept = [ln for ln in lines[s:e] if not _OWNED_RE.match(ln[0])]
+                additions: list[Line] = []
                 if (s, e) == anchor:
-                    kept = kept + [(t, nl) for t in extra]
-                edits.append((s, e, kept))
+                    additions += [(t, nl) for t in task_lines]
+                if (s, e) == owned_target:
+                    additions += [(t, nl) for t in owned_texts]
+                edits.append((s, e, kept + additions))
             for s, e, new_lines in sorted(edits, key=lambda x: x[0], reverse=True):
                 _splice(lines, s, e, new_lines)
         else:
@@ -858,7 +880,10 @@ def main(argv: list[str] | None = None) -> int:
     status.add_argument("--issue", type=_issue_number, required=True)
     status.add_argument("--sync", action="store_true", help="fast-forward when behind origin/main and safe to discard")
 
-    land = sub.add_parser("land", help="land docs/epics/ changes on main by direct commit")
+    land = sub.add_parser(
+        "land",
+        help="land only the epic's own docs/epics/QS-<N>.md on main by direct commit",
+    )
     land.add_argument("--issue", type=_issue_number, required=True)
     land.add_argument("--message", required=True, help="commit message, used verbatim")
     land.add_argument(

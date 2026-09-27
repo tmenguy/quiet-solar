@@ -80,25 +80,53 @@ def push_branch(work_dir: Path) -> tuple[bool, str]:
 
 
 def remove_worktree(work_dir: Path) -> str | None:
-    """Un-register and delete the worktree; return an error string or None."""
-    error: str | None = None
+    """Un-register and delete the worktree; return an error string or None.
+
+    M1: the unconditional ``shutil.rmtree`` fallback only runs once ``work_dir``
+    is proven to be a **registered linked worktree** of this repo. Ownership is
+    proven against the *main worktree's* porcelain registration — never by a
+    ``rev-parse`` inside ``work_dir``, which answers for whatever repo contains
+    the path. So:
+
+    - if the main worktree can't be determined, nothing is touched (a rmtree
+      with no ownership proof is exactly the hazard) (c);
+    - the main checkout itself is refused — ``git worktree remove`` fails on it
+      and the fallback would otherwise delete it, ``.git`` and all (a);
+    - a path with no linked-worktree registration (a subdirectory, an unrelated
+      clone, a stray directory) is refused (a/b).
+    """
     try:
         main_wt = get_main_worktree()
     except (RuntimeError, subprocess.CalledProcessError, OSError) as exc:
-        error = f"Could not determine main worktree: {exc}"
-        main_wt = None
+        # M1 (c): without the main worktree we cannot prove ownership.
+        return f"Could not determine main worktree: {exc}"
 
-    if main_wt is not None:
-        result = subprocess.run(
-            ["git", "-C", str(main_wt), "worktree", "remove", str(work_dir), "--force"],
-            capture_output=True,
-            text=True,
-            cwd=str(main_wt),
+    if work_dir.resolve() == main_wt.resolve():
+        # M1 (a): the main checkout is never a linked worktree — refuse.
+        return f"refusing to remove {work_dir}: it is the main checkout, not a linked worktree"
+
+    kind, _registered = _registered_branch(main_wt, work_dir)
+    if kind in ("absent", "unreadable"):
+        # M1 (a/b): only a registered linked worktree may be removed. This is
+        # what stops a subdirectory, an unrelated clone or a stray path from
+        # being rmtree'd.
+        return (
+            f"refusing to remove {work_dir}: it is not a registered linked worktree "
+            f"({kind}) — nothing was touched"
         )
-        if result.returncode != 0:
-            error = result.stderr.strip() or f"git worktree remove exited {result.returncode}"
+
+    error: str | None = None
+    result = subprocess.run(
+        ["git", "-C", str(main_wt), "worktree", "remove", str(work_dir), "--force"],
+        capture_output=True,
+        text=True,
+        cwd=str(main_wt),
+    )
+    if result.returncode != 0:
+        error = result.stderr.strip() or f"git worktree remove exited {result.returncode}"
 
     if work_dir.exists():
+        # M1 (b): ownership is proven, so the rmtree fallback is safe here.
         try:
             shutil.rmtree(work_dir)
         except OSError as exc:
@@ -134,21 +162,21 @@ def delete_local_branch(main_wt: Path, branch: str) -> tuple[bool, str | None]:
 def _current_branch(work_dir: Path) -> str | None:
     """The worktree's checked-out branch, or ``None`` when it is unknown (S3).
 
-    Returns ``None`` for a detached HEAD (``rev-parse --abbrev-ref`` prints the
-    literal ``HEAD``) or when the read fails at all — both are "unknown", to be
-    resolved against the worktree registration, not mistaken for a branch named
-    ``HEAD`` and treated as a mismatch.
+    Uses ``git branch --show-current`` (N1): a detached HEAD prints nothing, and
+    unlike ``rev-parse --abbrev-ref HEAD`` it is never confused into
+    ``heads/QS_N`` by a same-named tag. An empty result (detached HEAD) or a
+    failed read both map to ``None`` — "unknown", to be resolved against the
+    worktree registration, not mistaken for a branch and treated as a mismatch.
     """
     result = subprocess.run(
-        ["git", "-C", str(work_dir), "rev-parse", "--abbrev-ref", "HEAD"],
+        ["git", "-C", str(work_dir), "branch", "--show-current"],
         capture_output=True,
         text=True,
         check=False,
     )
     if result.returncode != 0:
         return None
-    branch = result.stdout.strip()
-    return None if branch in ("", "HEAD") else branch
+    return result.stdout.strip() or None
 
 
 def _branch_exists(main_wt: Path, branch: str) -> bool:
@@ -179,11 +207,14 @@ def _registered_branch(main_wt: Path, work_dir: Path) -> tuple[str, str | None]:
     )
     if result.returncode != 0:
         return "unreadable", None
-    target = str(work_dir)
-    current: str | None = None
+    # N5: compare resolved paths, not raw strings — the porcelain path and the
+    # caller's ``work_dir`` can differ byte-for-byte yet name the same directory
+    # (a symlinked component, ``/var`` vs ``/private/var`` on macOS, …).
+    target = work_dir.resolve()
+    current: Path | None = None
     for line in result.stdout.splitlines():
         if line.startswith("worktree "):
-            current = line[len("worktree ") :]
+            current = Path(line[len("worktree ") :]).resolve()
         elif current == target and line.startswith("branch "):
             ref = line[len("branch ") :]
             short = ref[len("refs/heads/") :] if ref.startswith("refs/heads/") else ref
@@ -222,6 +253,33 @@ def _delete_branch_after_removal(main_wt: Path, branch: str) -> dict:
     }
 
 
+def _main_worktree_or_fallback() -> Path:
+    """The main worktree — resolved from the cwd, else from this script (N2).
+
+    ``get_main_worktree()`` runs ``git worktree list`` in the *process cwd*. In
+    the retry path the cwd is often the just-removed worktree, so it dies. Fall
+    back to running the same listing anchored at this script's own repo
+    (``scripts/qs/`` → repo root two levels up). If both fail, re-raise the
+    original error so the caller can report it.
+    """
+    try:
+        return get_main_worktree()
+    except (RuntimeError, subprocess.CalledProcessError, OSError):
+        anchor = Path(__file__).resolve().parents[2]
+        result = subprocess.run(
+            ["git", "-C", str(anchor), "worktree", "list", "--porcelain"],
+            capture_output=True,
+            text=True,
+            cwd=str(anchor),
+            check=False,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                if line.startswith("worktree "):
+                    return Path(line[len("worktree ") :])
+        raise
+
+
 def _prune_worktrees(main_wt: Path) -> None:
     subprocess.run(
         ["git", "-C", str(main_wt), "worktree", "prune"],
@@ -246,13 +304,15 @@ def _emit(work_dir: Path, *, status: str, wt_error: str | None, fields: dict, me
 
 
 def _retry_branch_delete(work_dir: Path, branch_name: str) -> None:
-    """S4: the worktree dir is already gone (and ``--force`` was given). Prune the
-    stale registration and delete the local branch so a failed first run can be
-    retried — but only after proving the registration belonged to this branch.
-    Nothing proves a gone dir with no registration ever belonged to ``QS_<N>``,
-    so that (and a registration on another branch) is refused."""
+    """S4/S1: the worktree dir is already gone (and ``--force`` was given). Prune
+    the stale registration and delete the local branch so a failed first run can
+    be retried — but only after **the porcelain registration proves** the branch
+    belonged to this worktree. Only ``kind == "branch"`` with a matching
+    ``registered`` deletes: a ``detached`` registration proves nothing (S1), a
+    registration on another branch is a mismatch, and an absent/unreadable one
+    proves nothing either — all keep the branch."""
     try:
-        main_wt: Path | None = get_main_worktree()
+        main_wt = _main_worktree_or_fallback()
     except (RuntimeError, subprocess.CalledProcessError, OSError) as exc:
         _emit(
             work_dir,
@@ -264,7 +324,27 @@ def _retry_branch_delete(work_dir: Path, branch_name: str) -> None:
         return
 
     kind, registered = _registered_branch(main_wt, work_dir)
-    if kind == "branch" and registered != branch_name:
+    if kind == "branch" and registered == branch_name:
+        # Proven ours — prune the stale registration and delete the branch.
+        _prune_worktrees(main_wt)
+        result = _delete_branch_after_removal(main_wt, branch_name)
+        if result["checked_out_elsewhere"]:
+            status = "branch-checked-out-elsewhere"
+        elif result["branch_deleted"]:
+            status = "removed"
+        else:
+            status = "removed-branch-kept"
+        if result["branch_deleted"]:
+            message = f"Worktree directory was already gone; branch {branch_name} deleted."
+        else:
+            message = (
+                f"Worktree directory was already gone; branch {branch_name} kept: "
+                f"{result['branch_delete_error']}"
+            )
+        _emit(work_dir, status=status, wt_error=None, fields=result, message=message)
+        return
+
+    if kind == "branch":  # registered != branch_name — mismatched --issue.
         _emit(
             work_dir,
             status="error",
@@ -278,39 +358,37 @@ def _retry_branch_delete(work_dir: Path, branch_name: str) -> None:
             message=f"Refusing to touch {branch_name}: worktree registration is on {registered!r}.",
         )
         return
-    if kind in ("absent", "unreadable"):
+
+    if kind == "detached":
+        # S1: prune the stale registration, but a detached registration proves
+        # nothing about ownership — keep the branch (as the live path does).
+        _prune_worktrees(main_wt)
         _emit(
             work_dir,
             status="removed-branch-kept",
             wt_error=None,
             fields={
                 "branch_delete_error": (
-                    f"no worktree registration for {work_dir}; nothing proves it "
-                    f"belonged to {branch_name}, so the branch is kept"
+                    f"registration was detached; nothing proves it belonged to {branch_name}"
                 )
             },
-            message=f"Worktree directory was already gone; branch {branch_name} kept (no registration).",
+            message=f"Worktree directory was already gone; branch {branch_name} kept (detached registration).",
         )
         return
 
-    # kind == "detached", or "branch" with registered == branch_name: safe to
-    # prune and delete.
-    _prune_worktrees(main_wt)
-    result = _delete_branch_after_removal(main_wt, branch_name)
-    if result["checked_out_elsewhere"]:
-        status = "branch-checked-out-elsewhere"
-    elif result["branch_deleted"]:
-        status = "removed"
-    else:
-        status = "removed-branch-kept"
-    if result["branch_deleted"]:
-        message = f"Worktree directory was already gone; branch {branch_name} deleted."
-    else:
-        message = (
-            f"Worktree directory was already gone; branch {branch_name} kept: "
-            f"{result['branch_delete_error']}"
-        )
-    _emit(work_dir, status=status, wt_error=None, fields=result, message=message)
+    # kind in ("absent", "unreadable")
+    _emit(
+        work_dir,
+        status="removed-branch-kept",
+        wt_error=None,
+        fields={
+            "branch_delete_error": (
+                f"no worktree registration for {work_dir}; nothing proves it "
+                f"belonged to {branch_name}, so the branch is kept"
+            )
+        },
+        message=f"Worktree directory was already gone; branch {branch_name} kept (no registration).",
+    )
 
 
 def main() -> None:  # noqa: C901
@@ -419,79 +497,83 @@ def main() -> None:  # noqa: C901
 
 
 def _cleanup_with_branch(work_dir: Path, issue: int, branch_name: str) -> None:  # noqa: C901
-    """Remove a live worktree and (safely) its local branch (S3 / N4)."""
-    # S3: read the worktree's checked-out branch BEFORE removal so a mismatched
-    # --issue can't force-delete or force-remove an unrelated QS_<N> worktree.
-    checked_out = _current_branch(work_dir)
-    try:
-        main_wt: Path | None = get_main_worktree()
-        main_wt_error: str | None = None
-    except (RuntimeError, subprocess.CalledProcessError, OSError) as exc:
-        main_wt = None
-        main_wt_error = f"Could not determine main worktree: {exc}"
+    """Remove a live worktree and (safely) its local branch (M1 / S3 / N4).
 
-    if checked_out is not None and checked_out != branch_name:
-        # S3: a real mismatched branch — refuse entirely and touch nothing.
+    Ownership is proven **primarily** by the porcelain worktree registration in
+    the main worktree (M1 (d)): the registration must place ``work_dir`` on
+    ``branch_name`` (or be ``detached``). ``rev-parse`` HEAD is only a secondary
+    cross-check that gates the *branch deletion*. This keeps a mistyped
+    ``--issue``, the main checkout, a subdirectory, or an unrelated clone from
+    ever being removed.
+    """
+    try:
+        main_wt = get_main_worktree()
+    except (RuntimeError, subprocess.CalledProcessError, OSError) as exc:
+        # M1 (c): without the main worktree we cannot prove ownership — refuse.
+        main_wt_error = f"Could not determine main worktree: {exc}"
+        _emit(
+            work_dir,
+            status="error",
+            wt_error=None,
+            fields={"branch_delete_error": main_wt_error},
+            message=f"Refusing to remove {work_dir}: {main_wt_error}.",
+        )
+        return
+
+    if work_dir.resolve() == main_wt.resolve():
+        # M1 (a): never remove the main checkout.
         _emit(
             work_dir,
             status="error",
             wt_error=None,
             fields={
                 "branch_delete_error": (
-                    f"refusing to remove worktree: it is checked out on {checked_out!r}, "
-                    f"not {branch_name} (mismatched --issue) — nothing was touched"
+                    f"refusing to remove {work_dir}: it is the main checkout, not a linked worktree"
                 )
             },
-            message=f"Refusing to remove {work_dir}: checked out on {checked_out!r}, not {branch_name}.",
+            message=f"Refusing to remove {work_dir}: it is the main checkout.",
         )
         return
 
-    # ``delete_branch_ok`` stays True only when the HEAD read confirmed
-    # ``branch_name``. An unknown HEAD (detached/unreadable) never deletes the
-    # branch, but may still allow removing the worktree once ownership is
-    # confirmed via the porcelain registration (S3).
-    delete_branch_ok = checked_out == branch_name
-    if checked_out is None:
-        if main_wt is None:
-            _emit(
-                work_dir,
-                status="error",
-                wt_error=None,
-                fields={"branch_delete_error": main_wt_error},
-                message=f"Refusing to remove {work_dir}: HEAD is unknown and {main_wt_error}.",
-            )
-            return
-        kind, registered = _registered_branch(main_wt, work_dir)
-        if kind == "branch" and registered != branch_name:
-            _emit(
-                work_dir,
-                status="error",
-                wt_error=None,
-                fields={
-                    "branch_delete_error": (
-                        f"refusing to remove worktree: it is registered on {registered!r}, "
-                        f"not {branch_name} (mismatched --issue) — nothing was touched"
-                    )
-                },
-                message=f"Refusing to remove {work_dir}: registered on {registered!r}, not {branch_name}.",
-            )
-            return
-        if kind in ("absent", "unreadable"):
-            _emit(
-                work_dir,
-                status="error",
-                wt_error=None,
-                fields={
-                    "branch_delete_error": (
-                        f"refusing to remove worktree: HEAD is unknown and its ownership by "
-                        f"{branch_name} cannot be confirmed ({kind} registration)"
-                    )
-                },
-                message=f"Refusing to remove {work_dir}: unknown HEAD, {kind} registration.",
-            )
-            return
-        # kind == "detached", or "branch" with registered == branch_name: safe to
-        # remove the worktree, but keep the branch (HEAD was unknown).
+    kind, registered = _registered_branch(main_wt, work_dir)
+    if kind in ("absent", "unreadable"):
+        # M1 (a/b): not a registered linked worktree (a subdirectory, an
+        # unrelated clone, a stray path) — refuse and touch nothing.
+        _emit(
+            work_dir,
+            status="error",
+            wt_error=None,
+            fields={
+                "branch_delete_error": (
+                    f"refusing to remove {work_dir}: it is not a registered linked "
+                    f"worktree ({kind}) — nothing was touched"
+                )
+            },
+            message=f"Refusing to remove {work_dir}: not a registered linked worktree ({kind}).",
+        )
+        return
+    if kind == "branch" and registered != branch_name:
+        # S3/M1 (d): the registration is on another branch — mismatched --issue.
+        _emit(
+            work_dir,
+            status="error",
+            wt_error=None,
+            fields={
+                "branch_delete_error": (
+                    f"refusing to remove worktree: it is registered on {registered!r}, "
+                    f"not {branch_name} (mismatched --issue) — nothing was touched"
+                )
+            },
+            message=f"Refusing to remove {work_dir}: registered on {registered!r}, not {branch_name}.",
+        )
+        return
+
+    # Ownership is proven by the registration (kind == "branch" and matches, or
+    # "detached"). The branch is deleted only when the secondary HEAD cross-check
+    # also confirms it — a detached/unreadable HEAD, or a detached registration,
+    # keeps the branch (S3).
+    checked_out = _current_branch(work_dir)
+    delete_branch_ok = kind == "branch" and checked_out == branch_name
 
     wt_error = remove_worktree(work_dir)
     if wt_error and work_dir.exists():
@@ -506,33 +588,24 @@ def _cleanup_with_branch(work_dir: Path, issue: int, branch_name: str) -> None: 
         )
         return
 
-    if wt_error and main_wt is not None:
+    if wt_error:
         # N4: remove_worktree reported an error but the dir is actually gone —
         # prune the stale registration and continue to the guarded branch delete.
         _prune_worktrees(main_wt)
 
     if not delete_branch_ok:
-        # S3: the branch is kept on purpose (unknown HEAD).
-        _emit(
-            work_dir,
-            status="removed-branch-kept",
-            wt_error=wt_error,
-            fields={
-                "branch_delete_error": (
-                    f"branch {branch_name} kept: the worktree HEAD was detached or unreadable"
-                )
-            },
-            message=f"Worktree {work_dir} removed; branch {branch_name} kept (unknown HEAD).",
+        # S3: the branch is kept on purpose (unknown HEAD / detached registration).
+        reason = (
+            "the worktree registration was detached"
+            if kind == "detached"
+            else "the worktree HEAD was detached or unreadable"
         )
-        return
-
-    if main_wt is None:
         _emit(
             work_dir,
             status="removed-branch-kept",
             wt_error=wt_error,
-            fields={"branch_delete_error": main_wt_error},
-            message=f"Worktree QS_{issue} removed; branch {branch_name} kept: {main_wt_error}",
+            fields={"branch_delete_error": f"branch {branch_name} kept: {reason}"},
+            message=f"Worktree {work_dir} removed; branch {branch_name} kept (unknown HEAD).",
         )
         return
 

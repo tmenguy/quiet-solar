@@ -353,11 +353,11 @@ declared target, and refuses a `scale:epic` issue outright (QS-340).
 ### Epic documents
 
 An epic's rationale document `docs/epics/QS-<N>.md` reaches `main` by
-**direct commit, `docs/epics/` only**, through
-`python scripts/qs/epic_doc.py land` only — **never through
+**direct commit, landing only the epic's own `docs/epics/QS-<N>.md`**,
+through `python scripts/qs/epic_doc.py land` only — **never through
 `create_pr.py`**, whose `Fixes #<N>` would close the epic (it refuses
-an epic issue for that reason). `land` refuses any changed path outside
-`docs/epics/`, a stale `docs/agents/` document (`check_doc_drift.py`),
+an epic issue for that reason). `land` refuses any other changed path
+(`out-of-scope`), a stale `docs/agents/` document (`check_doc_drift.py`),
 and a path `main` changed since the worktree's base; it builds the
 commit on `origin/main` through a temporary index and leaves the working
 tree untouched until the push is verified. If a `docs/epics/` path ever

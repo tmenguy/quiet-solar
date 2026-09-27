@@ -417,6 +417,32 @@ def test_status_leftover_commit_is_not_safe_to_discard(repos, runner, capsys) ->
     assert rc == 0
     assert out["local_modified"] is False
     assert out["safe_to_discard"] is False
+    # S3: an empty leftover commit shows in unpushed_commits (nothing in changed).
+    assert out["unpushed_commits"] == 1
+    assert out["changed"] == []
+
+
+def test_status_reports_changed_paths_and_unpushed_commits(repos, runner, capsys) -> None:
+    """S3: a local edit AND a committed non-doc change both surface, so a false
+    safe_to_discard can be explained even when the delta is not the epic doc."""
+    repos.write(DOC, "# Epic QS-900\n\nlocal edit\n")  # uncommitted doc edit
+    repos.write("docs/workflow/note.md", "an uncommitted lane note\n")
+    rc, out = _status(capsys)
+    assert rc == 0
+    assert out["safe_to_discard"] is False
+    assert DOC in out["changed"]
+    assert "docs/workflow/note.md" in out["changed"]
+    assert out["unpushed_commits"] == 0  # both edits are uncommitted
+
+
+def test_status_post_sync_clears_changed_and_unpushed(repos, runner, capsys) -> None:
+    """S3/N1: after --sync the reported changed/unpushed fields are post-sync."""
+    repos.push_from_seed(DOC, "# landed\n")
+    repos.write(DOC, "# landed\n")  # landed-not-reset
+    rc, out = _status(capsys, "--sync")
+    assert rc == 0 and out["synced"] is True
+    assert out["changed"] == []
+    assert out["unpushed_commits"] == 0
 
 
 def test_status_git_error_on_bad_predicate(repos, runner, capsys) -> None:
@@ -588,14 +614,6 @@ def test_push_accepted_but_reset_failed_then_rerun(repos, runner, clean_drift, c
 
     rc, out = _status(capsys)
     assert out["safe_to_discard"] is True and out["local_modified"] is False
-
-
-def test_tree_equal_to_main_is_already_landed(repos, runner, clean_drift, monkeypatch, capsys) -> None:
-    repos.write(DOC, _epic("# x\n"))
-    monkeypatch.setattr(epic_doc, "_build_commit", lambda root, changed, message: None)
-    rc, out = _land(capsys)
-    assert rc == 0 and out["status"] == "already-landed" and out["reset"] is True
-    assert not runner.git_calls("push")
 
 
 def test_build_commit_returns_none_for_a_tree_equal_to_main(repos, runner) -> None:
@@ -934,7 +952,9 @@ def test_push_rejected_by_protected_branch_points_to_hand_opened_pr(
     )
     rc, out = _land(capsys)
     assert rc == 1 and out["status"] == "push-rejected"
-    assert "PR" in out["hint"] and "Refs #" in out["hint"]
+    # N3: the hint interpolates the real issue number, not a literal `#<N>`.
+    assert "PR" in out["hint"] and f"Refs #{ISSUE}" in out["hint"]
+    assert "#<N>" not in out["hint"] and f"Fixes #{ISSUE}" in out["hint"]
     assert "re-run" not in out["hint"]
 
 
@@ -954,7 +974,8 @@ def test_push_rejected_by_a_ruleset_points_to_hand_opened_pr(
     runner.on(_is("push", "origin"), lambda cmd: _done(cmd, 1, "", stderr))
     rc, out = _land(capsys)
     assert rc == 1 and out["status"] == "push-rejected"
-    assert "PR" in out["hint"] and "Refs #" in out["hint"]
+    assert "PR" in out["hint"] and f"Refs #{ISSUE}" in out["hint"]
+    assert "#<N>" not in out["hint"]
     assert "re-run" not in out["hint"]
 
 
@@ -1203,6 +1224,38 @@ def test_owned_block_before_task_block_decides_ownership_for_the_section() -> No
     assert new.count("#380") == 1
     assert new.count("(not filed) C") == 1
     assert epic_doc.sync_body(new, rows, link=None)[0] == new
+
+
+def test_s2_owned_lines_under_heading_survive_a_later_anchor() -> None:
+    """S2: a ``(not filed)`` block directly under ## Children with the task-line
+    anchor under a later "Wave 1:" sub-list. Three runs:
+
+    1. table unchanged → the body must NOT be rewritten (no relocation);
+    2. after B is filed as #380 → B moves to a task line, C stays ``(not filed)``
+       under the heading, and B is never listed both ways;
+    3. re-run → a no-op.
+    """
+    body = "## Children\n\n- (not filed) B\n- (not filed) C\n\nWave 1:\n\n- [ ] #371 — A\n"
+
+    # Run 1: table unchanged (A filed, B and C not).
+    rows1 = [R("A", 371), R("B", None), R("C", None)]
+    new1, added1, _owned1 = epic_doc.sync_body(body, rows1, link=None)
+    assert new1 == body, "run 1 must not rewrite an unchanged body"
+    assert added1 == []
+
+    # Run 2: B is filed as #380.
+    rows2 = [R("A", 371), R("B", 380), R("C", None)]
+    new2, added2, owned2 = epic_doc.sync_body(new1, rows2, link=None)
+    assert added2 == [380] and owned2 == ["C"]
+    assert new2.count("(not filed) B") == 0  # B no longer listed as unfiled
+    assert new2.count("#380") == 1
+    assert new2.count("(not filed) C") == 1
+    # C stays under the heading; B's new task line sits under "Wave 1:".
+    assert new2.index("(not filed) C") < new2.index("Wave 1:")
+    assert new2.index("#380") > new2.index("Wave 1:")
+
+    # Run 3: no-op.
+    assert epic_doc.sync_body(new2, rows2, link=None)[0] == new2
 
 
 def test_owned_lines_split_across_blocks_do_not_duplicate() -> None:
