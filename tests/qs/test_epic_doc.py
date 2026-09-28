@@ -1595,13 +1595,41 @@ def test_sync_issue_rewrite_unreadable_file_writes_nothing(repos, runner, capsys
 def test_sync_issue_rewrite_reads_stdin(repos, runner, capsys, monkeypatch) -> None:
     repos.write(DOC, _DOC_TEXT)
     runner.body = f"{_LINK}\n\nOld.\n"
-    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{_LINK}\n\nFrom stdin.\n"))
+    stdin = io.TextIOWrapper(io.BytesIO(f"\ufeff{_LINK}\n\nFrom stdin — utf-8.\n".encode()))
+    monkeypatch.setattr(sys, "stdin", stdin)
     rc, out = _run(["sync-issue", "--issue", str(ISSUE), "--rewrite-from", "-"], capsys)
     assert rc == 0, out
     assert out["rewrite_from"] == "-" and out["added"] == [901]
     (edit,) = runner.edits
-    assert edit["body"].startswith(f"{_LINK}\n\nFrom stdin.\n")
+    assert edit["body"].startswith(f"{_LINK}\n\nFrom stdin — utf-8.\n")
     assert "Old." not in edit["body"]
+
+
+class _Tty(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+@pytest.mark.parametrize("stdin", [None, _Tty("body\n")])
+def test_sync_issue_rewrite_refuses_closed_or_interactive_stdin(repos, runner, capsys, monkeypatch, stdin) -> None:
+    repos.write(DOC, _DOC_TEXT)
+    monkeypatch.setattr(sys, "stdin", stdin)
+    rc, out = _run(["sync-issue", "--issue", str(ISSUE), "--rewrite-from", "-"], capsys)
+    assert rc == 1 and out["status"] == "missing-body-file" and out["path"] == "-"
+    assert runner.edits == []
+
+
+def test_sync_issue_rewrite_keeps_a_readded_child_ticked(repos, runner, capsys, tmp_path) -> None:
+    # The rewrite text drops the ticked #901 line: sync_body re-adds it, still ticked.
+    repos.write(DOC, _DOC_TEXT)
+    runner.body = f"{_LINK}\n\n## Children\n\n- [x] #901 — first child\n"
+    body_file = tmp_path / "body.md"
+    body_file.write_text(f"{_LINK}\n\nNew.\n\n## Children\n\n- (not filed) second child\n", encoding="utf-8")
+    rc, out = _rewrite(capsys, body_file)
+    assert rc == 0 and out["added"] == [901], out
+    (edit,) = runner.edits
+    assert "- [x] #901 — first child\n" in edit["body"]
+    assert "- [ ] #901" not in edit["body"]
 
 
 def test_sync_issue_rewrite_keeps_ticked_children_ticked(repos, runner, capsys, tmp_path) -> None:

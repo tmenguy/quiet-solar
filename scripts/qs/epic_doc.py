@@ -862,9 +862,18 @@ def _edit_body(issue: int, body: str) -> None:
 
 
 def _read_body_file(path: str) -> str:
-    """The replacement body for ``--rewrite-from`` (``-`` = stdin); blank or unreadable is a refusal."""
+    """The replacement body for ``--rewrite-from`` (``-`` = stdin); blank or unreadable is a refusal.
+
+    Both sources decode as UTF-8 (a leading BOM dropped). A closed or
+    interactive stdin is refused rather than read — it would crash or hang.
+    """
     try:
-        text = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
+        if path == "-":
+            if sys.stdin is None or sys.stdin.isatty():
+                raise Refusal("missing-body-file", path=path, detail="stdin is closed or a terminal — pipe the body in")
+            text = sys.stdin.buffer.read().decode("utf-8-sig")
+        else:
+            text = Path(path).read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError) as exc:
         raise Refusal("missing-body-file", path=path, detail=str(exc)) from None
     if not text.strip():
@@ -907,14 +916,17 @@ def cmd_sync_issue(issue: int, *, rewrite_from: str | None = None) -> dict:
     except UnparseableDecomposition as exc:
         raise Refusal("unparseable-decomposition", doc=doc, detail=str(exc)) from None
 
-    # --rewrite-from: the text replaces the body as the base (ticks carried
-    # over); the additive pass below still enforces the link and child lines.
-    base = body if rewrite_from is None else carry_ticks(body, _read_body_file(rewrite_from))
+    # --rewrite-from: the text replaces the body as the base; the additive
+    # pass below still enforces the link and child lines, and the ticks are
+    # carried over its output (a child line it re-adds stays ticked too).
+    base = body if rewrite_from is None else _read_body_file(rewrite_from)
     extra = {} if rewrite_from is None else {"rewrite_from": rewrite_from}
     link = None
     if doc not in base:
         link = f"**Rationale document:** [{doc}]({_repo_url()}/blob/main/{doc})"
     new_body, added, owned = sync_body(base, rows, link=link)
+    if rewrite_from is not None:
+        new_body = carry_ticks(body, new_body)
     if new_body == body:
         return {"status": "unchanged", "state": state, "added": [], "owned": owned, "link_added": False, **extra}
     _edit_body(issue, new_body)

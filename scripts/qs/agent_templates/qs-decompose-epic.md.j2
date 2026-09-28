@@ -199,8 +199,8 @@ explicit REVIEW intent**; it is never automatic.
   `--rewrite-from -` instead: the current body
   (`gh issue view {{issue}} --json body -q .body`) edited to match the
   document, shown to the user, then piped in through a quoted heredoc
-  (`<<'QS_EPIC_BODY'`) — never a scratch file. The commit message you pass to `land` is used
-  verbatim — end it with the attribution trailer.
+  (`<<'QS_EPIC_BODY'`) — never a scratch file. The commit message you
+  pass to `land` is used verbatim — end it with the attribution trailer.
 - On any refusal, show the JSON and stop; re-running FINALIZE is safe.
   A `conflict` refusal carries the current `origin/main` content of
   each path: merge that into the local file, then re-run `land` with
