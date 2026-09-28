@@ -1561,6 +1561,17 @@ def test_sync_issue_rewrite_still_enforces_link_and_children(repos, runner, caps
     assert "Old." not in edit["body"]
 
 
+def test_sync_issue_rewrite_prose_mention_of_the_doc_is_not_the_link(repos, runner, capsys, tmp_path) -> None:
+    repos.write(DOC, _DOC_TEXT)
+    runner.body = f"{_LINK}\n\nOld.\n"
+    body_file = tmp_path / "body.md"
+    body_file.write_text(f"Redesign: see {DOC} section 3.\n", encoding="utf-8")
+    rc, out = _rewrite(capsys, body_file)
+    assert rc == 0 and out["link_added"] is True, out
+    (edit,) = runner.edits
+    assert edit["body"].startswith(f"{_LINK}\n\nRedesign: see {DOC} section 3.\n")
+
+
 def test_sync_issue_rewrite_equal_to_current_body_is_unchanged(repos, runner, capsys, tmp_path) -> None:
     repos.write(DOC, _DOC_TEXT)
     runner.body = f"{_LINK}\n\n## Children\n\n- [ ] #901 — first child\n- (not filed) second child\n"
