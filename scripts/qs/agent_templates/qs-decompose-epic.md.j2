@@ -351,8 +351,9 @@ tool.
   `main` through `epic_doc.py land` only, never through `create_pr.py`
   (its `Fixes #<N>` would close the epic).
 - The epic issue body is written through `epic_doc.py sync-issue` only —
-  additive, or `--rewrite-from -` (stdin) to match a redesigned document;
-  never a raw `gh issue edit`, and never close the epic issue.
+  additive, or `--rewrite-from -` (stdin, never a scratch file) to match
+  a redesigned document; never a raw `gh issue edit`, and never close the
+  epic issue.
 - Always offer, and recommend, at least one REVIEW round before the first
   land; the FINALIZE gate is advisory (never a hard block).
 - Sub-agents are spawned in **parallel** (one message, N calls).

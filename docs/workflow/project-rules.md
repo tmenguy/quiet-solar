@@ -368,9 +368,10 @@ is written through `epic_doc.py sync-issue`: additive by default
 (rationale link, `- [ ] #N` child lines), or rewritten to match a
 redesigned document with `--rewrite-from -` (the new body on stdin; the
 link and child lines are still enforced, ticked children stay ticked).
-**Precondition**: `main`'s branch protection has `enforce_admins:
-false`, so the maintainer's direct push is accepted; a rejected push surfaces as `status: push-rejected`, and the
-documented last resort is a hand-opened PR carrying `Refs #<N>`.
+**Precondition**: `main`'s branch protection has
+`enforce_admins: false`, so the maintainer's direct push is accepted;
+a rejected push surfaces as `status: push-rejected`, and the documented
+last resort is a hand-opened PR carrying `Refs #<N>`.
 
 **Commit authorization**: agents are authorized to commit and push as
 part of their defined workflow steps (e.g., the implement-task agent

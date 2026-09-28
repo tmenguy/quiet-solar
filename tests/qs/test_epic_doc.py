@@ -1610,12 +1610,38 @@ class _Tty(io.StringIO):
         return True
 
 
-@pytest.mark.parametrize("stdin", [None, _Tty("body\n")])
+def _closed_stdin() -> io.StringIO:
+    stream = io.StringIO("body\n")
+    stream.close()
+    return stream
+
+
+@pytest.mark.parametrize("stdin", [None, _Tty("body\n"), _closed_stdin(), io.StringIO("text-only, no .buffer\n")])
 def test_sync_issue_rewrite_refuses_closed_or_interactive_stdin(repos, runner, capsys, monkeypatch, stdin) -> None:
     repos.write(DOC, _DOC_TEXT)
     monkeypatch.setattr(sys, "stdin", stdin)
     rc, out = _run(["sync-issue", "--issue", str(ISSUE), "--rewrite-from", "-"], capsys)
     assert rc == 1 and out["status"] == "missing-body-file" and out["path"] == "-"
+    assert runner.edits == []
+
+
+def test_sync_issue_rewrite_keeps_crlf_and_ignores_a_trailing_newline(repos, runner, capsys, tmp_path) -> None:
+    repos.write(DOC, _DOC_TEXT)
+    runner.body = f"{_LINK}\r\n\r\n## Children\r\n\r\n- [ ] #901 — first child\r\n- (not filed) second child"
+    body_file = tmp_path / "body.md"
+    body_file.write_bytes((runner.body + "\r\n").encode("utf-8"))
+    rc, out = _rewrite(capsys, body_file)
+    assert rc == 0 and out["status"] == "unchanged", out
+    assert runner.edits == []
+
+
+def test_sync_issue_rewrite_lf_text_over_a_crlf_body_is_unchanged(repos, runner, capsys, tmp_path) -> None:
+    repos.write(DOC, _DOC_TEXT)
+    runner.body = f"{_LINK}\r\n\r\n## Children\r\n\r\n- [ ] #901 — first child\r\n- (not filed) second child\r\n"
+    body_file = tmp_path / "body.md"
+    body_file.write_text(runner.body.replace("\r\n", "\n"), encoding="utf-8")
+    rc, out = _rewrite(capsys, body_file)
+    assert rc == 0 and out["status"] == "unchanged", out
     assert runner.edits == []
 
 

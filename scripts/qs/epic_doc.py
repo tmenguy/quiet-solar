@@ -864,8 +864,9 @@ def _edit_body(issue: int, body: str) -> None:
 def _read_body_file(path: str) -> str:
     """The replacement body for ``--rewrite-from`` (``-`` = stdin); blank or unreadable is a refusal.
 
-    Both sources decode as UTF-8 (a leading BOM dropped). A closed or
-    interactive stdin is refused rather than read — it would crash or hang.
+    Both sources are read as bytes and decoded as UTF-8 (a leading BOM
+    dropped, ``\r\n`` kept). A closed or interactive stdin is refused
+    rather than read — it would crash or hang.
     """
     try:
         if path == "-":
@@ -873,8 +874,8 @@ def _read_body_file(path: str) -> str:
                 raise Refusal("missing-body-file", path=path, detail="stdin is closed or a terminal — pipe the body in")
             text = sys.stdin.buffer.read().decode("utf-8-sig")
         else:
-            text = Path(path).read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeDecodeError) as exc:
+            text = Path(path).read_bytes().decode("utf-8-sig")
+    except (OSError, UnicodeDecodeError, ValueError, AttributeError) as exc:
         raise Refusal("missing-body-file", path=path, detail=str(exc)) from None
     if not text.strip():
         raise Refusal("empty-body-file", path=path, detail="refusing to blank the epic issue body")
@@ -903,6 +904,10 @@ def carry_ticks(current: str, new: str) -> str:
     return "".join(out)
 
 
+def _normalised(text: str) -> str:
+    return text.replace("\r\n", "\n").rstrip()
+
+
 def cmd_sync_issue(issue: int, *, rewrite_from: str | None = None) -> dict:
     root = _toplevel()
     labels, state, body = _issue_info(issue)
@@ -927,6 +932,10 @@ def cmd_sync_issue(issue: int, *, rewrite_from: str | None = None) -> dict:
     new_body, added, owned = sync_body(base, rows, link=link)
     if rewrite_from is not None:
         new_body = carry_ticks(body, new_body)
+        # Line endings (a web-UI edit stores \r\n, a heredoc \n) and the
+        # trailing newline a heredoc / `gh -q` adds are not a change.
+        if _normalised(new_body) == _normalised(body):
+            new_body = body
     if new_body == body:
         return {"status": "unchanged", "state": state, "added": [], "owned": owned, "link_added": False, **extra}
     _edit_body(issue, new_body)
