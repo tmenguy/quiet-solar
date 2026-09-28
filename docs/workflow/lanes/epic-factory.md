@@ -122,7 +122,16 @@ explicit REVIEW intent**; it is never automatic.
    epic's own `docs/epics/QS-<N>.md`**; any other changed path is refused
    (`out-of-scope`).
 4. **Sync the epic issue**: `python scripts/qs/epic_doc.py sync-issue
-   --issue <N>`; its JSON must report `state: OPEN`.
+   --issue <N>`; its JSON must report `state: OPEN`. When the document
+   was redesigned and the body states things that are no longer true,
+   rewrite it instead — start from the current body
+   (`gh issue view <N> --json body -q .body`), edit it to match the
+   document, show it to the user, then pipe it in:
+   `python scripts/qs/epic_doc.py sync-issue --issue <N> --rewrite-from -
+   <<'QS_EPIC_BODY'` … `QS_EPIC_BODY`. The rewrite replaces the whole
+   body, then re-adds the rationale link and any missing child line; a
+   child ticked in the current body stays ticked; a blank body is
+   refused (`empty-body-file`).
 5. **Hand off** to `finish-task`, which discards the worktree.
 
 If step 3 fails after step 2 filed children, those children link a
@@ -203,8 +212,10 @@ anything else makes `sync-issue` refuse and write nothing.
   (`**Rationale document:** [docs/epics/QS-<N>.md](…/blob/main/docs/epics/QS-<N>.md)`);
   filed children are `- [ ] #N — <child>` task-list lines; unfiled
   children are `- (not filed) <child>` lines under `## Children`.
-  `epic_doc.py sync-issue` is the only writer: it adds, never deletes or
-  rewrites a line it does not own (ticks and trailing text are kept).
+  `epic_doc.py sync-issue` writes it: by default it adds, never deletes
+  or rewrites a line it does not own (ticks and trailing text are kept);
+  `sync-issue --rewrite-from -` replaces the body with a new text when
+  the epic is redesigned, and still enforces these conventions on it.
 - **Child issue**, in order: a link to `docs/epics/QS-<N>.md` on `main`
   as the first line; the child's scope; a `### Parent epic` section
   whose next line is `#<N>`.

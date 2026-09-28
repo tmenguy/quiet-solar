@@ -20,11 +20,16 @@ not prose:
   plumbing through a temporary index, so the working tree is **never
   modified before the push is verified** — a failure cannot lose the
   draft.
-- ``sync-issue --issue N`` — the only writer of the epic issue body.
-  Additive and marker-free: it prepends the rationale-document link and
-  adds the missing ``- [ ] #n`` child lines, and regenerates the
-  ``- (not filed) <child>`` lines it owns under a ``## Children``
-  heading; it never deletes or rewrites any other line.
+- ``sync-issue --issue N [--rewrite-from FILE]`` — writes the epic issue
+  body. By default additive and marker-free: it prepends the
+  rationale-document link and adds the missing ``- [ ] #n`` child lines,
+  and regenerates the ``- (not filed) <child>`` lines it owns under a
+  ``## Children`` heading; it never deletes or rewrites any other line.
+  ``--rewrite-from FILE`` (QS-383) is the destructive form used when an
+  epic is redesigned: FILE's text replaces the body wholesale, then the
+  same additive pass enforces the link and child lines on it. ``-`` reads
+  the text from stdin (no scratch file). A child ticked in the current
+  body stays ticked; a blank or unreadable FILE is refused.
 
 Contract: JSON on stdout (:func:`utils.output_json`), exit 0 on success
 (``ok`` / ``landed`` / ``already-landed`` / ``ok-dry-run`` / ``synced``
@@ -37,6 +42,9 @@ Usage::
     python scripts/qs/epic_doc.py status --issue 369 --sync
     python scripts/qs/epic_doc.py land --issue 369 --message "..." --dry-run
     python scripts/qs/epic_doc.py sync-issue --issue 369
+    python scripts/qs/epic_doc.py sync-issue --issue 369 --rewrite-from - <<'QS_EPIC_BODY'
+    ...the full new body...
+    QS_EPIC_BODY
 """
 
 from __future__ import annotations
@@ -853,7 +861,54 @@ def _edit_body(issue: int, body: str) -> None:
         raise Refusal("edit-failed", issue=issue, detail=(result.stderr or "").strip())
 
 
-def cmd_sync_issue(issue: int) -> dict:
+def _read_body_file(path: str) -> str:
+    """The replacement body for ``--rewrite-from`` (``-`` = stdin); blank or unreadable is a refusal.
+
+    Both sources are read as bytes and decoded as UTF-8 (a leading BOM
+    dropped, ``\r\n`` kept). A closed or interactive stdin is refused
+    rather than read — it would crash or hang.
+    """
+    try:
+        if path == "-":
+            if sys.stdin is None or sys.stdin.isatty():
+                raise Refusal("missing-body-file", path=path, detail="stdin is closed or a terminal — pipe the body in")
+            text = sys.stdin.buffer.read().decode("utf-8-sig")
+        else:
+            text = Path(path).read_bytes().decode("utf-8-sig")
+    except (OSError, UnicodeDecodeError, ValueError, AttributeError) as exc:
+        raise Refusal("missing-body-file", path=path, detail=str(exc)) from None
+    if not text.strip():
+        raise Refusal("empty-body-file", path=path, detail="refusing to blank the epic issue body")
+    return text
+
+
+_TICKED_RE = re.compile(r"^\s*[-*] \[[xX]\] #(\d+)\b")
+_UNTICKED_RE = re.compile(r"^(\s*[-*] )\[ \]( #(\d+)\b.*)$")
+
+
+def carry_ticks(current: str, new: str) -> str:
+    """Keep a child ticked across a rewrite.
+
+    A ``- [ ] #n`` line in ``new`` becomes ``- [x] #n`` when ``#n`` is ticked
+    in ``current`` — a rewrite never silently un-ticks a finished child.
+    Every other line keeps its exact bytes.
+    """
+    ticked = {int(m.group(1)) for line in current.splitlines() if (m := _TICKED_RE.match(line))}
+    lines = _split_lines(new)
+    out = []
+    for content, end in lines:
+        m = _UNTICKED_RE.match(content)
+        if m and int(m.group(3)) in ticked:
+            content = f"{m.group(1)}[x]{m.group(2)}"
+        out.append(content + end)
+    return "".join(out)
+
+
+def _normalised(text: str) -> str:
+    return text.replace("\r\n", "\n").rstrip()
+
+
+def cmd_sync_issue(issue: int, *, rewrite_from: str | None = None) -> dict:
     root = _toplevel()
     labels, state, body = _issue_info(issue)
     _require_epic(issue, labels)
@@ -866,14 +921,40 @@ def cmd_sync_issue(issue: int) -> dict:
     except UnparseableDecomposition as exc:
         raise Refusal("unparseable-decomposition", doc=doc, detail=str(exc)) from None
 
+    # --rewrite-from: the text replaces the body as the base; the additive
+    # pass below still enforces the link and child lines, and the ticks are
+    # carried over its output (a child line it re-adds stays ticked too).
+    base = body if rewrite_from is None else _read_body_file(rewrite_from)
+    extra = {} if rewrite_from is None else {"rewrite_from": rewrite_from}
     link = None
-    if doc not in body:
+    # A rewrite text is agent-written: a prose mention of the path is not the
+    # link, so there only a link target (``](…doc``, whatever the link text —
+    # #369's is `` [`docs/epics/QS-369.md`](…) ``) or a URL containing the doc
+    # (bare, ``<autolink>``, reference definition) counts.
+    if rewrite_from is None:
+        has_link = doc in base
+    else:
+        has_link = re.search(rf"(?:\]\(|https?://)[^\s)]*{re.escape(doc)}", base) is not None
+    if not has_link:
         link = f"**Rationale document:** [{doc}]({_repo_url()}/blob/main/{doc})"
-    new_body, added, owned = sync_body(body, rows, link=link)
+    new_body, added, owned = sync_body(base, rows, link=link)
+    if rewrite_from is not None:
+        new_body = carry_ticks(body, new_body)
+        # Line endings (a web-UI edit stores \r\n, a heredoc \n) and the
+        # trailing newline a heredoc / `gh -q` adds are not a change.
+        if _normalised(new_body) == _normalised(body):
+            new_body = body
     if new_body == body:
-        return {"status": "unchanged", "state": state, "added": [], "owned": owned, "link_added": False}
+        return {"status": "unchanged", "state": state, "added": [], "owned": owned, "link_added": False, **extra}
     _edit_body(issue, new_body)
-    return {"status": "synced", "state": state, "added": added, "owned": owned, "link_added": link is not None}
+    return {
+        "status": "synced",
+        "state": state,
+        "added": added,
+        "owned": owned,
+        "link_added": link is not None,
+        **extra,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -911,8 +992,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     land.add_argument("--dry-run", action="store_true", help="stop before building the commit")
 
-    sync = sub.add_parser("sync-issue", help="additively sync the epic issue body")
+    sync = sub.add_parser(
+        "sync-issue",
+        help="sync the epic issue body: additive by default, or rewritten from a file (--rewrite-from)",
+    )
     sync.add_argument("--issue", type=_issue_number, required=True)
+    sync.add_argument(
+        "--rewrite-from",
+        metavar="FILE",
+        help="replace the body with FILE's text ('-' = stdin), then add the link and child lines",
+    )
 
     args = parser.parse_args(argv)
     try:
@@ -921,7 +1010,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "land":
             payload = cmd_land(args.issue, message=args.message, merged=args.merged, dry_run=args.dry_run)
         else:
-            payload = cmd_sync_issue(args.issue)
+            payload = cmd_sync_issue(args.issue, rewrite_from=args.rewrite_from)
     except Refusal as refusal:
         payload = {"status": refusal.status, **refusal.fields}
     utils.output_json(payload)
