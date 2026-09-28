@@ -1577,6 +1577,10 @@ def test_sync_issue_rewrite_prose_mention_of_the_doc_is_not_the_link(repos, runn
     [
         f"**Rationale document:** [`{DOC}`]({REPO_URL}/blob/main/{DOC}) — the #369 form",
         f"See [the rationale]({REPO_URL}/blob/main/{DOC}#decomposition).",
+        f"[r](./{DOC} \"titled\")",
+        f"Rationale: {REPO_URL}/blob/main/{DOC}",
+        f"Rationale: <{REPO_URL}/blob/main/{DOC}>",
+        f"[r][1]\n\n[1]: {REPO_URL}/blob/main/{DOC}",
     ],
 )
 def test_sync_issue_rewrite_any_link_to_the_doc_counts(repos, runner, capsys, tmp_path, link) -> None:
