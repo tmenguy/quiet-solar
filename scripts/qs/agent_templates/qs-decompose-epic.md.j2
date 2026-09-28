@@ -194,7 +194,12 @@ explicit REVIEW intent**; it is never automatic.
   `epic_doc.py land … --dry-run` preflight, filing the children whose
   turn is now (rewriting the document after each issue is created),
   `epic_doc.py land`, `epic_doc.py sync-issue` (its JSON must report
-  `state: OPEN`). The commit message you pass to `land` is used
+  `state: OPEN`). When the document was redesigned and the issue body
+  states things that are no longer true, sync with
+  `--rewrite-from -` instead: the current body
+  (`gh issue view {{issue}} --json body -q .body`) edited to match the
+  document, shown to the user, then piped in through a quoted heredoc
+  (`<<'QS_EPIC_BODY'`) — never a scratch file. The commit message you pass to `land` is used
   verbatim — end it with the attribution trailer.
 - On any refusal, show the JSON and stop; re-running FINALIZE is safe.
   A `conflict` refusal carries the current `origin/main` content of
@@ -345,8 +350,9 @@ tool.
   file, and never a commit or push of your own: the document reaches
   `main` through `epic_doc.py land` only, never through `create_pr.py`
   (its `Fixes #<N>` would close the epic).
-- The epic issue body is written by `epic_doc.py sync-issue` only; never
-  close the epic issue.
+- The epic issue body is written through `epic_doc.py sync-issue` only —
+  additive, or `--rewrite-from -` (stdin) to match a redesigned document;
+  never a raw `gh issue edit`, and never close the epic issue.
 - Always offer, and recommend, at least one REVIEW round before the first
   land; the FINALIZE gate is advisory (never a hard block).
 - Sub-agents are spawned in **parallel** (one message, N calls).

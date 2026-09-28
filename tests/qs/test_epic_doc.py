@@ -17,6 +17,7 @@ Three layers:
 
 from __future__ import annotations
 
+import io
 import json
 import shutil
 import subprocess
@@ -1516,6 +1517,128 @@ def test_sync_issue_repo_url_failure(repos, runner, capsys, repo_rc, repo_stdout
     rc, out = _sync(capsys)
     assert rc == 1 and out["status"] == "lookup-failed"
     assert runner.edits == []
+
+
+def _rewrite(capsys, path: Path) -> tuple[int, dict]:
+    return _run(["sync-issue", "--issue", str(ISSUE), "--rewrite-from", str(path)], capsys)
+
+
+_LINK = f"**Rationale document:** [{DOC}]({REPO_URL}/blob/main/{DOC})"
+
+
+def test_sync_issue_rewrite_replaces_the_stale_body(repos, runner, capsys, tmp_path) -> None:
+    repos.write(DOC, _DOC_TEXT)
+    runner.body = f"{_LINK}\n\nStale design text.\n\n## Children\n\n- [x] #901 — first child\n- (not filed) second child\n"
+    body_file = tmp_path / "body.md"
+    body_file.write_text(
+        f"{_LINK}\n\nNew design.\n\n## Children\n\n- [x] #901 — first child\n- (not filed) second child\n",
+        encoding="utf-8",
+    )
+    rc, out = _rewrite(capsys, body_file)
+    assert rc == 0, out
+    assert out == {
+        "status": "synced", "state": "OPEN", "added": [],
+        "owned": ["second child"], "link_added": False, "rewrite_from": str(body_file),
+    }
+    (edit,) = runner.edits
+    assert edit["body"] == body_file.read_text(encoding="utf-8")
+    assert "Stale design text." not in edit["body"]
+    assert body_file.exists()  # the caller's file is never deleted
+
+
+def test_sync_issue_rewrite_still_enforces_link_and_children(repos, runner, capsys, tmp_path) -> None:
+    repos.write(DOC, _DOC_TEXT)
+    runner.body = f"{_LINK}\n\nOld.\n"
+    body_file = tmp_path / "body.md"
+    body_file.write_text("New design only.\n", encoding="utf-8")
+    rc, out = _rewrite(capsys, body_file)
+    assert rc == 0, out
+    assert out["status"] == "synced" and out["rewrite_from"] == str(body_file)
+    assert out["link_added"] is True and out["added"] == [901]
+    (edit,) = runner.edits
+    assert edit["body"].startswith(f"{_LINK}\n\nNew design only.\n")
+    assert "- [ ] #901 — first child\n- (not filed) second child" in edit["body"]
+    assert "Old." not in edit["body"]
+
+
+def test_sync_issue_rewrite_equal_to_current_body_is_unchanged(repos, runner, capsys, tmp_path) -> None:
+    repos.write(DOC, _DOC_TEXT)
+    runner.body = f"{_LINK}\n\n## Children\n\n- [ ] #901 — first child\n- (not filed) second child\n"
+    body_file = tmp_path / "body.md"
+    body_file.write_text(runner.body, encoding="utf-8")
+    rc, out = _rewrite(capsys, body_file)
+    assert rc == 0 and out["status"] == "unchanged" and out["rewrite_from"] == str(body_file)
+    assert runner.edits == []
+
+
+def test_sync_issue_rewrite_missing_file_writes_nothing(repos, runner, capsys, tmp_path) -> None:
+    repos.write(DOC, _DOC_TEXT)
+    missing = tmp_path / "nope.md"
+    rc, out = _rewrite(capsys, missing)
+    assert rc == 1 and out["status"] == "missing-body-file" and out["path"] == str(missing)
+    assert runner.edits == []
+
+
+@pytest.mark.parametrize("kind", ["directory", "undecodable"])
+def test_sync_issue_rewrite_unreadable_file_writes_nothing(repos, runner, capsys, tmp_path, kind) -> None:
+    repos.write(DOC, _DOC_TEXT)
+    body_file = tmp_path / "body.md"
+    if kind == "directory":
+        body_file.mkdir()
+    else:
+        body_file.write_bytes(b"\xff\xfe\xfa not utf-8")
+    rc, out = _rewrite(capsys, body_file)
+    assert rc == 1 and out["status"] == "missing-body-file"
+    assert runner.edits == []
+
+
+def test_sync_issue_rewrite_reads_stdin(repos, runner, capsys, monkeypatch) -> None:
+    repos.write(DOC, _DOC_TEXT)
+    runner.body = f"{_LINK}\n\nOld.\n"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(f"{_LINK}\n\nFrom stdin.\n"))
+    rc, out = _run(["sync-issue", "--issue", str(ISSUE), "--rewrite-from", "-"], capsys)
+    assert rc == 0, out
+    assert out["rewrite_from"] == "-" and out["added"] == [901]
+    (edit,) = runner.edits
+    assert edit["body"].startswith(f"{_LINK}\n\nFrom stdin.\n")
+    assert "Old." not in edit["body"]
+
+
+def test_sync_issue_rewrite_keeps_ticked_children_ticked(repos, runner, capsys, tmp_path) -> None:
+    repos.write(DOC, _DOC_TEXT)
+    runner.body = f"{_LINK}\n\n## Children\n\n- [x] #901 — first child\n"
+    body_file = tmp_path / "body.md"
+    body_file.write_text(f"{_LINK}\n\nNew.\n\n## Children\n\n- [ ] #901 — first child (renamed)\n", encoding="utf-8")
+    rc, out = _rewrite(capsys, body_file)
+    assert rc == 0, out
+    (edit,) = runner.edits
+    assert "- [x] #901 — first child (renamed)\n" in edit["body"]
+
+
+def test_carry_ticks_only_touches_ticked_children() -> None:
+    current = "- [X] #1 — a\n- [ ] #2 — b\n* [x] #3 — c\n"
+    new = "- [ ] #1 — a\r\n- [ ] #2 — b\r\n  * [ ] #3 — c\r\n- [ ] #4 — d\r\nsee #1\r\n"
+    assert epic_doc.carry_ticks(current, new) == (
+        "- [x] #1 — a\r\n- [ ] #2 — b\r\n  * [x] #3 — c\r\n- [ ] #4 — d\r\nsee #1\r\n"
+    )
+
+
+def test_sync_issue_rewrite_blank_file_writes_nothing(repos, runner, capsys, tmp_path) -> None:
+    repos.write(DOC, _DOC_TEXT)
+    body_file = tmp_path / "body.md"
+    body_file.write_text(" \n\t\n", encoding="utf-8")
+    rc, out = _rewrite(capsys, body_file)
+    assert rc == 1 and out["status"] == "empty-body-file" and out["path"] == str(body_file)
+    assert runner.edits == []
+
+
+def test_sync_issue_rewrite_checks_preconditions_first(repos, runner, capsys, tmp_path) -> None:
+    # No epic doc in the worktree: missing-doc wins over the (also missing) body file.
+    rc, out = _rewrite(capsys, tmp_path / "nope.md")
+    assert rc == 1 and out["status"] == "missing-doc"
+    runner.labels = ["kind:bug", "target:factory", "scale:task"]
+    rc, out = _rewrite(capsys, tmp_path / "nope.md")
+    assert rc == 1 and out["status"] == "not-an-epic"
 
 
 # ---------------------------------------------------------------------------

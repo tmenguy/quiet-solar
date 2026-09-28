@@ -31,7 +31,9 @@ Expected outcome:
   parallel; round 2+ adds `qs-plan-delta-auditor`.
 - At FINALIZE: the children whose turn it is filed, the document landed
   on `main` by `python scripts/qs/epic_doc.py land`, the epic issue
-  synced by `python scripts/qs/epic_doc.py sync-issue` (it stays open).
+  synced by `python scripts/qs/epic_doc.py sync-issue` (it stays open) —
+  or, when the epic was redesigned, its body rewritten to match the
+  document with `sync-issue --rewrite-from -` (new body on stdin).
 - Next-phase command printed: launcher form (`claude --agent
   qs-finish-task`) plus slash-command fallback (`/finish-task`).
 
