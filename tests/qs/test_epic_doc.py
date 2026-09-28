@@ -1572,6 +1572,23 @@ def test_sync_issue_rewrite_prose_mention_of_the_doc_is_not_the_link(repos, runn
     assert edit["body"].startswith(f"{_LINK}\n\nRedesign: see {DOC} section 3.\n")
 
 
+@pytest.mark.parametrize(
+    "link",
+    [
+        f"**Rationale document:** [`{DOC}`]({REPO_URL}/blob/main/{DOC}) — the #369 form",
+        f"See [the rationale]({REPO_URL}/blob/main/{DOC}#decomposition).",
+    ],
+)
+def test_sync_issue_rewrite_any_link_to_the_doc_counts(repos, runner, capsys, tmp_path, link) -> None:
+    repos.write(DOC, _DOC_TEXT)
+    runner.body = f"{link}\n\n## Children\n\n- [ ] #901 — first child\n- (not filed) second child\n"
+    body_file = tmp_path / "body.md"
+    body_file.write_text(runner.body, encoding="utf-8")
+    rc, out = _rewrite(capsys, body_file)
+    assert rc == 0 and out["status"] == "unchanged" and out["link_added"] is False, out
+    assert runner.edits == []
+
+
 def test_sync_issue_rewrite_equal_to_current_body_is_unchanged(repos, runner, capsys, tmp_path) -> None:
     repos.write(DOC, _DOC_TEXT)
     runner.body = f"{_LINK}\n\n## Children\n\n- [ ] #901 — first child\n- (not filed) second child\n"

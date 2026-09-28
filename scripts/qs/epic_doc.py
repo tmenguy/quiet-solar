@@ -928,8 +928,12 @@ def cmd_sync_issue(issue: int, *, rewrite_from: str | None = None) -> dict:
     extra = {} if rewrite_from is None else {"rewrite_from": rewrite_from}
     link = None
     # A rewrite text is agent-written: a prose mention of the path is not the
-    # link, so only a markdown link to the doc counts there.
-    has_link = doc in base if rewrite_from is None else f"[{doc}](" in base
+    # link, so there only a markdown link whose target is the doc counts
+    # (whatever its text — #369's is `` [`docs/epics/QS-369.md`](…) ``).
+    if rewrite_from is None:
+        has_link = doc in base
+    else:
+        has_link = re.search(rf"\]\([^)\s]*{re.escape(doc)}[^)\s]*\)", base) is not None
     if not has_link:
         link = f"**Rationale document:** [{doc}]({_repo_url()}/blob/main/{doc})"
     new_body, added, owned = sync_body(base, rows, link=link)
