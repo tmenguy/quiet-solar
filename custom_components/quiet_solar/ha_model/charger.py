@@ -333,6 +333,11 @@ class QSStateCmd:
         self.on_success_action_cb = None
         self.on_success_action_cb_kwargs = None
 
+    @property
+    def num_launched(self) -> int:
+        """Public read accessor for the launch count (QS-381, used in WARNING logs)."""
+        return self._num_launched
+
     def can_launch(self) -> bool:
         """Whether retries are not yet exhausted."""
         return self._num_launched <= STATE_CMD_RETRY_NUMBER
@@ -2250,6 +2255,20 @@ class QSChargerGroup(LogOnChangeMixin):
             for cs in cs_to_apply:
                 chargers[cs.charger] = cs
 
+            # QS-381: a split budget keeps stale QSChargerStatus snapshots in
+            # remaining_budget_to_apply across cycles. If a phase adoption is in effect and a
+            # follow changed the charger's expected phase count since the snapshot was taken,
+            # replaying that stale snapshot would look like a fresh phase request (it would clear
+            # _phases_adopted_at and re-drive the switch). Drop the whole stale replay then.
+            for cs in cs_to_apply:
+                if (
+                    cs.charger._phases_adopted_at is not None
+                    and cs.current_active_phase_number != cs.charger._expected_num_active_phases.value
+                ):
+                    self.remaining_budget_to_apply = None
+                    self.know_reduced_state = None
+                    return
+
             num_ok = 0
             current_amps = [0.0, 0.0, 0.0]
             new_amps = [0.0, 0.0, 0.0]
@@ -2321,7 +2340,10 @@ class QSChargerGroup(LogOnChangeMixin):
                     cs.charger._last_amp_change_time = time
                 cs.charger._expected_amperage.set(int(new_amp), time)
 
-            if new_num_phases is not None:
+            if new_num_phases is not None and new_num_phases != init_phase_num:
+                # QS-381: only treat the phase count as a request when the budget actually asks
+                # for a phase change. Replaying a snapshot whose phase count already matches must
+                # not clear a phase adoption (_phases_adopted_at) nor re-drive the switch.
                 cs.charger.set_expected_num_active_phases(new_num_phases, time)
 
             await cs.charger._ensure_correct_state(time)
@@ -2520,6 +2542,28 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             res = self.physical_num_phases
 
         return res
+
+    def _has_real_phase_reading(self) -> bool:
+        """QS-381: whether current_num_phases reflects a real reading, not a fallback.
+
+        For a switch-based 3->1 charger, current_num_phases returns a hard-coded 3 when the
+        phase switch entity is missing, `unknown` or `unavailable`. Adopting or following that
+        phantom count would lock in a phase number the charger never reported, so those paths
+        must only act on a real `on`/`off` reading. Chargers whose phase count comes from
+        elsewhere always have a real reading."""
+        if self.can_do_3_to_1_phase_switch() and self.physical_3p:
+            state = self.hass.states.get(self.charger_three_to_one_phase_switch)
+            return state is not None and state.state in ("on", "off")
+        return True
+
+    async def _follow_observed_num_phases(self, current_active_phases: int, time: datetime) -> None:
+        """QS-381: make the expected phase count follow the observed one (set + success).
+
+        `set` goes first: a different value resets the command, dropping any
+        reboot-on-success callback, so a phase switch that never physically happened never
+        triggers a reboot (latent today: do_reboot_on_phase_switch is False in production)."""
+        self._expected_num_active_phases.set(current_active_phases, time)
+        await self._expected_num_active_phases.success(time=time)
 
     def get_phase_amps_from_power(self, power: float, is_3p=False) -> list[float | int]:
 
@@ -5067,8 +5111,14 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         )
 
     def _give_up_reboot_wait(self, time: datetime) -> None:
+        waited_s = None
+        if self._asked_for_reboot_at_time is not None:
+            waited_s = (time - self._asked_for_reboot_at_time).total_seconds()
         _LOGGER.warning(
-            "%s: reboot asked at %s never happened, giving up the wait", self.name, self._asked_for_reboot_at_time
+            "%s: reboot asked at %s never happened, giving up the wait (waited %ss)",
+            self.name,
+            self._asked_for_reboot_at_time,
+            waited_s,
         )
         self._asked_for_reboot_at_time = None
 
@@ -5316,15 +5366,24 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 one_bad = True
                 # check first if amperage setting is ok
                 if probe_only is False:
-                    if (
+                    if not self._has_real_phase_reading():
+                        # QS-381: the phase switch is missing/unknown/unavailable, so
+                        # current_num_phases is a phantom 3. Never follow, adopt or drive the
+                        # switch on a phantom reading; wait for a real on/off reading.
+                        _LOGGER.debug(
+                            f"Ensure State:{self.name} no real phase reading, expected {self._expected_num_active_phases.value}"
+                        )
+                    elif (
                         self._phases_adopted_at is not None
                         and (time - self._phases_adopted_at).total_seconds() < TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES
                     ):
                         # QS-381: the phase switch finally flipped after we already adopted the
                         # observed count. This is not a new budget request (a genuine one clears
                         # _phases_adopted_at, see set_expected_num_active_phases), so follow the
-                        # observed value instead of re-driving the switch back, which would
-                        # register a reboot for a switch the budget never asked for.
+                        # observed value instead of re-driving the switch back. The marker is NOT
+                        # refreshed here: the follow window counts from the original adoption, so a
+                        # flapping switch cannot keep it open forever (it would block the group one
+                        # cycle per flap).
                         _LOGGER.info(
                             "Ensure State:%s phase switch changed to %s phases after adoption: "
                             "following the observed count (was %s)",
@@ -5332,9 +5391,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                             current_active_phases,
                             self._expected_num_active_phases.value,
                         )
-                        self._expected_num_active_phases.set(current_active_phases, time)
-                        await self._expected_num_active_phases.success(time=time)
-                        self._phases_adopted_at = time
+                        await self._follow_observed_num_phases(current_active_phases, time)
                     elif self._expected_num_active_phases.is_ok_to_launch(
                         value=self._expected_num_active_phases.value, time=time
                     ):
@@ -5349,19 +5406,17 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                         > self._expected_num_active_phases.command_retries_s
                     ):
                         # QS-381: the phase switch never followed. Budget from the observed phase
-                        # count instead of blocking the group forever (set first: a different value
-                        # drops any reboot-on-success callback, for a switch that did not happen).
-                        # The set also restarts the phase-change spacing used by the budget.
+                        # count instead of blocking the group forever. The set inside the helper
+                        # also restarts the phase-change spacing used by the budget.
                         _LOGGER.warning(
                             "Ensure State:%s phase switch never converged after %d launches: "
                             "adopting the observed %s phases (expected %s)",
                             self.name,
-                            self._expected_num_active_phases._num_launched,
+                            self._expected_num_active_phases.num_launched,
                             current_active_phases,
                             self._expected_num_active_phases.value,
                         )
-                        self._expected_num_active_phases.set(current_active_phases, time)
-                        await self._expected_num_active_phases.success(time=time)
+                        await self._follow_observed_num_phases(current_active_phases, time)
                         self._phases_adopted_at = time
                     else:
                         _LOGGER.debug(
@@ -5388,7 +5443,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 # Set amps to min first, only stop once amps are confirmed
                 amps_confirmed = charging_current_amp == self._expected_amperage.value
                 # only fires if a caller counts amps launches: `set_charging_current` does not,
-                # by design (see its comment)
+                # by design (see its comment). Giving the stop path a time bound is #386.
                 amps_retries_exhausted = not self._expected_amperage.can_launch()
                 one_bad = True  # because of the charge state
 
@@ -5402,7 +5457,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                                 _LOGGER.warning(
                                     f"Ensure State:{self.name} stopping despite amps not confirmed "
                                     f"({charging_current_amp}A vs {self._expected_amperage.value}A) "
-                                    f"after {self._expected_amperage._num_launched} retries"
+                                    f"after {self._expected_amperage.num_launched} retries"
                                 )
                             _LOGGER.info("Ensure State:%s stop_charge", self.name)
                             await self.stop_charge(time=time)

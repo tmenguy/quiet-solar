@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-09-30
+last_verified: 2026-10-01
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -374,10 +374,20 @@ expected state are bounded or contained too (QS-381):
   again right away (#388). If the switch finally flips *after* the adoption
   (tracked by `_phases_adopted_at`), the expected count follows the observed
   value instead of re-driving the switch back (which would register a spurious
-  reboot). A genuine new budget phase request clears the adoption — the budget
-  entry point is `set_expected_num_active_phases`, which drops
-  `_phases_adopted_at` whenever the requested value actually changes — so a real
-  switch is launched again.
+  reboot). The follow window counts from the **original** adoption — a follow
+  never refreshes `_phases_adopted_at` — so a flapping switch cannot hold the
+  window open forever; past the 30 min window a flip takes the normal launch
+  path (re-driven toward the still-expected count). Adoption and follow only act
+  on a **real** phase reading (`_has_real_phase_reading()`): a missing, `unknown`
+  or `unavailable` switch reads a phantom 3 that is neither adopted nor followed.
+  A genuine new budget phase request clears the adoption — the budget entry point
+  is `set_expected_num_active_phases`, which drops `_phases_adopted_at` whenever
+  the requested value actually changes — so a real switch is launched again.
+  `apply_budgets` only routes a phase count through that entry point when the
+  budget actually asks for a phase change (`budgeted_num_phases !=
+  current_active_phase_number`), and a `check_charger_state` replay of a stale
+  split-budget snapshot that disagrees with the adopted count while an adoption is
+  live is dropped — neither can revert the adoption or re-drive the switch.
 - **Amps mismatch while charging** — keeps blocking the group, by design
   (circuit safety: the member may draw more than its budget). It is not
   silent: amps changes are never counted with `register_launch`, so the
