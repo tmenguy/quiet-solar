@@ -1032,10 +1032,16 @@ class TestChargerDouble:
         self._expected_amperage = QSStateCmd()
         self._expected_num_active_phases = QSStateCmd()
         self._last_amp_change_time: datetime | None = None
+        self._phases_adopted_at: datetime | None = None
 
         # Apply any additional kwargs as attributes
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+    def set_expected_num_active_phases(self, num_phases: int, time: datetime) -> None:
+        """Mirror QSChargerGeneric.set_expected_num_active_phases (QS-381)."""
+        if self._expected_num_active_phases.set(num_phases, time):
+            self._phases_adopted_at = None
 
     def update_amps_with_delta(
         self,

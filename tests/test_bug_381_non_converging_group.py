@@ -165,6 +165,89 @@ async def test_phase_mismatch_not_yet_due_is_not_adopted():
     assert cmd.value == 1
 
 
+async def _drive_to_adoption(group_or_charger, charger, t=T0):
+    """Run ensure cycles until the observed phase count is adopted; return the next time."""
+    while charger._expected_num_active_phases.value != 3:
+        if group_or_charger is charger:
+            await charger._ensure_correct_state(t)
+        else:
+            await group_or_charger.ensure_correct_state(t)
+        t += STEP
+        assert _off(t) <= 600, "the phase count was never adopted"
+    return t
+
+
+@pytest.mark.asyncio
+async def test_late_phase_flip_after_adoption_is_not_reverted(caplog):
+    """A1 / fix #01: once the observed count is adopted, a later flip of the switch to the
+    requested phase follows the observed value: no reboot, no re-drive, group stays free."""
+    hass, home, states, broken, phase_sw = _build_phase_charger()
+    healthy, cs_healthy = _make_healthy(hass, home)
+    group = _make_charger_group(home, [broken, healthy])
+    broken.reboot = AsyncMock()
+
+    t = await _drive_to_adoption(group, broken)
+    adopted_at = t - STEP
+    assert broken._phases_adopted_at == adopted_at
+    phase_calls_at_adoption = _calls_on(hass, phase_sw)
+    # spy on the re-drive entry point from the adoption cycle on
+    broken.set_charging_num_phases = AsyncMock(wraps=broken.set_charging_num_phases)
+
+    # the phase switch finally flips to the requested phase, one step after adoption
+    states.set(phase_sw, "on", adopted_at + STEP)
+    assert broken.current_num_phases == 1  # now reads 1 phase, adopted value was 3
+
+    with caplog.at_level(logging.WARNING):
+        caplog.clear()  # only look at what happens after the flip
+        end = adopted_at + timedelta(minutes=5)
+        while t <= end:
+            await group.ensure_correct_state(t)
+            t += STEP
+
+    # the expected value followed the observed one: no re-drive, no new phase command, no reboot
+    assert broken._expected_num_active_phases.value == 1
+    broken.set_charging_num_phases.assert_not_awaited()
+    assert _calls_on(hass, phase_sw) == phase_calls_at_adoption
+    broken.reboot.assert_not_awaited()
+    assert "never converged" not in caplog.text  # no second adoption warning
+    # and the group is free again once the member follows
+    actionable, _ = await group.ensure_correct_state(t)
+    assert cs_healthy in actionable
+    assert broken.get_stable_dynamic_charge_status.return_value in actionable
+
+
+@pytest.mark.asyncio
+async def test_new_budget_phase_request_after_adoption_still_launches():
+    """A1 / fix #01: after adoption, a genuine new budget phase request clears the adoption
+    state and launches the phase switch again."""
+    hass, _home, _states, broken, phase_sw = _build_phase_charger()
+    t = await _drive_to_adoption(broken, broken)
+    assert broken._phases_adopted_at is not None
+    assert broken._expected_num_active_phases.value == 3
+    launches_at_adoption = _calls_on(hass, phase_sw, "turn_on")
+
+    # the budget/constraint side asks for 1 phase again (the real request path, L2325)
+    broken.set_expected_num_active_phases(1, t)
+    assert broken._phases_adopted_at is None  # a real request ends the adoption
+
+    assert await broken._ensure_correct_state(t) is False
+    assert _calls_on(hass, phase_sw, "turn_on") == launches_at_adoption + 1
+
+
+@pytest.mark.asyncio
+async def test_same_phase_request_after_adoption_keeps_adoption():
+    """A1 / fix #01: re-asking for the already-adopted value is not a new request: the
+    adoption marker stays so a late flip still follows the observed count."""
+    _hass, _home, _states, broken, _phase_sw = _build_phase_charger()
+    t = await _drive_to_adoption(broken, broken)
+    marker = broken._phases_adopted_at
+    assert marker is not None
+
+    # re-asking for the adopted value (3) is a no-op: the adoption marker is kept
+    broken.set_expected_num_active_phases(3, t)
+    assert broken._phases_adopted_at == marker
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reported", [16, None])
 async def test_amps_mismatch_while_charging_keeps_blocking_and_resending(reported):
@@ -184,14 +267,19 @@ async def test_amps_mismatch_while_charging_keeps_blocking_and_resending(reporte
 
     member.get_charging_current = MagicMock(return_value=10)
     actionable, _ = await group.ensure_correct_state(t)
+    # the group returns the healthy member AND the recovering member itself (AC2c): the
+    # recovering member must not be silently dropped from the budget on the way back.
     assert cs_healthy in actionable
+    assert member.get_stable_dynamic_charge_status.return_value in actionable
 
 
 @pytest.mark.asyncio
-async def test_amps_mismatch_resends_every_cycle():
-    """A2 (by design): the amps command is re-sent on every ensure cycle, never capped at 4."""
+@pytest.mark.parametrize("reported", [16, None])
+async def test_amps_mismatch_resends_every_cycle(reported):
+    """A2 (by design): the amps command is re-sent on every ensure cycle, never capped at 4,
+    both when the charger over-reports (16 A) and when it reports nothing (None)."""
     _hass, _home, _states, member, _sw = _build_phase_charger(name="amps", switch_state="on")
-    member.get_charging_current = MagicMock(return_value=16)
+    member.get_charging_current = MagicMock(return_value=reported)
     member.set_charging_current = AsyncMock(return_value=True)
     t = T0
     cycles = 0

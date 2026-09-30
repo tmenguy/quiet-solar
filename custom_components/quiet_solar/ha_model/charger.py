@@ -2322,7 +2322,7 @@ class QSChargerGroup(LogOnChangeMixin):
                 cs.charger._expected_amperage.set(int(new_amp), time)
 
             if new_num_phases is not None:
-                cs.charger._expected_num_active_phases.set(new_num_phases, time)
+                cs.charger.set_expected_num_active_phases(new_num_phases, time)
 
             await cs.charger._ensure_correct_state(time)
 
@@ -2400,6 +2400,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         self._inner_expected_charge_state: QSStateCmd | None = None
         self._inner_amperage: QSStateCmd | None = None
         self._inner_num_active_phases: QSStateCmd | None = None
+        # QS-381: set when a never-converging phase switch makes us adopt the observed
+        # phase count. A later flip of the switch then follows the observed value instead
+        # of re-driving it; a genuine new budget phase request clears it.
+        self._phases_adopted_at: datetime | None = None
 
         self.possible_charge_error_start_time: datetime | None = None
         self._warned_person_coverage_triplet: tuple | None = None
@@ -2637,6 +2641,16 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         if self._inner_num_active_phases is None:
             self._inner_num_active_phases = QSStateCmd()
         return self._inner_num_active_phases
+
+    def set_expected_num_active_phases(self, num_phases: int, time: datetime) -> None:
+        """Budget/constraint entry point for the expected phase count (QS-381).
+
+        A genuine new phase request (the value actually changes) ends any phase adoption,
+        so that a real switch is launched again. Asking for the already-adopted value is
+        not a new request and keeps the adoption marker (a late switch flip then follows
+        the observed count instead of re-driving the switch)."""
+        if self._expected_num_active_phases.set(num_phases, time):
+            self._phases_adopted_at = None
 
     def get_stable_dynamic_charge_status(self, time: datetime) -> QSChargerStatus | None:
 
@@ -2996,6 +3010,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         self._inner_expected_charge_state = None
         self._inner_amperage = None
         self._inner_num_active_phases = None
+        self._phases_adopted_at = None
         self._last_amp_change_time = None
 
     def is_in_state_reset(self) -> bool:
@@ -5301,7 +5316,26 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 one_bad = True
                 # check first if amperage setting is ok
                 if probe_only is False:
-                    if self._expected_num_active_phases.is_ok_to_launch(
+                    if (
+                        self._phases_adopted_at is not None
+                        and (time - self._phases_adopted_at).total_seconds() < TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES
+                    ):
+                        # QS-381: the phase switch finally flipped after we already adopted the
+                        # observed count. This is not a new budget request (a genuine one clears
+                        # _phases_adopted_at, see set_expected_num_active_phases), so follow the
+                        # observed value instead of re-driving the switch back, which would
+                        # register a reboot for a switch the budget never asked for.
+                        _LOGGER.info(
+                            "Ensure State:%s phase switch changed to %s phases after adoption: "
+                            "following the observed count (was %s)",
+                            self.name,
+                            current_active_phases,
+                            self._expected_num_active_phases.value,
+                        )
+                        self._expected_num_active_phases.set(current_active_phases, time)
+                        await self._expected_num_active_phases.success(time=time)
+                        self._phases_adopted_at = time
+                    elif self._expected_num_active_phases.is_ok_to_launch(
                         value=self._expected_num_active_phases.value, time=time
                     ):
                         _LOGGER.info(
@@ -5328,6 +5362,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                         )
                         self._expected_num_active_phases.set(current_active_phases, time)
                         await self._expected_num_active_phases.success(time=time)
+                        self._phases_adopted_at = time
                     else:
                         _LOGGER.debug(
                             f"Ensure State:{self.name} NOT OK TO LAUNCH num phases {current_active_phases} expected {self._expected_num_active_phases.value}"

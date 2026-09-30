@@ -371,7 +371,13 @@ expected state are bounded or contained too (QS-381):
   `TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES` spacing, which gates the phase
   offer of non-consign commands. Consign commands pick phases in
   `get_consign_amps_values` without that gate, so they can ask for the switch
-  again right away (#388).
+  again right away (#388). If the switch finally flips *after* the adoption
+  (tracked by `_phases_adopted_at`), the expected count follows the observed
+  value instead of re-driving the switch back (which would register a spurious
+  reboot). A genuine new budget phase request clears the adoption — the budget
+  entry point is `set_expected_num_active_phases`, which drops
+  `_phases_adopted_at` whenever the requested value actually changes — so a real
+  switch is launched again.
 - **Amps mismatch while charging** — keeps blocking the group, by design
   (circuit safety: the member may draw more than its budget). It is not
   silent: amps changes are never counted with `register_launch`, so the
