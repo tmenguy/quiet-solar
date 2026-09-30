@@ -358,6 +358,14 @@ class QSStateCmd:
         self.last_time_set = time
         # QS-379: arm the zero-power alert from the first launch, so a start that
         # never succeeds still gets checked; the first success() overwrites it.
+        # This arms *every* QSStateCmd on *every* launch value, which is deliberate
+        # and safe (N7): the only reader of `last_ping_time_success` before a
+        # success() is the zero-power check, and that check requires
+        # `_expected_charge_state.value is True`; the amperage reader only fires
+        # right after `self._expected_amperage.success()` (which overwrites an armed
+        # value), and the phases command has no reader at all. Narrowing to
+        # `value is True` would break AC1(c) (a `register_launch(False, ...)` must
+        # still arm the reference so a later retarget re-arms cleanly).
         if self.last_ping_time_success is None:
             self.last_ping_time_success = time
 
@@ -2373,6 +2381,16 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         # path, so a mid-episode `reset(keep_commands=True)` does not re-arm the alert.
         self._charger_fault_since: datetime | None = None
         self._charger_fault_notified: bool = False
+        # QS-379 S2: records when a fault episode last cleared, so the zero-power
+        # check can grant a just-recovered charger its own full re-check window
+        # instead of alerting on the first post-recovery cycle (the frozen
+        # `last_ping_time_success` would otherwise already be > the window old).
+        self._charger_fault_cleared_at: datetime | None = None
+        # QS-379 S1: tracks when QS last stopped wanting charge (target not True),
+        # used to end a zero-power episode and clear `possible_charge_error_start_time`
+        # once QS has not wanted charge for a full re-check window. None while wanting
+        # charge. Not reset by `reset(keep_commands=True)` (episode bookkeeping).
+        self._no_charge_wanted_since: datetime | None = None
 
         self.charge_state = STATE_UNKNOWN
 
@@ -3760,22 +3778,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             if (time - self._boot_time_adjusted).total_seconds() > CHARGER_BOOT_TIME_DATA_EXPIRATION_S:
                 self.reset_boot_data()
 
-        # QS-346: one alert per fault episode. Plain per-cycle state machine (NOT a
-        # rising-edge fire): set `_charger_fault_since` on the first faulted cycle, clear
-        # both fields the moment the fault clears, and notify exactly once the fault has
-        # held continuously for CHARGER_FAULT_NOTIFY_DEBOUNCE_S. Runs before `reset()`
-        # below so the machine observes the fault each cycle before reset mutates state.
-        if not self.is_charger_faulted(time):
-            self._charger_fault_since = None
-            self._charger_fault_notified = False
-        elif self._charger_fault_since is None:
-            self._charger_fault_since = time
-        elif (
-            not self._charger_fault_notified
-            and (time - self._charger_fault_since).total_seconds() >= CHARGER_FAULT_NOTIFY_DEBOUNCE_S
-        ):
-            await self._notify_charger_fault(time)
-            self._charger_fault_notified = True
+        # QS-346: one alert per fault episode. Runs before `reset()` below so the
+        # machine observes the fault each cycle before reset mutates state.
+        await self._update_charger_fault_state(time)
 
         await self._on_charger_fault_cycle(time)
 
@@ -4607,6 +4612,15 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 return
             self.detach_car()
 
+        # QS-379 N1: a genuine car swap (a different car than the one we last had)
+        # starts a fresh charge session — do not inherit the previous car's zero-power
+        # latch, which would show a NO_POWER card naming nobody relevant and mask the
+        # new car's own stuck start. Re-attaching the same car (allocation churn, which
+        # goes through detach_car/attach_car without a reset) keeps the latch, so a
+        # genuine stuck start is not re-notified.
+        if self._last_attached_car is not None and self._last_attached_car is not car:
+            self.possible_charge_error_start_time = None
+
         self.car = car
 
         # reset dampening to conf values, and some states
@@ -5120,6 +5134,62 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             )
         return f"{self.name} is in error ({status}) and cannot charge. Please check the charger."
 
+    async def _update_charger_fault_state(self, time: datetime) -> None:
+        # QS-346 fault state machine, extracted (QS-379 S2) so the per-cycle fault
+        # bookkeeping is testable in isolation. Plain per-cycle state machine (NOT a
+        # rising-edge fire): set `_charger_fault_since` on the first faulted cycle,
+        # clear both fields the moment the fault clears, and notify exactly once the
+        # fault has held continuously for CHARGER_FAULT_NOTIFY_DEBOUNCE_S.
+        if not self.is_charger_faulted(time):
+            if self._charger_fault_since is not None:
+                # QS-379 S2: the fault just cleared this cycle — remember when, so the
+                # zero-power check grants the restarted charger its own window.
+                self._charger_fault_cleared_at = time
+            self._charger_fault_since = None
+            self._charger_fault_notified = False
+        elif self._charger_fault_since is None:
+            self._charger_fault_since = time
+        elif (
+            not self._charger_fault_notified
+            and (time - self._charger_fault_since).total_seconds() >= CHARGER_FAULT_NOTIFY_DEBOUNCE_S
+        ):
+            await self._notify_charger_fault(time)
+            self._charger_fault_notified = True
+
+    def _was_faulted_within_power_window(self, time: datetime) -> bool:
+        # QS-379 S2: True while the charger is faulted or the fault cleared less than a
+        # re-check window ago. The zero-power check uses this to skip-and-re-arm so a
+        # just-recovered charger is not flagged for zero power before it has had its own
+        # full window to start delivering (the callback is gated off during the fault,
+        # so `last_ping_time_success` is frozen and would otherwise already be stale).
+        if self._charger_fault_since is not None:
+            return True
+        if (
+            self._charger_fault_cleared_at is not None
+            and (time - self._charger_fault_cleared_at).total_seconds() <= CHARGER_CHECK_REAL_POWER_WINDOW_S
+        ):
+            return True
+        return False
+
+    def _update_no_power_episode(self, time: datetime) -> None:
+        # QS-379 S1: define the end of a zero-power episode so the latch
+        # (`possible_charge_error_start_time`) does not outlive the stuck start. While
+        # QS wants charge (target True) the episode is live; once QS has not wanted
+        # charge for a full re-check window the stuck start is over — clear the latch so
+        # the car card recovers and a genuine later stuck start in the same plug session
+        # can notify again. Runs every cycle (regardless of the SOC callback) so the
+        # F2 re-arm a few cycles after REARM keeps the latch, while "next morning"
+        # starts a fresh episode.
+        if self._inner_expected_charge_state is None:
+            return
+        if self._expected_charge_state.value is True:
+            self._no_charge_wanted_since = None
+            return
+        if self._no_charge_wanted_since is None:
+            self._no_charge_wanted_since = time
+        elif (time - self._no_charge_wanted_since).total_seconds() > CHARGER_CHECK_REAL_POWER_WINDOW_S:
+            self.possible_charge_error_start_time = None
+
     async def _on_charger_fault_cycle(self, time: datetime) -> None:
         # QS-376: per-cycle hook run right after the QS-346 fault machine, for automatic
         # remedies of a charger-specific fault. No-op by default.
@@ -5227,6 +5297,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
     ) -> tuple[bool | None, bool, datetime | None]:
 
         await self._do_update_charger_state(time)
+
+        # QS-379 S1: end-of-episode bookkeeping, run every cycle regardless of the
+        # SOC callback, so a zero-power latch clears once QS stops wanting charge.
+        self._update_no_power_episode(time)
 
         if self.is_charger_unavailable(time=time):
             _LOGGER.info("ensure_correct_state: %s not available", self.name)
@@ -5652,35 +5726,44 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 and (time - self._expected_charge_state.last_ping_time_success).total_seconds()
                 > CHARGER_CHECK_REAL_POWER_WINDOW_S
             ):
-                is_growing = self.car.is_car_charge_growing(num_seconds=CHARGER_CHECK_REAL_POWER_WINDOW_S, time=time)
-
-                charger_is_zero = False
-
-                if is_growing is None or is_growing is False:
-                    # check power to be sure (is_charging_power_zero handles group fallback)
-                    for_duration = CHARGER_CHECK_REAL_POWER_WINDOW_S
-                    charger_is_zero = self.is_charging_power_zero(time=time, for_duration=for_duration)
-
-                if charger_is_zero is True:
-                    _LOGGER.error(
-                        "update_value_callback (is %%:%s):%s %s expected to be charging but no power detected"
-                        " going to the car over the last %s seconds",
-                        is_target_percent,
-                        self.name,
-                        self.car.name,
-                        CHARGER_CHECK_REAL_POWER_WINDOW_S,
-                    )
-                    if self.possible_charge_error_start_time is None:
-                        self.possible_charge_error_start_time = time
-                        await self.on_device_state_change(
-                            time=time,
-                            device_change_type=DEVICE_STATUS_CHANGE_ERROR,
-                            message=f"There is no power being delivered to the car ({self.car.name}) while charging was expected",
-                        )
+                if self._was_faulted_within_power_window(time):
+                    # QS-379 S2: a fault within this window froze the reference; re-arm it
+                    # and skip the zero-power check so the restarted charger gets its own
+                    # window before any alert, instead of the QS-346 fault alert being
+                    # chased immediately by a zero-power one.
+                    self._expected_charge_state.last_ping_time_success = time
                 else:
-                    self.possible_charge_error_start_time = None
+                    is_growing = self.car.is_car_charge_growing(
+                        num_seconds=CHARGER_CHECK_REAL_POWER_WINDOW_S, time=time
+                    )
 
-                self._expected_charge_state.last_ping_time_success = time
+                    charger_is_zero = False
+
+                    if is_growing is None or is_growing is False:
+                        # check power to be sure (is_charging_power_zero handles group fallback)
+                        for_duration = CHARGER_CHECK_REAL_POWER_WINDOW_S
+                        charger_is_zero = self.is_charging_power_zero(time=time, for_duration=for_duration)
+
+                    if charger_is_zero is True:
+                        _LOGGER.error(
+                            "update_value_callback (is %%:%s):%s %s expected to be charging but no power detected"
+                            " going to the car over the last %s seconds",
+                            is_target_percent,
+                            self.name,
+                            self.car.name,
+                            CHARGER_CHECK_REAL_POWER_WINDOW_S,
+                        )
+                        if self.possible_charge_error_start_time is None:
+                            self.possible_charge_error_start_time = time
+                            await self.on_device_state_change(
+                                time=time,
+                                device_change_type=DEVICE_STATUS_CHANGE_ERROR,
+                                message=f"There is no power being delivered to the car ({self.car.name}) while charging was expected",
+                            )
+                    else:
+                        self.possible_charge_error_start_time = None
+
+                    self._expected_charge_state.last_ping_time_success = time
 
         is_car_charged, result = self.is_car_charged(
             time,

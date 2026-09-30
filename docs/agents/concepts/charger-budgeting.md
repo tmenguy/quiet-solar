@@ -368,9 +368,28 @@ start is checked from its success as before. A start that never takes effect,
 on any charger type, is checked ~10 min after its first launch, before the F2
 re-arm. The household is notified once per stuck episode:
 `possible_charge_error_start_time` survives the re-arm, and the car card keeps
-showing `CAR_CHARGE_NO_POWER_ERROR` until a check sees power. A faulted
-charger gets no zero-power alert, because `is_load_active=False` skips the SOC
-callback.
+showing `CAR_CHARGE_NO_POWER_ERROR` until a check sees power.
+
+The episode is bounded so the latch cannot outlive the stuck start (QS-379
+review-fix #01). `ensure_correct_state` tracks how long QS has not wanted charge
+(`_expected_charge_state.value is not True`); once that exceeds one re-check
+window (600 s) the latch is cleared, so the card recovers and a genuinely new
+stuck start later in the same plug session notifies again. The F2 re-arm a few
+cycles after REARM keeps the latch (the gap is shorter than the window); "next
+morning" starts a fresh episode. A genuine car swap (`attach_car` with a
+different car than the one last attached) also clears the latch, while pure
+allocation churn (detach/re-attach of the same car) keeps it.
+
+Fault recovery does not chase the QS-346 fault alert with a zero-power one
+(QS-379 review-fix #01). The SOC callback is gated off while a charger is
+faulted (`is_load_active=False`), so `last_ping_time_success` freezes and would
+be stale the instant the charger recovers. The fault state machine records when
+a fault last cleared (`_charger_fault_cleared_at`); while the charger is faulted
+or the fault cleared less than one window ago, the zero-power check skips and
+re-arms the reference, giving the restarted charger its own full window before
+any alert. A still-faulted charger gets no zero-power alert at all, because
+`is_load_active=False` skips the SOC callback — only the QS-346 fault alert is
+sent, so there is no double alert.
 
 ### The plug-state rescue no longer needs a currently-attached car (QS-346)
 
