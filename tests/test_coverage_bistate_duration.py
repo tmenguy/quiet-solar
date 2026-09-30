@@ -19,6 +19,8 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
     CONF_SWITCH,
+    CONSTRAINT_ORIGINATOR_KEY,
+    CONSTRAINT_ORIGINATOR_USER_OVERRIDE,
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
     DATA_HANDLER,
@@ -33,6 +35,7 @@ from custom_components.quiet_solar.home_model.commands import (
     CMD_ON,
 )
 from custom_components.quiet_solar.home_model.constraints import (
+    TimeBasedHoldOffConstraint,
     TimeBasedSimplePowerLoadConstraint,
 )
 from tests.factories import create_minimal_home_model
@@ -1150,7 +1153,7 @@ class TestQS390RolloverCarryOver:
             time=t - timedelta(hours=2),
             load=device,
             from_user=True,
-            load_info={"originator": "user_override"},
+            load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
             end_of_constraint=t + timedelta(minutes=4),
             power=device.power_use,
             initial_value=0,
@@ -1171,6 +1174,47 @@ class TestQS390RolloverCarryOver:
         assert force_on_cts[0].current_value == 7080.0
         # the override itself is preserved (mode-change removal keeps overrides)
         assert override_ct in device._constraints
+
+    @pytest.mark.asyncio
+    async def test_s1_holdoff_override_offtime_in_margin_is_not_carried_on_mode_switch(self, hass, device):
+        """R2-S1: a hold-off override ending within the margin must NOT carry its OFF-time.
+
+        A ``TimeBasedHoldOffConstraint`` (QS-256 user-OFF idle override) is a
+        USER_OVERRIDE, but its ``current_value`` is wall-clock time held OFF, not
+        run time. The S1 exemption carries ON-override runtime; it must exclude a
+        hold-off, or a mode switch inside the margin of a hold-off's end seeds the
+        new ON constraint with OFF-time. The new constraint must start at 0.
+        """
+        t = datetime.datetime(2026, 9, 30, 4, 56, 0, tzinfo=pytz.UTC)  # 06:56 local
+        device.is_load_command_set = MagicMock(return_value=False)
+        device.default_on_duration = 8.0
+        device.default_on_finish_time = dt_time(hour=7, minute=0, second=0)
+        holdoff_ct = TimeBasedHoldOffConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=t - timedelta(hours=4),
+            load=device,
+            from_user=True,
+            load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+            end_of_constraint=t + timedelta(minutes=4),
+            initial_value=0,
+            current_value=14160.0,  # 3h56 held OFF (wall-clock, not run time)
+            target_value=8 * 3600.0,
+        )
+        device._constraints = [holdoff_ct]
+        device._previous_bistate_mode = "bistate_mode_default"
+
+        force_on_end = datetime.datetime(2026, 9, 30, 22, 0, 0, tzinfo=pytz.UTC)  # next local midnight
+        device.get_proper_local_adapted_tomorrow = MagicMock(return_value=force_on_end)
+        device.bistate_mode = "bistate_mode_on"
+
+        await device.check_load_activity_and_constraints(t)
+
+        force_on_cts = _qs390_ct_ending(device, force_on_end)
+        assert len(force_on_cts) == 1
+        # the hold-off's OFF-time must NOT seed the new ON constraint
+        assert force_on_cts[0].current_value == 0
+        # the hold-off override itself is preserved (mode-change removal keeps overrides)
+        assert holdoff_ct in device._constraints
 
     @pytest.mark.asyncio
     async def test_n1_same_end_mode_switch_in_margin_carries_runtime(self, hass, device):
@@ -1203,15 +1247,11 @@ class TestQS390RolloverCarryOver:
 
         await device.check_load_activity_and_constraints(now)
 
-        # min(5 h run, 4 h winter target) carried → the new winter cycle is met.
-        # A met constraint is completed and removed from the live list, so assert
-        # the carry either on a still-present constraint or on the completed one.
-        new_cts = _qs390_ct_ending(device, end)
+        # min(5 h run, 4 h winter target) carried → the new winter cycle meets the
+        # winter target, so the constraint is completed and removed from the live
+        # list, surfacing on _last_completed_constraint with the carried runtime.
         lcc = device._last_completed_constraint
-        carried_met = (new_cts and new_cts[0].current_value == 4 * 3600.0) or (
-            lcc is not None and lcc.end_of_constraint == end and lcc.current_value >= 4 * 3600.0
-        )
-        assert carried_met
+        assert lcc is not None and lcc.end_of_constraint == end and lcc.current_value >= 4 * 3600.0
 
 
 # ===================================================================

@@ -1134,16 +1134,22 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             c.load_info is not None
                             and c.load_info.get(CONSTRAINT_ORIGINATOR_KEY, "") == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
                         )
+                        # QS-390 (R2-S1): only an ON override carries runtime in
+                        # the margin. A TimeBasedHoldOffConstraint is a
+                        # USER_OVERRIDE too, but its current_value is wall-clock
+                        # OFF-time, not run time (QS-256) — it must be dropped
+                        # like any finished cycle, not seeded onto the new ON
+                        # constraint.
+                        carries_runtime_in_margin = is_override and not isinstance(c, TimeBasedHoldOffConstraint)
                         # QS-390: never carry the runtime of the finished
-                        # previous cycle — a non-override constraint that ends
-                        # within the margin AND whose end is not one of the new
-                        # cycle's ends. A same-end mode switch (N1, end kept in
-                        # new_ends) or a user override (S1) still carries its
-                        # runtime.
+                        # previous cycle — a constraint that ends within the
+                        # margin AND whose end is not one of the new cycle's ends.
+                        # A same-end mode switch (N1, end kept in new_ends) or an
+                        # ON user override (S1) still carries its runtime.
                         if (
                             c.end_of_constraint <= cycle_end_limit
                             and c.end_of_constraint not in new_ends
-                            and not is_override
+                            and not carries_runtime_in_margin
                         ):
                             continue
                         if c.current_value > saved_runtime:
