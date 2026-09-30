@@ -1043,6 +1043,13 @@ class TestChargerDouble:
         if self._expected_num_active_phases.set(num_phases, time):
             self._phases_adopted_at = None
 
+    def is_phase_snapshot_stale(self, cs) -> bool:
+        """Mirror QSChargerGeneric.is_phase_snapshot_stale (QS-381 fix #03)."""
+        return (
+            self._phases_adopted_at is not None
+            and cs.current_active_phase_number != self._expected_num_active_phases.value
+        )
+
     def update_amps_with_delta(
         self,
         current_amps: list[float],

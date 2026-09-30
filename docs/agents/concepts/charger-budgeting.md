@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-10-01
+last_verified: 2026-09-30
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -377,17 +377,26 @@ expected state are bounded or contained too (QS-381):
   reboot). The follow window counts from the **original** adoption — a follow
   never refreshes `_phases_adopted_at` — so a flapping switch cannot hold the
   window open forever; past the 30 min window a flip takes the normal launch
-  path (re-driven toward the still-expected count). Adoption and follow only act
-  on a **real** phase reading (`_has_real_phase_reading()`): a missing, `unknown`
-  or `unavailable` switch reads a phantom 3 that is neither adopted nor followed.
-  A genuine new budget phase request clears the adoption — the budget entry point
-  is `set_expected_num_active_phases`, which drops `_phases_adopted_at` whenever
-  the requested value actually changes — so a real switch is launched again.
-  `apply_budgets` only routes a phase count through that entry point when the
-  budget actually asks for a phase change (`budgeted_num_phases !=
-  current_active_phase_number`), and a `check_charger_state` replay of a stale
-  split-budget snapshot that disagrees with the adopted count while an adoption is
-  live is dropped — neither can revert the adoption or re-drive the switch.
+  path (re-driven toward the still-expected count). A phantom reading (a missing,
+  `unknown` or `unavailable` switch reads a hard-coded 3) is never *followed* —
+  `_has_real_phase_reading()` gates only the **follow branch** (QS-381 fix #03) —
+  but it still falls through to the normal launch / adoption path and is *adopted*
+  once the launch retries run out, exactly like a real `off` reading. Adopting the
+  phantom 3 is bounded and safe (it over-counts per-phase current, which is
+  conservative), so a permanently unavailable switch no longer blocks the group
+  forever. Once the adoption window has expired, `_phases_adopted_at` is cleared in
+  `_ensure_correct_state` so "an adoption is live" is literally true only inside the
+  window. A genuine new budget phase request clears the adoption — the budget entry
+  point is `set_expected_num_active_phases`, which drops `_phases_adopted_at`
+  whenever the requested value actually changes — so a real switch is launched
+  again. `apply_budgets` routes a phase count through that entry point only when the
+  budget actually asks for a phase change, comparing the budgeted count against the
+  **live** expected count (`budgeted_num_phases != _expected_num_active_phases.value`,
+  not the frozen snapshot — so a budget applied after the expected count changed
+  underneath is never silently skipped), and a `check_charger_state` replay of a
+  stale split-budget snapshot that disagrees with the adopted count while an adoption
+  is live is dropped (`charger.is_phase_snapshot_stale(cs)`) — neither can revert the
+  adoption or re-drive the switch.
 - **Amps mismatch while charging** — keeps blocking the group, by design
   (circuit safety: the member may draw more than its budget). It is not
   silent: amps changes are never counted with `register_launch`, so the
