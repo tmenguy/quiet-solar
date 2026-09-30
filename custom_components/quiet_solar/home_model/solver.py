@@ -160,7 +160,7 @@ class PeriodSolver:
         elif np.min(self._available_power) >= 0:
             _LOGGER.warning("PeriodSolver: NO AVAILABLE POWER ... MINIMUM IS POSITIVE, NO POWER TO CONSUME")
 
-        # initial max_possible_production: solar-only (no battery yet)
+        # initial max_possible_production: solar + battery possible discharge when a battery is present
         bat_possible_discharge = None
         if self._battery is not None:
             bat_possible_discharge = self._battery_get_charging_power().battery_possible_discharge
@@ -1260,6 +1260,7 @@ class PeriodSolver:
         _bat_possible_disch = None
         if self._battery is not None:
             _bcp = self._battery_get_charging_power()
+            _bat_possible_disch = _bcp.battery_possible_discharge
             battery_ext_consumption_power = _bcp.battery_ext_consumption_power
             battery_charge = _bcp.battery_charge
             battery_commands = _bcp.battery_commands
