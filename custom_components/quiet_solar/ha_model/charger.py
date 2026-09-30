@@ -384,6 +384,10 @@ class QSChargerStatus:
         self.can_be_started_and_stopped = False
         self.is_before_battery = False
         self.bump_solar = False
+        # QS-381 fix #05: when this snapshot was built, used for TIME-based staleness in
+        # is_phase_snapshot_stale (a snapshot taken before the latest observation-side phase
+        # change is stale). Stamped in get_stable_dynamic_charge_status; carried by duplicate().
+        self.snapshot_time: datetime | None = None
 
     def duplicate(self):
         d = QSChargerStatus(self.charger)
@@ -400,6 +404,7 @@ class QSChargerStatus:
         d.can_be_started_and_stopped = self.can_be_started_and_stopped
         d.is_before_battery = self.is_before_battery
         d.bump_solar = self.bump_solar
+        d.snapshot_time = self.snapshot_time
         return d
 
     @property
@@ -600,6 +605,13 @@ class QSChargerStatus:
                 if res_current is not None:
                     # we can keep the current phase setup
                     consign_amp = res_current
+                elif not self.charger._has_real_phase_reading():
+                    # QS-381 fix #05: the switch has no real reading (missing/unknown/unavailable).
+                    # A phantom switch can never succeed, so never offer the other phase count for a
+                    # consign either (the get_stable phase offer is already gated the same way in
+                    # fix #04). Keep the current count and clamp the amps to the current-phase steps
+                    # (safe_border returns min/max, never None) instead of asking for a switch.
+                    consign_amp = self.charger._get_amps_from_power_steps(current_steps, power, safe_border=True)
                 else:
                     # need to phase switch to get the minimum asked power (either up or down)
                     switch_steps = self.charger.car.get_charge_power_per_phase_A(self.current_active_phase_number != 3)[
@@ -2257,11 +2269,13 @@ class QSChargerGroup(LogOnChangeMixin):
             for cs in cs_to_apply:
                 chargers[cs.charger] = cs
 
-            # QS-381: a split budget keeps stale QSChargerStatus snapshots in
-            # remaining_budget_to_apply across cycles. If a phase adoption is in effect and a
-            # follow changed the charger's expected phase count since the snapshot was taken,
-            # replaying that stale snapshot would look like a fresh phase request (it would clear
-            # _phases_adopted_at and re-drive the switch). Drop the whole stale replay then.
+            # QS-381: a split budget keeps QSChargerStatus snapshots in remaining_budget_to_apply
+            # across cycles. If a phase adoption is live and an observation-side change (the D1
+            # adoption or a follow) moved the charger's expected phase count AFTER the snapshot was
+            # taken, replaying that stale snapshot would look like a fresh phase request (it would
+            # clear _phases_adopted_at and re-drive the switch). fix #05: staleness is TIME-based
+            # (snapshot taken before _phases_observed_change_at), so a FRESH post-adoption budget
+            # is NOT dropped. Drop only the genuinely stale replay.
             for cs in cs_to_apply:
                 if cs.charger.is_phase_snapshot_stale(cs):
                     _LOGGER.debug(
@@ -2347,14 +2361,15 @@ class QSChargerGroup(LogOnChangeMixin):
                     cs.charger._last_amp_change_time = time
                 cs.charger._expected_amperage.set(int(new_amp), time)
 
-            if new_num_phases is not None and new_num_phases != cs.charger._expected_num_active_phases.value:
-                # QS-381 fix #03: gate the phase request on the LIVE expected count, not the
-                # frozen snapshot init_phase_num. If the expected count changed underneath since
-                # the snapshot (e.g. the idle probe adopted the observed count), a budget whose
-                # phase count differs from the live expected must still be applied — otherwise the
-                # charger gets amps budgeted for the wrong phase count. The stale-replay drop above
-                # (is_phase_snapshot_stale) is what protects the live-adoption case from a revert;
-                # this comparison must not be widened to drop a legitimate 3->1 split replay.
+            if new_num_phases is not None and new_num_phases != cs.charger.expected_num_active_phases:
+                # QS-381 fix #03: gate the phase request on the LIVE expected count (the public
+                # expected_num_active_phases accessor), not the frozen snapshot init_phase_num. If
+                # the expected count changed underneath since the snapshot (e.g. the idle probe
+                # adopted the observed count), a budget whose phase count differs from the live
+                # expected must still be applied — otherwise the charger gets amps budgeted for the
+                # wrong phase count. The stale-replay drop above (is_phase_snapshot_stale, TIME-based
+                # since fix #05) is what protects the live-adoption case from a revert; this
+                # comparison must not be widened to drop a legitimate 3->1 split replay.
                 cs.charger.set_expected_num_active_phases(new_num_phases, time)
 
             await cs.charger._ensure_correct_state(time)
@@ -2437,6 +2452,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         # phase count. A later flip of the switch then follows the observed value instead
         # of re-driving it; a genuine new budget phase request clears it.
         self._phases_adopted_at: datetime | None = None
+        # QS-381 fix #05: when the expected phase count last changed from an OBSERVATION (the D1
+        # adoption or a follow), not from a budget. is_phase_snapshot_stale drops a replayed
+        # snapshot taken before this instant while an adoption is live (TIME-based, not value).
+        self._phases_observed_change_at: datetime | None = None
 
         self.possible_charge_error_start_time: datetime | None = None
         self._warned_person_coverage_triplet: tuple | None = None
@@ -2569,12 +2588,25 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             return state is not None and state.state in (STATE_ON, STATE_OFF)
         return True
 
+    def _is_phase_adoption_live(self, time: datetime) -> bool:
+        """QS-381 fix #05: one source of truth for "a phase adoption is live", i.e. adopted and
+        still inside the 30 min follow window. Used by the expiry clear and the follow gate."""
+        return (
+            self._phases_adopted_at is not None
+            and (time - self._phases_adopted_at).total_seconds() < TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES
+        )
+
     async def _follow_observed_num_phases(self, current_active_phases: int, time: datetime) -> None:
         """QS-381: make the expected phase count follow the observed one (set + success).
 
         `set` goes first: a different value resets the command, dropping any
         reboot-on-success callback, so a phase switch that never physically happened never
-        triggers a reboot (latent today: do_reboot_on_phase_switch is False in production)."""
+        triggers a reboot (latent today: do_reboot_on_phase_switch is False in production).
+
+        fix #05: both callers (the D1 adoption and a late follow) are observation-side phase
+        changes, so stamp `_phases_observed_change_at`: a budget snapshot taken before this
+        instant is stale while an adoption is live (TIME-based is_phase_snapshot_stale)."""
+        self._phases_observed_change_at = time
         self._expected_num_active_phases.set(current_active_phases, time)
         await self._expected_num_active_phases.success(time=time)
 
@@ -2705,7 +2737,12 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         A genuine new phase request (the value actually changes) ends any phase adoption,
         so that a real switch is launched again. Asking for the already-adopted value is
         not a new request and keeps the adoption marker (a late switch flip then follows
-        the observed count instead of re-driving the switch)."""
+        the observed count instead of re-driving the switch).
+
+        This is the BUDGET side; it does NOT stamp `_phases_observed_change_at` (that tracks
+        observation-side changes only — the D1 adoption and the follow, see
+        `_follow_observed_num_phases`). A stale split replay is dropped before it reaches here
+        by `is_phase_snapshot_stale` (TIME-based since fix #05)."""
         if self._expected_num_active_phases.set(num_phases, time):
             self._phases_adopted_at = None
 
@@ -2715,20 +2752,25 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         return self._expected_num_active_phases.value
 
     def is_phase_snapshot_stale(self, cs: QSChargerStatus) -> bool:
-        """QS-381 fix #03/#04: whether a budget snapshot's phase count is stale vs a live adoption.
+        """QS-381 fix #05: whether a budget snapshot predates the latest observation-side phase
+        change while a phase adoption is live (TIME-based, not value-based).
 
-        A split budget keeps stale `QSChargerStatus` snapshots in `remaining_budget_to_apply`
-        across cycles. While a phase adoption is live (`_phases_adopted_at` set), replaying such a
-        snapshot would look like a fresh phase request and revert the adoption / re-drive the
-        switch. That happens when EITHER the snapshot's CURRENT count disagrees with the live
-        expected value, OR (fix #04) its BUDGETED count does: a 3->1 split applies the 1 first, so
-        the snapshot's current can land back on the adopted count (3) while it still budgets the
-        pre-adoption 1 — `apply_budgets` compares the budget against the live expected, so that
-        replay would still re-drive the switch. The group drops the whole stale replay then,
-        instead of reading `_phases_adopted_at` directly."""
-        expected = self._expected_num_active_phases.value
-        return self._phases_adopted_at is not None and (
-            cs.current_active_phase_number != expected or cs.budgeted_num_phases != expected
+        A split budget keeps `QSChargerStatus` snapshots in `remaining_budget_to_apply` across
+        cycles. While a phase adoption is live (`_phases_adopted_at` set), replaying a snapshot
+        taken BEFORE the adoption / follow moved the expected count (`_phases_observed_change_at`)
+        would look like a fresh phase request and revert the adoption / re-drive the switch. So a
+        snapshot is stale only when its `snapshot_time` is earlier than that observation change.
+
+        This replaces the fix #03/#04 value clauses (current/budgeted != expected). Those also
+        dropped a FRESH post-adoption split budget (current 3 / budget 1 is identical to the stale
+        one), which starved an unrelated charger's amps increase; the TIME test keeps only the
+        genuinely stale replays. The group calls this instead of reading `_phases_adopted_at`
+        directly."""
+        return (
+            self._phases_adopted_at is not None
+            and self._phases_observed_change_at is not None
+            and cs.snapshot_time is not None
+            and cs.snapshot_time < self._phases_observed_change_at
         )
 
     def get_stable_dynamic_charge_status(self, time: datetime) -> QSChargerStatus | None:
@@ -2757,6 +2799,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             return None
 
         cs = QSChargerStatus(self)
+        # QS-381 fix #05: stamp the snapshot so TIME-based staleness (is_phase_snapshot_stale)
+        # can tell a fresh post-adoption budget from one taken before the latest observation
+        # change. The idle-path set (~:6053) needs no stamp: it changes no snapshot and never
+        # sets _phases_adopted_at, so it can never mark a snapshot stale on its own.
+        cs.snapshot_time = time
 
         cs.accurate_current_power = self.get_median_sensor(
             self.accurate_power_sensor, CHARGER_ADAPTATION_WINDOW_S, time
@@ -3095,6 +3142,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         self._inner_amperage = None
         self._inner_num_active_phases = None
         self._phases_adopted_at = None
+        self._phases_observed_change_at = None
         self._last_amp_change_time = None
 
     def is_in_state_reset(self) -> bool:
@@ -5400,10 +5448,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
         if one_bad is False:
             current_active_phases = self.current_num_phases
-            if (
-                self._phases_adopted_at is not None
-                and (time - self._phases_adopted_at).total_seconds() >= TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES
-            ):
+            if self._phases_adopted_at is not None and not self._is_phase_adoption_live(time):
                 # QS-381 fix #03: the adoption window has expired. Drop the marker so that
                 # "a phase adoption is live" (read by apply_budgets' replay-drop guard) is
                 # literally true only while the follow window is open.
@@ -5414,14 +5459,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 one_bad = True
                 # check first if amperage setting is ok
                 if probe_only is False:
-                    if (
-                        self._has_real_phase_reading()
-                        and self._phases_adopted_at is not None
-                        # QS-381 fix #04: defensive — the expiry clear above already drops
-                        # _phases_adopted_at once the window has passed, so this clause is always
-                        # true when the marker is still set; kept to read as an explicit window.
-                        and (time - self._phases_adopted_at).total_seconds() < TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES
-                    ):
+                    if self._has_real_phase_reading() and self._is_phase_adoption_live(time):
                         # QS-381: the phase switch finally flipped after we already adopted the
                         # observed count. This is not a new budget request (a genuine one clears
                         # _phases_adopted_at, see set_expected_num_active_phases), so follow the

@@ -370,8 +370,11 @@ expected state are bounded or contained too (QS-381):
   reality. The adoption restarts the 30 min
   `TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES` spacing, which gates the phase
   offer of non-consign commands. Consign commands pick phases in
-  `get_consign_amps_values` without that gate, so they can ask for the switch
-  again right away (#388). If the switch finally flips *after* the adoption
+  `get_consign_amps_values` without that 30 min gate, so on a *real* reading they
+  can ask for the switch again right away (#388); on a **phantom** reading the
+  consign path no longer offers the other count either — it keeps `[current]` and
+  clamps the amps to the current-phase steps (QS-381 fix #05), because a phantom
+  switch can never succeed. If the switch finally flips *after* the adoption
   (tracked by `_phases_adopted_at`), the expected count follows the observed
   value instead of re-driving the switch back (which would register a spurious
   reboot). The follow window counts from the **original** adoption — a follow
@@ -398,14 +401,19 @@ expected state are bounded or contained too (QS-381):
   requested value actually changes — so a real switch is launched again.
   `apply_budgets` routes a phase count through that entry point only when the budget
   actually asks for a phase change, comparing the budgeted count against the **live**
-  expected count (`budgeted_num_phases != _expected_num_active_phases.value`, not the
-  frozen snapshot — so a budget applied after the expected count changed underneath
-  is never silently skipped), and a `check_charger_state` replay of a stale
-  split-budget snapshot is dropped (`charger.is_phase_snapshot_stale(cs)`) while an
-  adoption is live when **either** the snapshot's current **or** its budgeted count
-  disagrees with the adopted count (QS-381 fix #04: a 3->1 split can land the current
-  back on the adopted count while it still budgets the pre-adoption value) — neither
-  can revert the adoption or re-drive the switch.
+  expected count (via the public `expected_num_active_phases` accessor, not the frozen
+  snapshot — so a budget applied after the expected count changed underneath is never
+  silently skipped), and a `check_charger_state` replay of a **stale** split-budget
+  snapshot is dropped (`charger.is_phase_snapshot_stale(cs)`). Since QS-381 fix #05
+  staleness is **TIME-based**, not value-based: while an adoption is live, a snapshot is
+  stale only when its `snapshot_time` predates the latest *observation-side* phase change
+  (`_phases_observed_change_at`, stamped on the D1 adoption and every follow in
+  `_follow_observed_num_phases`). This drops the genuinely stale replays (fix #03's
+  follow-after-snapshot and fix #04's 3->1 split) but no longer drops a **fresh**
+  post-adoption split budget — which is field-for-field identical to the stale one
+  (current 3 / budget 1) yet must land, so an unrelated charger's amps increase in the
+  same replay is not starved. `_is_phase_adoption_live(time)` is the single "adoption is
+  live" predicate shared by the window-expiry clear and the follow gate.
 - **Amps mismatch while charging** — keeps blocking the group, by design
   (circuit safety: the member may draw more than its budget). It is not
   silent: amps changes are never counted with `register_launch`, so the

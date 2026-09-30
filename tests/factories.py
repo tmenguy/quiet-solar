@@ -1033,6 +1033,7 @@ class TestChargerDouble:
         self._expected_num_active_phases = QSStateCmd()
         self._last_amp_change_time: datetime | None = None
         self._phases_adopted_at: datetime | None = None
+        self._phases_observed_change_at: datetime | None = None
 
         # Apply any additional kwargs as attributes
         for key, value in kwargs.items():
@@ -1049,10 +1050,12 @@ class TestChargerDouble:
         return self._expected_num_active_phases.value
 
     def is_phase_snapshot_stale(self, cs) -> bool:
-        """Mirror QSChargerGeneric.is_phase_snapshot_stale (QS-381 fix #03/#04)."""
-        expected = self._expected_num_active_phases.value
-        return self._phases_adopted_at is not None and (
-            cs.current_active_phase_number != expected or cs.budgeted_num_phases != expected
+        """Mirror QSChargerGeneric.is_phase_snapshot_stale (QS-381 fix #05, TIME-based)."""
+        return (
+            self._phases_adopted_at is not None
+            and self._phases_observed_change_at is not None
+            and cs.snapshot_time is not None
+            and cs.snapshot_time < self._phases_observed_change_at
         )
 
     def update_amps_with_delta(
@@ -1097,6 +1100,11 @@ class TestChargerDouble:
 
     def can_do_3_to_1_phase_switch(self) -> bool:
         """Default implementation."""
+        return True
+
+    def _has_real_phase_reading(self) -> bool:
+        """Mirror QSChargerGeneric._has_real_phase_reading (QS-381 fix #05): the double has no
+        phantom phase-switch entity, so its phase reading is always real."""
         return True
 
 

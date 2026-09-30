@@ -196,6 +196,12 @@ def test_charger_status_consign_values_with_phase_switch() -> None:
     status.command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=2600)
     status.current_active_phase_number = 3
 
+    # QS-381 fix #05: the consign switch-to-other-phase branch now requires a REAL phase reading
+    # (a phantom switch keeps the current count). Seed the switch entity to a real `off` state.
+    switch_state = MagicMock()
+    switch_state.state = "off"
+    hass.states.get.return_value = switch_state
+
     with patch.object(charger, "_get_amps_from_power_steps", side_effect=[None, 8]):
         possible_num_phases, consign_amp = status.get_consign_amps_values(consign_is_minimum=True)
 
