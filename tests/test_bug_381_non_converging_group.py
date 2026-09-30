@@ -39,9 +39,9 @@ from tests.test_bug_376_stuck_charger_group import (
     FOURTH_LAUNCH,
     STEP,
     T0,
-    _build_stuck_charger,
+    States,
     _make_healthy,
-    _States,
+    build_stuck_charger,
 )
 from tests.test_charger_coverage_deep import (
     _create_charger,
@@ -81,7 +81,7 @@ def _build_phase_charger(name="broken", switch_state="off", charging=True):
     hass = _make_hass()
     home = _make_home()
     home.async_notify_all_mobile_apps = AsyncMock()
-    states = _States()
+    states = States()
     hass.states.get = MagicMock(side_effect=states.get)
     phase_sw = f"switch.{name}_phase"
     charger = _create_charger(
@@ -765,7 +765,7 @@ def _build_rebooting_ocpp(name="rebooter"):
     """Real OCPP charger with a reboot button, otherwise in its expected state (charging)."""
     hass = _make_hass()
     home = _make_home()
-    states = _States()
+    states = States()
     hass.states.get = MagicMock(side_effect=states.get)
     charger = _create_ocpp_charger(hass, home, name=name)
     car = _make_real_car(hass, home, name=f"{name} car")
@@ -912,7 +912,7 @@ async def test_start_stuck_with_phase_mismatch_rearms(phase_read):
 @pytest.mark.asyncio
 async def test_start_stuck_with_pending_reboot_rearms():
     """A4(b): a start-stuck member waiting for a reboot that never happens is re-armed."""
-    hass, home, _states, stuck = _build_stuck_charger(switch_state="off")
+    hass, home, _states, stuck = build_stuck_charger(switch_state="off")
     stuck.charger_reboot_button = "button.wallbox_2_parking_reboot"
     healthy, cs_healthy = _make_healthy(hass, home)
     group = _make_charger_group(home, [stuck, healthy])
