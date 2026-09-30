@@ -27,6 +27,7 @@ from custom_components.quiet_solar.ha_model import charger as charger_module
 from custom_components.quiet_solar.ha_model.charger import (
     STATE_CMD_TIME_BETWEEN_RETRY_S,
     TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES,
+    QSChargerGeneric,
     QSChargerStatus,
 )
 from custom_components.quiet_solar.home_model.commands import CMD_AUTO_GREEN_ONLY, copy_command
@@ -137,6 +138,7 @@ async def test_phase_switch_never_converging_is_adopted(broken_first, caplog):
             t += STEP
 
     assert launches == PHASE_LAUNCH_OFFSETS_S
+    assert _calls_on(hass, phase_sw, "turn_on") == 4  # AC 1a: exactly 4, none after the adoption
     assert adopted_at is not None, "the observed phase count was never adopted"
     assert _off(adopted_at) == PHASE_ADOPT_OFFSET_S
     assert await broken._ensure_correct_state(adopted_at + STEP) is True
@@ -297,6 +299,72 @@ async def test_stale_replayed_budget_after_follow_does_not_revert_adoption():
 
 
 @pytest.mark.asyncio
+async def test_stale_replay_budgeted_phase_differs_is_stale():
+    """A1 / fix #04 item 1: under a LIVE adoption, a replay whose BUDGETED phase count differs
+    from the live expected value is stale too — not only one whose CURRENT count differs. The
+    3->1 split applies 1 first (expected 1), the switch stays off so D1 adopts 3, then the
+    original snapshot (current 3, budget 1) is replayed: current now equals the adopted 3 so the
+    old check missed it, but the budget still asks for the pre-adoption 1 and would clear the
+    adoption / re-drive the switch. It must be dropped."""
+    hass, home, _states, broken, phase_sw = _build_phase_charger()
+    healthy, _cs = _make_healthy(hass, home)
+    group = _make_charger_group(home, [broken, healthy])
+    t = await _drive_to_adoption(broken, broken)  # expected 3, switch "off" (reads 3)
+    assert broken._expected_num_active_phases.value == 3
+    assert broken._phases_adopted_at is not None
+
+    # the replayed snapshot: its CURRENT count matches the adopted 3, but it still BUDGETS 1
+    stale = broken.get_stable_dynamic_charge_status.return_value
+    stale.current_real_max_charging_amp = 6
+    stale.current_active_phase_number = 3  # equals the live expected -> old check said NOT stale
+    stale.budgeted_amp = 6
+    stale.budgeted_num_phases = 1  # but it budgets the pre-adoption 1
+
+    assert broken.is_phase_snapshot_stale(stale) is True
+
+    broken.set_charging_num_phases = AsyncMock(wraps=broken.set_charging_num_phases)
+    phase_calls_before = _calls_on(hass, phase_sw)
+    await group.apply_budgets([stale], [stale], t, check_charger_state=True)
+
+    assert group.remaining_budget_to_apply is None  # the drop guard fired (early return)
+    assert broken._expected_num_active_phases.value == 3  # adoption kept
+    assert broken._phases_adopted_at is not None
+    broken.set_charging_num_phases.assert_not_awaited()
+    assert _calls_on(hass, phase_sw) == phase_calls_before
+
+
+@pytest.mark.asyncio
+async def test_d1_readoption_inside_live_window_keeps_original_stamp():
+    """A1 / fix #04 item 2: after a follow, a phantom reading falls through to launch and D1
+    adopts again INSIDE the live window. The re-adoption must NOT restart the window:
+    `_phases_adopted_at` keeps the ORIGINAL adoption time, so the window still counts from the
+    first adoption (fix #02's rule)."""
+    _hass, _home, states, broken, phase_sw = _build_phase_charger()
+    t = await _drive_to_adoption(broken, broken)  # expected 3, switch "off"
+    adopted_at = broken._phases_adopted_at
+    assert adopted_at is not None
+
+    # a real reading flips on (1 phase) inside the window: followed -> expected 1, marker kept
+    states.set(phase_sw, "on", t)
+    await broken._ensure_correct_state(t)
+    assert broken._expected_num_active_phases.value == 1
+    assert broken._phases_adopted_at == adopted_at
+    t += STEP
+
+    # now it goes unavailable (phantom 3): it falls through to launch, and 4 launches later D1
+    # re-adopts 3 — still inside the ORIGINAL 30 min window
+    states.set(phase_sw, "unavailable", t)
+    spacing = TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES
+    while broken._expected_num_active_phases.value != 3:
+        await broken._ensure_correct_state(t)
+        t += STEP
+        assert (t - adopted_at).total_seconds() < spacing, "the re-adoption left the window"
+
+    # the re-adoption kept the ORIGINAL stamp; it did not open a fresh window
+    assert broken._phases_adopted_at == adopted_at
+
+
+@pytest.mark.asyncio
 async def test_real_budget_phase_change_through_apply_budgets_after_adoption_launches():
     """A1 / fix #02 item 1: a genuine phase change in a budget snapshot (budgeted != current)
     still goes through `set_expected_num_active_phases`, clears the adoption and launches."""
@@ -374,6 +442,7 @@ async def test_flapping_switch_does_not_extend_follow_window():
     broken.set_charging_num_phases = AsyncMock(wraps=broken.set_charging_num_phases)
     await broken._ensure_correct_state(late)
     broken.set_charging_num_phases.assert_awaited()  # re-driven, the follow window has expired
+    assert broken._phases_adopted_at is None  # the expiry clear ran before the launch path
 
 
 @pytest.mark.asyncio
@@ -399,6 +468,7 @@ async def test_follow_window_edges(within_window):
         # window expired: the mismatch is re-driven back toward the still-expected 3
         assert broken._expected_num_active_phases.value == 3
         broken.set_charging_num_phases.assert_awaited()
+        assert broken._phases_adopted_at is None  # the expiry clear ran at the window edge
 
 
 @pytest.mark.asyncio
@@ -425,6 +495,38 @@ async def test_unavailable_phase_switch_within_window_falls_through_to_launch():
     assert broken._expected_num_active_phases.value == 1
     # ...but the normal launch path IS taken: the phantom does not block the group forever
     broken.set_charging_num_phases.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unavailable_phase_switch_within_window_unblocks_group_in_bounded_time(caplog):
+    """A1 / fix #04 item 3: the within-window phantom fall-through must also UNBLOCK the group in
+    bounded time, not merely launch. After a follow to 1, a phantom 3 inside the window is
+    re-launched and then adopted, so the group frees the healthy member within ~196 s."""
+    hass, home, states, broken, phase_sw = _build_phase_charger()
+    healthy, cs_healthy = _make_healthy(hass, home)
+    group = _make_charger_group(home, [broken, healthy])
+    t = await _drive_to_adoption(group, broken)  # expected 3, switch "off"
+
+    # a real reading flips on (1 phase) inside the window: followed -> expected 1
+    states.set(phase_sw, "on", t)
+    await group.ensure_correct_state(t)
+    assert broken._expected_num_active_phases.value == 1
+    t += STEP
+
+    # now it goes permanently unavailable (phantom 3) inside the window
+    states.set(phase_sw, "unavailable", t)
+    phantom_start = t
+    unblocked_at = None
+    with caplog.at_level(logging.WARNING):
+        while t <= phantom_start + timedelta(minutes=10):
+            actionable, _ = await group.ensure_correct_state(t)
+            if unblocked_at is None and cs_healthy in actionable:
+                unblocked_at = t
+            t += STEP
+    assert unblocked_at is not None, "the within-window phantom blocked the group forever"
+    assert (unblocked_at - phantom_start).total_seconds() <= PHASE_ADOPT_OFFSET_S + 2 * STEP.total_seconds()
+    assert broken._expected_num_active_phases.value == 3
+    assert "phase switch never converged" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -495,6 +597,34 @@ async def test_permanently_unavailable_switch_unblocks_group_in_bounded_time(cap
     assert _off(unblocked_at) <= PHASE_ADOPT_OFFSET_S + 2 * int(STEP.total_seconds())
     assert broken._expected_num_active_phases.value == 3
     assert "phase switch never converged" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_phantom_reading_offers_only_current_phase_count():
+    """A1 / fix #04 item 4: `get_stable_dynamic_charge_status` must not offer `[1, 3]` to a phase
+    switch with no real reading. A dead switch would otherwise be asked for 1 phase again once
+    the 30 min spacing expires, repeating the adoption cycle (4 launches, ~196 s group block) and
+    a re-adoption every 30 min without end. A real reading still offers both counts."""
+    hass, home, states, broken, phase_sw = _build_phase_charger(switch_state="on")  # real, reads 1
+    # restore the real method (the fixture mocks it) and let the phase-change spacing pass
+    broken.get_stable_dynamic_charge_status = QSChargerGeneric.get_stable_dynamic_charge_status.__get__(broken)
+    broken._expected_num_active_phases.set(1, T0 - timedelta(hours=1))
+
+    # a real reading -> the phase switch is offered both phase counts once the spacing allows
+    cs = broken.get_stable_dynamic_charge_status(T0)
+    assert cs is not None
+    assert cs.possible_num_phases == [1, 3]
+
+    # a phantom reading (switch unavailable) -> only the current count, no new switch request
+    states.set(phase_sw, "unavailable", T0)
+    assert broken._has_real_phase_reading() is False
+    cs = broken.get_stable_dynamic_charge_status(T0)
+    assert cs is not None
+    assert cs.possible_num_phases == [cs.current_active_phase_number]
+
+    # a charger with no phase switch always has a real reading, so it is unaffected by the gate
+    plain = _create_charger(hass, home, name="plain")
+    assert plain._has_real_phase_reading() is True
 
 
 @pytest.mark.asyncio
@@ -675,9 +805,7 @@ async def test_start_stuck_with_phase_mismatch_rearms(phase_read):
         if "at" not in adopted and stuck._expected_num_active_phases.value == 3:
             adopted["at"] = t
 
-    fourth, rearmed_at = await _drive_until_rearmed(
-        group, stuck, cs_healthy, T0 + timedelta(minutes=30), on_cycle
-    )
+    fourth, rearmed_at = await _drive_until_rearmed(group, stuck, cs_healthy, T0 + timedelta(minutes=30), on_cycle)
 
     assert _calls_on(hass, "switch.stuck3p_charge", "turn_on") == 4  # the 4 start launches
     assert fourth is not None
@@ -704,9 +832,7 @@ async def test_start_stuck_with_pending_reboot_rearms():
         if stuck._asked_for_reboot_at_time is None and reboot_at <= t < reboot_at + STEP:
             await stuck.reboot(t)
 
-    fourth, rearmed_at = await _drive_until_rearmed(
-        group, stuck, cs_healthy, T0 + timedelta(minutes=40), on_cycle
-    )
+    fourth, rearmed_at = await _drive_until_rearmed(group, stuck, cs_healthy, T0 + timedelta(minutes=40), on_cycle)
 
     assert fourth == FOURTH_LAUNCH
     assert rearmed_at is not None

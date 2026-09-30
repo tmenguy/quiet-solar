@@ -384,19 +384,28 @@ expected state are bounded or contained too (QS-381):
   once the launch retries run out, exactly like a real `off` reading. Adopting the
   phantom 3 is bounded and safe (it over-counts per-phase current, which is
   conservative), so a permanently unavailable switch no longer blocks the group
-  forever. Once the adoption window has expired, `_phases_adopted_at` is cleared in
-  `_ensure_correct_state` so "an adoption is live" is literally true only inside the
-  window. A genuine new budget phase request clears the adoption — the budget entry
-  point is `set_expected_num_active_phases`, which drops `_phases_adopted_at`
-  whenever the requested value actually changes — so a real switch is launched
-  again. `apply_budgets` routes a phase count through that entry point only when the
-  budget actually asks for a phase change, comparing the budgeted count against the
-  **live** expected count (`budgeted_num_phases != _expected_num_active_phases.value`,
-  not the frozen snapshot — so a budget applied after the expected count changed
-  underneath is never silently skipped), and a `check_charger_state` replay of a
-  stale split-budget snapshot that disagrees with the adopted count while an adoption
-  is live is dropped (`charger.is_phase_snapshot_stale(cs)`) — neither can revert the
-  adoption or re-drive the switch.
+  forever. The **phase offer** is also gated on a real reading: `get_stable_dynamic_charge_status`
+  offers `[1, 3]` only when `_has_real_phase_reading()` (QS-381 fix #04) — otherwise
+  a dead switch would be asked for 1 phase again the moment the 30 min spacing
+  expires, repeating the 4-launch adoption cycle every 30 min without end; it is
+  offered only `[current]` instead. Chargers without a phase switch always have a
+  real reading, so they are unaffected. Once the adoption window has expired,
+  `_phases_adopted_at` is cleared in `_ensure_correct_state` so "an adoption is live"
+  is literally true only inside the window; a D1 re-adoption inside a live window
+  keeps the **original** stamp (it never re-opens the window, QS-381 fix #04). A
+  genuine new budget phase request clears the adoption — the budget entry point is
+  `set_expected_num_active_phases`, which drops `_phases_adopted_at` whenever the
+  requested value actually changes — so a real switch is launched again.
+  `apply_budgets` routes a phase count through that entry point only when the budget
+  actually asks for a phase change, comparing the budgeted count against the **live**
+  expected count (`budgeted_num_phases != _expected_num_active_phases.value`, not the
+  frozen snapshot — so a budget applied after the expected count changed underneath
+  is never silently skipped), and a `check_charger_state` replay of a stale
+  split-budget snapshot is dropped (`charger.is_phase_snapshot_stale(cs)`) while an
+  adoption is live when **either** the snapshot's current **or** its budgeted count
+  disagrees with the adopted count (QS-381 fix #04: a 3->1 split can land the current
+  back on the adopted count while it still budgets the pre-adoption value) — neither
+  can revert the adoption or re-drive the switch.
 - **Amps mismatch while charging** — keeps blocking the group, by design
   (circuit safety: the member may draw more than its budget). It is not
   silent: amps changes are never counted with `register_launch`, so the

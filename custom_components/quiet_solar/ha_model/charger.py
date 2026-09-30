@@ -2266,10 +2266,11 @@ class QSChargerGroup(LogOnChangeMixin):
                 if cs.charger.is_phase_snapshot_stale(cs):
                     _LOGGER.debug(
                         "apply_budgets: dropping stale phase snapshot replay for %s "
-                        "(snapshot %s phases, adopted/expected %s)",
+                        "(snapshot current %s / budgeted %s phases, adopted/expected %s)",
                         cs.name,
                         cs.current_active_phase_number,
-                        cs.charger._expected_num_active_phases.value,
+                        cs.budgeted_num_phases,
+                        cs.charger.expected_num_active_phases,
                     )
                     self.remaining_budget_to_apply = None
                     self.know_reduced_state = None
@@ -2708,17 +2709,26 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         if self._expected_num_active_phases.set(num_phases, time):
             self._phases_adopted_at = None
 
+    @property
+    def expected_num_active_phases(self) -> int | None:
+        """Public read accessor for the expected phase count (QS-381), used in group-side logs."""
+        return self._expected_num_active_phases.value
+
     def is_phase_snapshot_stale(self, cs: QSChargerStatus) -> bool:
-        """QS-381 fix #03: whether a budget snapshot's phase count is stale vs a live adoption.
+        """QS-381 fix #03/#04: whether a budget snapshot's phase count is stale vs a live adoption.
 
         A split budget keeps stale `QSChargerStatus` snapshots in `remaining_budget_to_apply`
-        across cycles. While a phase adoption is live (`_phases_adopted_at` set) and the snapshot
-        was taken at a different phase count than the charger now expects, replaying it would
-        look like a fresh phase request and revert the adoption / re-drive the switch. The group
-        drops the whole stale replay then, instead of reading `_phases_adopted_at` directly."""
-        return (
-            self._phases_adopted_at is not None
-            and cs.current_active_phase_number != self._expected_num_active_phases.value
+        across cycles. While a phase adoption is live (`_phases_adopted_at` set), replaying such a
+        snapshot would look like a fresh phase request and revert the adoption / re-drive the
+        switch. That happens when EITHER the snapshot's CURRENT count disagrees with the live
+        expected value, OR (fix #04) its BUDGETED count does: a 3->1 split applies the 1 first, so
+        the snapshot's current can land back on the adopted count (3) while it still budgets the
+        pre-adoption 1 — `apply_budgets` compares the budget against the live expected, so that
+        replay would still re-drive the switch. The group drops the whole stale replay then,
+        instead of reading `_phases_adopted_at` directly."""
+        expected = self._expected_num_active_phases.value
+        return self._phases_adopted_at is not None and (
+            cs.current_active_phase_number != expected or cs.budgeted_num_phases != expected
         )
 
     def get_stable_dynamic_charge_status(self, time: datetime) -> QSChargerStatus | None:
@@ -2846,7 +2856,12 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             if possible_num_phases is None:
                 possible_num_phases = [cs.current_active_phase_number]
                 # check if we have the right to change phase number
-                if self.can_do_3_to_1_phase_switch():
+                # QS-381 fix #04: never offer a phase change to a switch with no real reading. A
+                # dead/unavailable switch would otherwise be asked for 1 phase again once the
+                # 30 min spacing expires, repeating the adoption cycle (4 launches, ~196 s group
+                # block) and a re-adoption every 30 min without end. `_has_real_phase_reading()`
+                # is True for chargers without a phase switch, so they are unaffected.
+                if self.can_do_3_to_1_phase_switch() and self._has_real_phase_reading():
                     if self._expected_num_active_phases.is_ok_to_set(time, TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES):
                         # we can change the number of phases
                         possible_num_phases = [1, 3]
@@ -5402,6 +5417,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     if (
                         self._has_real_phase_reading()
                         and self._phases_adopted_at is not None
+                        # QS-381 fix #04: defensive — the expiry clear above already drops
+                        # _phases_adopted_at once the window has passed, so this clause is always
+                        # true when the marker is still set; kept to read as an explicit window.
                         and (time - self._phases_adopted_at).total_seconds() < TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES
                     ):
                         # QS-381: the phase switch finally flipped after we already adopted the
@@ -5449,7 +5467,12 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                             self._expected_num_active_phases.value,
                         )
                         await self._follow_observed_num_phases(current_active_phases, time)
-                        self._phases_adopted_at = time
+                        if self._phases_adopted_at is None:
+                            # QS-381 fix #04: only open a fresh window when no adoption is live.
+                            # After a follow, a phantom reading can fall through here and re-adopt
+                            # inside the window; keep the ORIGINAL stamp so the window still counts
+                            # from the first adoption (a re-stamp would let it run forever).
+                            self._phases_adopted_at = time
                     else:
                         _LOGGER.debug(
                             f"Ensure State:{self.name} NOT OK TO LAUNCH num phases {current_active_phases} expected {self._expected_num_active_phases.value}"
