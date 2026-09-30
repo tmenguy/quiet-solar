@@ -639,6 +639,9 @@ class QSChargerStatus:
                     # consign either (the get_stable phase offer is already gated the same way in
                     # fix #04). Keep the current count and clamp the amps to the current-phase steps
                     # (safe_border returns min/max, never None) instead of asking for a switch.
+                    # fix #06: set the current count explicitly here rather than relying on the
+                    # default above, so this branch is self-contained.
+                    possible_num_phases = [self.current_active_phase_number]
                     consign_amp = self.charger._get_amps_from_power_steps(current_steps, power, safe_border=True)
                 else:
                     # need to phase switch to get the minimum asked power (either up or down)
@@ -6279,7 +6282,14 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         if probe_only is False and handled is True:
             if self._expected_charge_state.set(False, time):
                 self._expected_amperage.set(self.charger_default_idle_charge, time)
-                self._expected_num_active_phases.set(self.current_num_phases, time)
+                if self._expected_num_active_phases.set(self.current_num_phases, time) and self._is_phase_adoption_live(
+                    time
+                ):
+                    # QS-381 fix #06: while an adoption is live, an idle-path change of the expected
+                    # phase count is an observation-side change too, so stamp
+                    # `_phases_observed_change_at`. Without it a budget snapshot taken before this
+                    # instant would not be recognised as stale for the one cycle the idle path runs.
+                    self._phases_observed_change_at = time
 
         return handled
 

@@ -174,9 +174,12 @@ async def test_phase_mismatch_not_yet_due_is_not_adopted():
     assert cmd.value == 3
 
 
-async def _drive_to_adoption(group_or_charger, charger, t=T0):
-    """Run ensure cycles until the observed phase count is adopted; return the next time."""
-    while charger._expected_num_active_phases.value != 3:
+async def _drive_to_adoption(group_or_charger, charger, t=T0, observed=3):
+    """Run ensure cycles until the observed phase count is adopted; return the next time.
+
+    `observed` is the count the stuck switch reports (3 when it is stuck `off`/phantom, 1 when it
+    is stuck `on`): the D1 adoption makes the expected count follow it."""
+    while charger._expected_num_active_phases.value != observed:
         if group_or_charger is charger:
             await charger._ensure_correct_state(t)
         else:
@@ -307,12 +310,13 @@ async def test_stale_replayed_budget_after_follow_does_not_revert_adoption():
 
 @pytest.mark.asyncio
 async def test_stale_replay_budgeted_phase_differs_is_stale():
-    """A1 / fix #04 item 1: under a LIVE adoption, a replay whose BUDGETED phase count differs
-    from the live expected value is stale too — not only one whose CURRENT count differs. The
-    3->1 split applies 1 first (expected 1), the switch stays off so D1 adopts 3, then the
-    original snapshot (current 3, budget 1) is replayed: current now equals the adopted 3 so the
-    old check missed it, but the budget still asks for the pre-adoption 1 and would clear the
-    adoption / re-drive the switch. It must be dropped."""
+    """A1 / the fix #04 scenario, now covered by the TIME rule (fix #05). Under a LIVE adoption, a
+    3->1 split applies 1 first (expected 1); the switch stays off so D1 adopts 3, then the original
+    snapshot (current 3, budget 1) is replayed. Its CURRENT count now equals the adopted 3, so the
+    fix #04 value check that keyed on CURRENT would have missed it — but the budget still asks for
+    the pre-adoption 1 and would clear the adoption / re-drive the switch, so it must be dropped.
+    Since fix #05 removed the value clauses, this is now caught purely because the snapshot's
+    `snapshot_time` (T0) predates the adoption's observation change (TIME-based staleness)."""
     hass, home, _states, broken, phase_sw = _build_phase_charger()
     healthy, _cs = _make_healthy(hass, home)
     group = _make_charger_group(home, [broken, healthy])
@@ -343,29 +347,43 @@ async def test_stale_replay_budgeted_phase_differs_is_stale():
 
 
 @pytest.mark.asyncio
-async def test_fresh_post_adoption_split_replay_is_not_dropped():
-    """A1 / fix #05 item 1: staleness is now TIME-based, not value-based. A FRESH split budget
-    built AFTER an adoption is field-for-field identical to the stale one (current 3 / budget 1),
-    but it must NOT be dropped — dropping the whole replay would starve an unrelated healthy
-    charger's legitimate amps increase every cycle for up to 30 min. Replay the fresh snapshots
-    through the real `apply_budgets(check_charger_state=True)` path (the same entry the group uses
-    for `remaining_budget_to_apply`)."""
-    hass, home, _states, broken, _sw = _build_phase_charger()
+@pytest.mark.parametrize(
+    "switch_state, observed, expected_before, fresh_current, fresh_budget",
+    [("off", 3, 1, 3, 1), ("on", 1, 3, 1, 3)],
+)
+async def test_fresh_post_adoption_split_replay_is_not_dropped(
+    switch_state, observed, expected_before, fresh_current, fresh_budget
+):
+    """A1 / fix #05 item 1 — the UNIT test of the stale predicate at the `apply_budgets` boundary.
+
+    It isolates the TIME-based `is_phase_snapshot_stale` rule and the drop guard: both chargers'
+    `_ensure_correct_state` and the group current check are mocked, so it does NOT exercise the
+    real budget machinery — the end-to-end companion below does. Kept as a unit test because it can
+    pin the predicate on exactly the fresh-vs-stale distinction. A FRESH split budget built AFTER
+    an adoption is field-for-field identical to a stale one (same current and budgeted phase
+    counts) but carries a later `snapshot_time`, so it must NOT be dropped — dropping the whole
+    replay would starve an unrelated healthy charger's legitimate amps increase every cycle for up
+    to 30 min. The value-based check of fix #04 wrongly flagged it (budget count != expected) and
+    dropped the replay.
+
+    fix #06 SF-2 parametrises the adoption direction: a 3->1 adoption (switch stuck `off`, fresh
+    snapshot current 3 / budget 1) and a 1->3 adoption (switch stuck `on`, fresh snapshot
+    current 1 / budget 3)."""
+    hass, home, _states, broken, _sw = _build_phase_charger(switch_state=switch_state)
+    broken._expected_num_active_phases.set(expected_before, T0 - timedelta(hours=1))
     healthy, cs_h = _make_healthy(hass, home)
     group = _make_charger_group(home, [broken, healthy])
-    t = await _drive_to_adoption(broken, broken)
-    assert broken._expected_num_active_phases.value == 3 and broken._phases_adopted_at is not None
+    t = await _drive_to_adoption(broken, broken, observed=observed)
+    assert broken._expected_num_active_phases.value == observed and broken._phases_adopted_at is not None
     t += STEP
 
-    # a FRESH post-adoption snapshot (current 3 / budget 1 — identical to the stale one). Its
-    # snapshot_time is AFTER the adoption's observation change, so it is NOT stale. The value-based
-    # check wrongly flagged it (budget 1 != expected 3) and dropped the whole replay.
+    # a FRESH post-adoption snapshot (identical values to a stale one, but later snapshot_time)
     cs_b = broken.get_stable_dynamic_charge_status.return_value
     cs_b.current_real_max_charging_amp = 6
-    cs_b.current_active_phase_number = 3
+    cs_b.current_active_phase_number = fresh_current
     cs_b.budgeted_amp = 6
-    cs_b.budgeted_num_phases = 1
-    cs_b.snapshot_time = t  # fresh, taken after the adoption
+    cs_b.budgeted_num_phases = fresh_budget
+    cs_b.snapshot_time = t  # fresh, taken after the adoption's observation change
     assert broken.is_phase_snapshot_stale(cs_b) is False
 
     # an unrelated healthy charger with a legitimate amps increase (6 -> 10), also fresh
@@ -388,29 +406,114 @@ async def test_fresh_post_adoption_split_replay_is_not_dropped():
 
 
 @pytest.mark.asyncio
+async def test_fresh_split_through_apply_budget_strategy_is_not_dropped():
+    """A1 / fix #06 SF-2 (end-to-end): drive the real `apply_budget_strategy` ->
+    `remaining_budget_to_apply` -> `apply_budgets(check_charger_state=True)` for a split shape the
+    pre-existing #391 double-add does NOT reach: two phase-switching chargers doing EQUAL-amps
+    phase changes, so both land in `remaining_cs` (len > 1) and neither is re-appended by the
+    `budgeted_amp <> current` loop. One charger has a live adoption. The fresh split replay must
+    NOT be dropped by `is_phase_snapshot_stale`, and the budget must land.
+
+    #391 (a pure-increase member added to `increasing_cs` twice, then the replay dropped by
+    `num_ok != len`) masks the plain post-adoption 3->1 split end-to-end; this equal-amps shape
+    avoids it, so it proves the TIME-based staleness rule composes with the real strategy."""
+    hass, home, states, a, _a_sw = _build_phase_charger(name="a", switch_state="off")
+    t = await _drive_to_adoption(a, a)  # A adopts the observed 3 (switch stuck off)
+    assert a._expected_num_active_phases.value == 3 and a._phases_adopted_at is not None
+
+    # B: a second phase-switching charger on the same hass/home, currently on 1 phase, NOT adopted
+    b_sw = "switch.b_phase"
+    b = _create_charger(
+        hass,
+        home,
+        name="b",
+        is_3p=True,
+        **{CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH: b_sw, CONF_CHARGER_PAUSE_RESUME_SWITCH: "switch.b_charge"},
+    )
+    b.attach_car(_make_real_car(hass, home, name="b car"), T0 - timedelta(hours=1))
+    _init_charger_states(b, charge_state=True, amperage=10, num_phases=3)
+    _base_mocks(b)
+    states.set(b_sw, "on", T0 - timedelta(hours=1))  # reads 1 phase
+    assert b._phases_adopted_at is None
+    group = _make_charger_group(home, [a, b])
+
+    # EQUAL-amps phase changes: A does 3->1 at 10 A, B does 1->3 at 10 A (budgeted_amp == current)
+    cs_a = a.get_stable_dynamic_charge_status.return_value
+    cs_a.current_real_max_charging_amp, cs_a.current_active_phase_number = 10, 3
+    cs_a.budgeted_amp, cs_a.budgeted_num_phases = 10, 1
+    cs_a.snapshot_time = t  # fresh, taken after A's adoption
+    cs_b = b.get_stable_dynamic_charge_status.return_value
+    cs_b.current_real_max_charging_amp, cs_b.current_active_phase_number = 10, 1
+    cs_b.budgeted_amp, cs_b.budgeted_num_phases = 10, 3
+    cs_b.snapshot_time = t
+
+    assert a.is_phase_snapshot_stale(cs_a) is False  # fresh -> not stale despite the live adoption
+    assert b.is_phase_snapshot_stale(cs_b) is False  # B has no adoption
+
+    a._ensure_correct_state = AsyncMock()
+    b._ensure_correct_state = AsyncMock()
+    # the strategy splits (worst-case current not acceptable), the replay is acceptable
+    group._is_current_acceptable = MagicMock(side_effect=[False, True])
+    # skip the real decrease apply in the strategy (it would mutate the chargers); the split
+    # classification that fills remaining_budget_to_apply is what we exercise end-to-end
+    real_apply_budgets = group.apply_budgets
+    group.apply_budgets = AsyncMock()
+
+    await group.apply_budget_strategy([cs_a, cs_b], current_real_cars_power=1000.0, time=t)
+
+    # the real strategy split the two equal-amps phase changes into the increase replay
+    remaining = group.remaining_budget_to_apply
+    assert remaining is not None and {cs.charger for cs in remaining} == {a, b}  # not hit by #391
+
+    # replay the increase through the REAL apply_budgets(check_charger_state=True)
+    group.apply_budgets = real_apply_budgets
+    t2 = t + STEP
+    await group.apply_budgets(remaining, [cs_a, cs_b], t2, check_charger_state=True)
+
+    # the fresh replay was NOT dropped by the stale guard, and the phase-change budget lands
+    assert group.remaining_budget_to_apply is not None
+    assert a._expected_num_active_phases.value == 1  # A's 3->1 budget applied
+    assert b._expected_num_active_phases.value == 3  # B's 1->3 budget applied
+
+
+@pytest.mark.asyncio
 async def test_phantom_consign_offers_only_current_phase_count():
-    """fix #05 item 2: `get_consign_amps_values` must not offer the other phase count on a phantom
-    reading. A phantom switch can never succeed, so a consign that can't be met on the current
-    phases keeps the current count and clamps the amps instead of asking for a switch. A
-    real-reading consign is unchanged."""
+    """fix #05 item 2 / fix #06 SF-3: `get_consign_amps_values` must not offer the other phase
+    count on a phantom reading. A phantom switch can never succeed, so a consign that can't be met
+    on the current phases keeps the current count and clamps the amps (to `max_charge` when the
+    consign is above the current-phase range, to `min_charge` when it is below) instead of asking
+    for a switch. A real-reading consign is unchanged (it still offers the other count, #388).
+
+    The phantom state uses `current_active_phase_number = 3`: an `unavailable`/`unknown`/missing
+    switch reads a hard-coded 3, so 3 is the only current count a phantom reading can present.
+    `min_charge`/`max_charge` are 6/32 A for this fixture."""
     _hass, _home, states, ch, phase_sw = _build_phase_charger(name="consign", switch_state="off")
-    cs = QSChargerStatus(ch)
-    cs.current_active_phase_number = 1  # current/expected is 1 phase
-    # a consign the 1-phase setup cannot meet -> the real path would switch to 3 phases
-    cs.command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=15000)
+    assert (ch.min_charge, ch.max_charge) == (6, 32)
 
-    # real reading (switch `off` is a real state): the other phase count IS offered
+    # --- a high consign, above the 3-phase range: the real path would switch phases ---
+    cs_hi = QSChargerStatus(ch)
+    cs_hi.current_active_phase_number = 3
+    cs_hi.command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=50000)
+
+    # real reading (switch `off` is a real state): the other phase count IS offered (#388 scope)
     assert ch._has_real_phase_reading() is True
-    phases_real, amp_real = cs.get_consign_amps_values(consign_is_minimum=True)
-    assert phases_real == [3]
-    assert ch.min_charge <= amp_real <= ch.max_charge
+    phases_real, _amp_real = cs_hi.get_consign_amps_values(consign_is_minimum=True)
+    assert phases_real == [1]
 
-    # phantom reading (switch unavailable): only the current count, amps clamped to current phase
+    # phantom reading (switch unavailable): only the current 3, amps clamped UP to max_charge
     states.set(phase_sw, "unavailable", T0)
     assert ch._has_real_phase_reading() is False
-    phases_phantom, amp_phantom = cs.get_consign_amps_values(consign_is_minimum=True)
-    assert phases_phantom == [cs.current_active_phase_number]
-    assert ch.min_charge <= amp_phantom <= ch.max_charge
+    phases_hi, amp_hi = cs_hi.get_consign_amps_values(consign_is_minimum=True)
+    assert phases_hi == [3]
+    assert amp_hi == ch.max_charge  # exact: 32 A
+
+    # --- a low consign, below the 3-phase minimum: phantom clamps DOWN to min_charge ---
+    cs_lo = QSChargerStatus(ch)
+    cs_lo.current_active_phase_number = 3
+    cs_lo.command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=500)
+    phases_lo, amp_lo = cs_lo.get_consign_amps_values(consign_is_minimum=True)
+    assert phases_lo == [3]
+    assert amp_lo == ch.min_charge  # exact: 6 A
 
 
 @pytest.mark.asyncio
@@ -423,6 +526,48 @@ async def test_reset_state_machine_clears_phase_markers():
     broken._reset_state_machine()
     assert broken._phases_adopted_at is None
     assert broken._phases_observed_change_at is None
+
+
+@pytest.mark.asyncio
+async def test_idle_path_phase_change_stamps_observation_during_live_adoption():
+    """fix #06 polish (NTH-4): while an adoption is live, the idle path
+    (`_probe_and_enforce_stopped_charge_command_state`) can change the expected phase count too
+    (it sets it to `current_num_phases`). That is an observation-side change, so it must stamp
+    `_phases_observed_change_at` — otherwise a budget snapshot taken before the idle-path change
+    is not recognised as stale for the one cycle the idle path runs (the acceptance-auditor's
+    one-cycle residual). A no-op idle-path set (no adoption, or no change) must NOT stamp."""
+    _hass, _home, states, broken, phase_sw = _build_phase_charger()
+    t = await _drive_to_adoption(broken, broken)  # expected 3, adopted, switch stuck "off" (reads 3)
+    adopted_at = broken._phases_adopted_at
+    assert adopted_at is not None
+    assert broken._phases_observed_change_at == adopted_at  # stamped by the D1 adoption
+
+    # the switch now reads "on" (1 phase); still well inside the live 30 min window
+    states.set(phase_sw, "on", t)
+    assert broken.current_num_phases == 1
+    assert broken._is_phase_adoption_live(t) is True
+
+    # the idle path sets the expected count to the observed 1: a change under a live adoption
+    handled = broken._probe_and_enforce_stopped_charge_command_state(t, command=None)
+    assert handled is True
+    assert broken._expected_num_active_phases.value == 1  # idle path changed the expected count
+    assert broken._phases_observed_change_at == t  # fix #06: the change was stamped as observed
+
+
+@pytest.mark.asyncio
+async def test_idle_path_no_change_does_not_stamp_observation():
+    """fix #06 polish (NTH-4): the idle path must NOT stamp `_phases_observed_change_at` when it
+    does not change the expected phase count (here the observed count already equals the expected
+    one), even with a live adoption — the stamp tracks genuine observation-side changes only."""
+    _hass, _home, _states, broken, _sw = _build_phase_charger()
+    t = await _drive_to_adoption(broken, broken)  # expected 3, switch stuck "off" still reads 3
+    assert broken._is_phase_adoption_live(t) is True
+    assert broken.current_num_phases == 3  # equals the adopted expected 3 -> no change
+    broken._phases_observed_change_at = None  # prove the no-op path leaves it untouched
+
+    broken._probe_and_enforce_stopped_charge_command_state(t, command=None)
+    assert broken._expected_num_active_phases.value == 3  # unchanged
+    assert broken._phases_observed_change_at is None  # no observation change -> no stamp
 
 
 @pytest.mark.asyncio
@@ -706,6 +851,11 @@ async def test_phantom_reading_offers_only_current_phase_count():
     cs = broken.get_stable_dynamic_charge_status(T0)
     assert cs is not None
     assert cs.possible_num_phases == [1, 3]
+    # fix #06 SF-1: the production stamp is wired — the real method stamps snapshot_time with the
+    # call time, and duplicate() carries it (both underpin the TIME-based is_phase_snapshot_stale,
+    # so a regression here would silently re-open the fix #03/#04/#05 reverts).
+    assert cs.snapshot_time == T0
+    assert cs.duplicate().snapshot_time == cs.snapshot_time
 
     # a phantom reading (switch unavailable) -> only the current count, no new switch request
     states.set(phase_sw, "unavailable", T0)
