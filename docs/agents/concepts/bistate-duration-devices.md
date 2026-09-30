@@ -10,7 +10,7 @@ covers:
   - custom_components/quiet_solar/ha_model/radiator.py
   - custom_components/quiet_solar/ha_model/bistate_transport.py
   - custom_components/quiet_solar/ha_model/water_boiler.py
-last_verified: 2026-07-31
+last_verified: 2026-09-30
 ---
 
 # Bistate-duration devices (pool, on/off duration, water boiler, climate, radiator)
@@ -344,6 +344,19 @@ transport based on which `CONF_*` the user filled.
   - anything ending before `today_utc`, the `DATETIME_MAX_UTC` sentinel, or
     after `tomorrow_utc`: excluded. Use `== today_utc` (not `<=`) for the
     boundary case so genuinely-old cycles are never resurrected.
+- Carrying the runtime of the **finished previous cycle** into the next one.
+  `check_load_activity_and_constraints` runs *before*
+  `update_live_constraints` has acked an expired constraint, so on the first
+  check after a cycle end (daily rollover, calendar-event boundary) the
+  expired, unmet constraint is still in `_constraints`. The mode-change block
+  therefore ignores every constraint with
+  `end_of_constraint <= time + _CYCLE_END_MARGIN` (5 min) — both in the
+  end-time `mode_changed` detection and in the `saved_runtime` max (override
+  constraints included). Without it, a short day seeded the next day's
+  constraint and the pool ran ~1 h (QS-390). The expired constraint is then
+  dropped silently by `set_live_constraints`' met filter on the new push. Side
+  effect (accepted): a genuine mode switch in the last 5 min of a cycle starts
+  from 0.
 
 ## See also
 

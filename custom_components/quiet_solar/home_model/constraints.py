@@ -2256,6 +2256,18 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         slot_idx=i, commands=None, for_add=True, max_slot_power_headroom=slot_headroom
                     )
 
+                    # QS-390: on-grid, a forced ON (min state hold) slot survives an empty
+                    # production-headroom list: recompute with amps/phase budgeting only.
+                    # Off-grid the headroom is the only physical ceiling, it keeps priority.
+                    if (
+                        len(power_sorted_cmds) == 0
+                        and forced_slot_commands.get(i) is not None
+                        and not self.load.is_off_grid()
+                    ):
+                        power_sorted_cmds, is_current_empty_command, power_piloted_delta = (
+                            self.adapt_power_steps_budgeting(slot_idx=i, commands=None, for_add=True)
+                        )
+
                     # stronger than the forced slots : may be dangerous to output a command if forbidden by amps or other stuffs
                     if len(power_sorted_cmds) == 0:
                         continue

@@ -4,7 +4,7 @@ slug: constraints
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/constraints.py
-last_verified: 2026-07-22
+last_verified: 2026-09-30
 ---
 
 # LoadConstraint
@@ -116,6 +116,15 @@ The five priority tiers (highest first):
 - Picking the wrong tier — `MANDATORY_AS_FAST_AS_POSSIBLE` over-eager
   scheduling that ignores cheap-grid windows; or `FILLER` for a
   user-pinned demand that ends up never running on a cloudy day.
+- Letting the production-headroom guard drop a **forced-ON hold slot**. In
+  `MultiStepsPowerLoadConstraint.compute_best_period_repartition`'s available
+  loop (both `available_only` and `available_and_to_deplete` passes), when the
+  headroom-limited `adapt_power_steps_budgeting` list is empty for a slot the
+  min-state hold forces ON, it is recomputed **without** headroom: on-grid the
+  hold wins and only an amps/phase limit may still drop it. Off-grid the
+  headroom guard keeps priority (no grid to absorb an overshoot). Without it the
+  empty slot 0 became a protected OFF 5 min after every ON (5 on / 15 off
+  pump cycling, QS-390).
 
 ## See also
 

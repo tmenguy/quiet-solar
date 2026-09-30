@@ -2731,3 +2731,210 @@ def test_qs256_hold_off_and_chained_daily_constraint_solver_integration():
             on_seconds += (min(cmd_time, daily_deadline) - last_cmd_time).total_seconds()
         last_cmd_time, last_cmd = cmd_time, cmd
     assert on_seconds >= 3 * 3600.0 * 0.9
+
+
+# =========================================================================
+# QS-390 — pool forced-ON hold slot dropped by the power-headroom guard
+# (RC-2) and first-allocation headroom ignoring the battery (RC-3)
+# =========================================================================
+
+_QS390_NOW = datetime(2026, 9, 29, 19, 23, 29, tzinfo=pytz.UTC)  # 21:23 local
+_QS390_POOL_ON = LoadCommand(command="on", power_consign=1470.0)
+_QS390_POOL_IDLE = LoadCommand(command="idle", power_consign=0.0)
+
+
+def _qs390_pool(now: datetime, *, held_on: bool = True) -> TestLoad:
+    """Piscine: primed idle, then (optionally) turned ON 300 s ago (inside the 600 s hold)."""
+    pool = TestLoad(name="Piscine", min_p=1470, max_p=1470, num_max_on_off=8)
+    pool._ack_command(now - timedelta(hours=1), _QS390_POOL_IDLE)
+    if held_on:
+        pool._ack_command(now - timedelta(seconds=300), _QS390_POOL_ON)
+    return pool
+
+
+def _qs390_constraint(
+    now: datetime, pool: TestLoad, *, target_s: float = 8000.0, end_in_s: float = 9391.0
+) -> TimeBasedSimplePowerLoadConstraint:
+    constraint = TimeBasedSimplePowerLoadConstraint(
+        time=now,
+        load=pool,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=now + timedelta(seconds=end_in_s),
+        initial_value=0,
+        target_value=target_s,
+        power=1470,
+        support_auto=False,
+    )
+    pool.push_live_constraint(now, constraint)
+    return constraint
+
+
+def _qs390_battery() -> Battery:
+    battery = Battery(name="bat")
+    battery.capacity = 10000
+    battery.max_charging_power = 3000
+    battery.max_discharging_power = 3000
+    battery.is_dc_coupled = True
+    battery._current_charge_value = battery.get_value_full() * 0.9
+    return battery
+
+
+def _qs390_solver(
+    now: datetime,
+    pool: TestLoad,
+    *,
+    battery: Battery | None = None,
+    pv_w: float = 0.0,
+    inverter_limit: float | None = 10000,
+) -> PeriodSolver:
+    pv = [(now + timedelta(hours=h), pv_w) for h in range(26)]
+    ua = [(now + timedelta(hours=h), 400.0) for h in range(26)]
+    return PeriodSolver(
+        start_time=now,
+        end_time=now + timedelta(hours=24),
+        tariffs=0.2 / 1000.0,
+        actionable_loads=[pool],
+        battery=battery,
+        pv_forecast=pv,
+        unavoidable_consumption_forecast=ua,
+        max_inverter_dc_to_ac_power=inverter_limit,
+    )
+
+
+def _qs390_first_cmd(solver: PeriodSolver, **solve_kwargs) -> tuple[datetime, LoadCommand]:
+    cmds, _ = solver.solve(**solve_kwargs)
+    return cmds[0][1][0]
+
+
+def test_qs390_t2_forced_on_hold_survives_empty_headroom_night():
+    """T2 (RC-2, night): PV 0, no battery, inverter limit → headroom < 1470 W.
+
+    The load was turned ON 300 s ago, inside the 600 s hold: slot 0 MUST stay ON.
+    """
+    pool = _qs390_pool(_QS390_NOW)
+    constraint = _qs390_constraint(_QS390_NOW, pool)
+
+    # preconditions: the hold is live and slot 0 is forced ON
+    assert pool.last_state_change_time == _QS390_NOW - timedelta(seconds=300)
+    solver = _qs390_solver(_QS390_NOW, pool)
+    forced = constraint._get_forced_slot_commands(solver._time_slots, 0, len(solver._time_slots) - 1)
+    assert forced.get(0) is not None and forced[0].command == "on"
+
+    # control: without an inverter limit (infinite headroom) slot 0 is ON today already
+    control_pool = _qs390_pool(_QS390_NOW)
+    _qs390_constraint(_QS390_NOW, control_pool)
+    t0, cmd0 = _qs390_first_cmd(_qs390_solver(_QS390_NOW, control_pool, inverter_limit=None))
+    assert t0 == _QS390_NOW and cmd0.command == "on"
+
+    t0, cmd0 = _qs390_first_cmd(solver)
+    assert t0 == _QS390_NOW
+    assert cmd0.command == "on"
+
+
+def test_qs390_t2_dawn_forced_on_hold_survives_small_pv_surplus():
+    """T2-dawn (RC-2, dawn): no battery, PV 1000 W flat → slot-0 headroom ~600 W < 1470 W."""
+    pool = _qs390_pool(_QS390_NOW)
+    _qs390_constraint(_QS390_NOW, pool)
+    t0, cmd0 = _qs390_first_cmd(_qs390_solver(_QS390_NOW, pool, pv_w=1000.0))
+    assert t0 == _QS390_NOW
+    assert cmd0.command == "on"
+
+
+def test_qs390_t2_amps_limit_still_beats_forced_on_hold(monkeypatch):
+    """T2-amps (spec): an amps/phase budget too low for 1470 W at slot 0 still wins over the hold."""
+    orig = TimeBasedSimplePowerLoadConstraint.adapt_power_steps_budgeting_low_level
+
+    def amps_forbid_slot_0(self, slot_idx=None, *args, **kwargs):
+        if slot_idx == 0 and self.load is not None and self.load.name == "Piscine":
+            return []
+        return orig(self, slot_idx, *args, **kwargs)
+
+    monkeypatch.setattr(
+        TimeBasedSimplePowerLoadConstraint, "adapt_power_steps_budgeting_low_level", amps_forbid_slot_0
+    )
+
+    pool = _qs390_pool(_QS390_NOW)
+    _qs390_constraint(_QS390_NOW, pool)
+    t0, cmd0 = _qs390_first_cmd(_qs390_solver(_QS390_NOW, pool))
+    assert t0 == _QS390_NOW
+    assert cmd0.is_off_or_idle()
+
+
+def test_qs390_t2_offgrid_headroom_guard_still_beats_forced_on_hold():
+    """T2-offgrid (spec): off-grid, the production-headroom guard keeps priority over the hold."""
+    pool = _qs390_pool(_QS390_NOW)
+    pool.is_off_grid = lambda: True
+    _qs390_constraint(_QS390_NOW, pool)
+    t0, cmd0 = _qs390_first_cmd(_qs390_solver(_QS390_NOW, pool), is_off_grid=True)
+    assert t0 == _QS390_NOW
+    assert cmd0.is_off_or_idle()
+
+
+def test_qs390_t3_first_allocation_headroom_includes_battery_discharge(monkeypatch):
+    """T3 (RC-3): the first allocated constraint's headroom must include battery discharge."""
+    pool = _qs390_pool(_QS390_NOW)
+    _qs390_constraint(_QS390_NOW, pool)
+    solver = _qs390_solver(_QS390_NOW, pool, battery=_qs390_battery())
+
+    # spy installed AFTER construction: __init__ already calls it with the battery
+    seen_discharge: list = []
+    orig_compute = PeriodSolver._compute_max_possible_production
+
+    def spy_compute(self, battery_possible_discharge=None):
+        seen_discharge.append(battery_possible_discharge)
+        return orig_compute(self, battery_possible_discharge=battery_possible_discharge)
+
+    monkeypatch.setattr(PeriodSolver, "_compute_max_possible_production", spy_compute)
+
+    seen_headroom_slot0: list[float] = []
+    orig_repartition = TimeBasedSimplePowerLoadConstraint.compute_best_period_repartition
+
+    def spy_repartition(self, *args, **kwargs):
+        headroom = kwargs.get("power_headroom")
+        if headroom is not None:
+            seen_headroom_slot0.append(float(headroom[0]))
+        return orig_repartition(self, *args, **kwargs)
+
+    monkeypatch.setattr(TimeBasedSimplePowerLoadConstraint, "compute_best_period_repartition", spy_repartition)
+
+    t0, cmd0 = _qs390_first_cmd(solver)
+
+    # the solve() "before first allocation" call receives the battery discharge
+    assert len(seen_discharge) >= 1
+    assert seen_discharge[0] is not None
+    # behavioural: the first allocated constraint sees battery discharge in its slot-0 headroom
+    assert len(seen_headroom_slot0) >= 1
+    assert seen_headroom_slot0[0] >= 1470.0
+    assert t0 == _QS390_NOW
+    assert cmd0.command == "on"
+
+
+def test_qs390_t4_evening_no_flapping_regression_guard():
+    """T4 (guard): evening sim 19:18:27 → 22:00 UTC, every slot mandatory → one ON, no OFF."""
+    start = datetime(2026, 9, 29, 19, 18, 27, tzinfo=pytz.UTC)
+    end = datetime(2026, 9, 29, 22, 0, 0, tzinfo=pytz.UTC)
+    pool = _qs390_pool(start, held_on=False)
+    pool.num_on_off = 14
+    pool.last_state_change_time = None
+
+    target_s = (end - start).total_seconds() + 300.0
+    constraint = _qs390_constraint(start, pool, target_s=target_s, end_in_s=(end - start).total_seconds())
+    battery = _qs390_battery()
+
+    transitions: list[tuple[datetime, str]] = []
+    t = start
+    while t < end:
+        solver = _qs390_solver(t, pool, battery=battery)
+        _, cmd = _qs390_first_cmd(solver)
+        current = pool.current_command
+        if current is None or current.command != cmd.command:
+            pool._ack_command(t + timedelta(seconds=7), cmd)
+            transitions.append((t, cmd.command))
+        if cmd.command == "on":
+            constraint.current_value += 301
+        t = t + timedelta(seconds=301)
+
+    ons = [x for x in transitions if x[1] == "on"]
+    offs = [x for x in transitions if x[1] != "on"]
+    assert len(ons) == 1, transitions
+    assert len(offs) == 0, transitions
