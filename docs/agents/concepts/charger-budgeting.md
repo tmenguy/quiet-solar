@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-09-27
+last_verified: 2026-09-30
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -358,6 +358,19 @@ block the whole group forever. Three pieces now contain it:
   control is held unavailable: on the first detection, then at most every
   `CHARGER_OCPP_STATUS_NUDGE_S` (5 min). The charger answers for every
   connector, which releases the OCPP hold.
+
+**Zero-power alert arms from the first start launch (QS-379).** The "no power
+being delivered to the car" check (SOC callback) needs
+`_expected_charge_state.last_ping_time_success`. `QSStateCmd.register_launch`
+now sets it to the launch time when it is still `None`. Retries do not move it,
+and the first `success()` overwrites it with the success time, so a confirmed
+start is checked from its success as before. A start that never takes effect,
+on any charger type, is checked ~10 min after its first launch, before the F2
+re-arm. The household is notified once per stuck episode:
+`possible_charge_error_start_time` survives the re-arm, and the car card keeps
+showing `CAR_CHARGE_NO_POWER_ERROR` until a check sees power. A faulted
+charger gets no zero-power alert, because `is_load_active=False` skips the SOC
+callback.
 
 ### The plug-state rescue no longer needs a currently-attached car (QS-346)
 

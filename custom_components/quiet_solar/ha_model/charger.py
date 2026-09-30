@@ -356,6 +356,10 @@ class QSStateCmd:
         self.set(value, time)
         self._num_launched += 1
         self.last_time_set = time
+        # QS-379: arm the zero-power alert from the first launch, so a start that
+        # never succeeds still gets checked; the first success() overwrites it.
+        if self.last_ping_time_success is None:
+            self.last_ping_time_success = time
 
 
 class QSChargerStatus:
