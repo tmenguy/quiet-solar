@@ -36,11 +36,12 @@ bistate_modes = [
 DEFAULT_USER_OVERRIDE_DURATION_S = 4 * 3600
 # QS-390: a constraint ending at or before `time + margin` is treated as the
 # finished previous cycle (already ended, or ending within the margin) ONLY
-# when its end is not one of the new cycle's ends and it is not a user
-# override. The mode-change block runs BEFORE update_live_constraints acks an
-# expired constraint, so such a finished-cycle constraint must neither flag a
-# mode change nor seed its runtime. A same-end mode switch (N1) and an override
-# (S1) keep their runtime.
+# when its end is not one of the new cycle's ends and it is not an ON user
+# override (a `TimeBasedHoldOffConstraint` idle override counts OFF-time, so it
+# is skipped, R2-S1). The mode-change block runs BEFORE update_live_constraints
+# acks an expired constraint, so such a finished-cycle constraint must neither
+# flag a mode change nor seed its runtime. A same-end mode switch (N1) and an ON
+# override (S1) keep their runtime.
 _CYCLE_END_MARGIN = timedelta(minutes=5)
 # QS-256: post-override cooldown before a new override can be classified.
 # Bounded at the check site by half the override window.
