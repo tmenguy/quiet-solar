@@ -2402,10 +2402,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         # instead of alerting on the first post-recovery cycle (the frozen
         # `last_ping_time_success` would otherwise already be > the window old).
         self._charger_fault_cleared_at: datetime | None = None
-        # QS-379 S1: tracks when QS last stopped wanting charge (target not True),
-        # used to end a zero-power episode and clear `possible_charge_error_start_time`
-        # once QS has not wanted charge for a full re-check window. None while wanting
-        # charge. Not reset by `reset(keep_commands=True)` (episode bookkeeping).
+        # QS-379 S1: tracks when QS last stopped wanting charge (target not True), used to
+        # end a zero-power episode and clear `possible_charge_error_start_time` once QS has
+        # not wanted charge for CHARGER_NO_POWER_EPISODE_END_S. None while wanting charge.
+        # QS-379 S5: `reset()` clears it too (see there), so a stale "not wanting since"
+        # timestamp from a prior plug session cannot clear a future fresh latch.
         self._no_charge_wanted_since: datetime | None = None
 
         self.charge_state = STATE_UNKNOWN
@@ -3802,10 +3803,14 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         await self._update_charger_fault_state(time)
 
         # QS-379 M1: end-of-episode bookkeeping for the zero-power latch, on the real
-        # every-cycle path. `update_loads_constraints` calls this regardless of
-        # `is_load_active` or whether the SOC callback fires, so the latch clears once
-        # QS stops wanting charge for a sustained period (constraint ends / is met /
-        # charger faulted) instead of living until unplug.
+        # per-load path. `update_loads_constraints` calls `check_load_activity_and_constraints`
+        # for every load regardless of `is_load_active` or whether the SOC callback fires —
+        # i.e. every load-management cycle, except while the home is OFF / SENSORS_ONLY (that
+        # method returns early) and except the boot / pending-reboot early returns above. So
+        # the latch clears once QS stops wanting charge for a sustained period (the constraint
+        # ends or is met, so the target leaves True) instead of living until unplug. A faulted
+        # charger does NOT clear the latch here — a fault need not flip the target False; the
+        # FAULTED car card simply takes display priority over NO_POWER in `get_charge_type`.
         self._update_no_power_episode(time)
 
         await self._on_charger_fault_cycle(time)
@@ -5252,11 +5257,12 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         # QS-379 M1: called every cycle from `check_load_activity_and_constraints`
         # (which `update_loads_constraints` runs regardless of `is_load_active` or
         # whether the SOC callback fires), so the clock still advances once the
-        # constraint ends / is met / the charger is faulted — the SOC-callback path
+        # constraint ends / is met (the target leaves True) — the SOC-callback path
         # only ran while the constraint was unmet and the load active, which let the
-        # latch live until unplug. A missing command object (post `_reset_state_machine`
-        # / OCPP comm-error) counts as "not wanting charge" rather than pausing the
-        # clock.
+        # latch live until unplug. A fault does NOT advance the clock (it need not flip
+        # the target False); the FAULTED card just outranks NO_POWER for display. A
+        # missing command object (post `_reset_state_machine` / OCPP comm-error) counts
+        # as "not wanting charge" rather than pausing the clock.
         wants_charge = self._inner_expected_charge_state is not None and self._expected_charge_state.value is True
         if wants_charge or self.possible_charge_error_start_time is None:
             # Wanting charge keeps the episode live; with nothing latched there is no

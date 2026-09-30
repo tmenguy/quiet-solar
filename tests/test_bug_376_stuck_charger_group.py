@@ -71,8 +71,21 @@ class States:
         return self.values.get(entity_id)
 
 
-def build_stuck_charger(switch_state: str, status: str = "Finishing", hass=None, home=None, states=None):
-    """Real QSChargerOCPP 'wallbox 2 parking' with a real car, stuck wanting to start."""
+def build_stuck_charger(
+    switch_state: str,
+    status: str = "Finishing",
+    hass=None,
+    home=None,
+    states=None,
+    name: str = STUCK_NAME,
+    car_name: str = "ID.buzz",
+):
+    """Real QSChargerOCPP 'wallbox 2 parking' with a real car, stuck wanting to start.
+
+    `name` / `car_name` default to the production-log identities; override them (and pass a
+    shared `states` store) to build several *distinct* stuck chargers (distinct entity ids)
+    in one group — see `test_bug_379`'s per-member independence test (QS-379 S3).
+    """
     if hass is None:
         hass = _make_hass()
     if home is None:
@@ -82,14 +95,18 @@ def build_stuck_charger(switch_state: str, status: str = "Finishing", hass=None,
         states = States()
         hass.states.get = MagicMock(side_effect=states.get)
 
-    charger = _create_ocpp_charger(hass, home, name=STUCK_NAME)
-    car = _make_real_car(hass, home, name="ID.buzz")
+    dev = name.lower().replace(" ", "_")
+    switch_id = f"switch.{dev}_charge_control"
+    status_id = f"sensor.{dev}_status_connector"
+
+    charger = _create_ocpp_charger(hass, home, name=name)
+    car = _make_real_car(hass, home, name=car_name)
 
     t_seed = T0 - timedelta(minutes=10)
-    states.set(STATUS, status, t_seed)
-    states.set(SWITCH, switch_state, t_seed)
+    states.set(status_id, status, t_seed)
+    states.set(switch_id, switch_state, t_seed)
     # plug-probe history >= CHARGER_CHECK_STATE_WINDOW_S of a plugged, not-enabled value
-    charger.add_to_history(STATUS, t_seed)
+    charger.add_to_history(status_id, t_seed)
     charger.add_to_history(charger._internal_fake_is_plugged_id, t_seed)
     charger.attach_car(car, t_seed)
 

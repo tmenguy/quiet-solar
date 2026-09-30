@@ -376,12 +376,19 @@ has not wanted charge (`_expected_charge_state.value is not True`, a missing
 command object counting as "not wanting"); once that exceeds
 `CHARGER_NO_POWER_EPISODE_END_S` the latch is cleared, so the card recovers and a
 genuinely new stuck start later in the same plug session notifies again. It runs
-from **`check_load_activity_and_constraints`** — the real every-cycle path
+from **`check_load_activity_and_constraints`** — the real per-load path
 `Home.update_loads_constraints` drives for every load regardless of
-`is_load_active` or whether the SOC callback fires (review-fix #02 M1); the
-earlier placement in `ensure_correct_state` only ran while the constraint was
-unmet and the load active, so once the constraint ended / was met / the charger
-faulted the latch lived until unplug, and one stuck group member starved the rest.
+`is_load_active` or whether the SOC callback fires (review-fix #02 M1). That is
+every load-management cycle *except* while the home is OFF / SENSORS_ONLY
+(`update_loads_constraints` returns early) and *except* the boot / pending-reboot
+early returns inside `check_load_activity_and_constraints`, so the episode clock is
+frozen in those states rather than advancing (review-fix #03 N1). The earlier
+placement in `ensure_correct_state` only ran while the constraint was unmet and
+the load active, so once the constraint ended or was met the latch lived until
+unplug, and one stuck group member starved the rest. A **faulted** charger does
+not clear the latch on this path (a fault need not flip the target False); the
+FAULTED card simply outranks NO_POWER for display in `get_charge_type`
+(review-fix #03 N1).
 The threshold is set **one re-check window above the off→on re-arm spacing**
 (`TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S`): after a start-stuck
 charger is re-armed through the group (`set(False)`), the soonest the group may

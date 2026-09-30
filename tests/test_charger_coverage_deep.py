@@ -59,12 +59,10 @@ from custom_components.quiet_solar.home_model.constraints import (
     MultiStepsPowerLoadConstraintChargePercent,
 )
 
-_LOGGER = logging.getLogger(__name__)
-
 # QS-379 N6: the generic charger/home/car factories now live in tests.factories
 # (public names); keep the historic private aliases so this module's many call sites
 # and the cross-module importers stay unchanged.
-from tests.factories import (  # noqa: E402
+from tests.factories import (
     create_charger as _create_charger,
     create_ocpp_charger as _create_ocpp_charger,
     make_charger_group as _make_charger_group,
@@ -73,6 +71,8 @@ from tests.factories import (  # noqa: E402
     make_home as _make_home,
     make_real_car as _make_real_car,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 # =============================================================================
 # Shared helpers: only mock what truly needs HA
