@@ -3367,7 +3367,7 @@ class TestEnsureCorrectStateCharger:
         """Lines 3659-3660: reboot asked but not happened -> one_bad=True, returns False."""
         _, _, ch, _, now = self._setup()
         ch._asked_for_reboot_at_time = now - timedelta(minutes=5)
-        ch.check_if_reboot_happened = MagicMock(return_value=False)
+        ch.check_if_reboot_happened = AsyncMock(return_value=False)
         result = await ch._ensure_correct_state(now)
         assert result is False
 
@@ -3376,7 +3376,7 @@ class TestEnsureCorrectStateCharger:
         """Lines 3655-3657: reboot happened -> clears _asked_for_reboot_at_time."""
         _, _, ch, _, now = self._setup()
         ch._asked_for_reboot_at_time = now - timedelta(minutes=5)
-        ch.check_if_reboot_happened = MagicMock(return_value=True)
+        ch.check_if_reboot_happened = AsyncMock(return_value=True)
         ch.is_charge_enabled = MagicMock(return_value=True)
         ch.is_charge_disabled = MagicMock(return_value=False)
         ch.get_charging_current = MagicMock(return_value=10)

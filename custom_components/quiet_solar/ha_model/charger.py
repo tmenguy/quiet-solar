@@ -232,6 +232,9 @@ CHARGER_START_STOP_RETRY_S = 90
 # wait this long before re-arming it through the budgeting group (target reset to
 # idle; the group decides when to start again, with a fresh retry counter).
 CHARGER_START_RETRY_REARM_S = 15 * 60
+# QS-381: longest wait for a requested reboot. A reboot that never happens must not keep
+# the charger (and its budgeting group) waiting forever.
+CHARGER_REBOOT_WAIT_TIMEOUT_S = 10 * 60
 # QS-376: minimum spacing of the OCPP StatusNotification nudge sent while an OCPP
 # charger holds `charge_control` unavailable on a plugged, not-charging connector.
 CHARGER_OCPP_STATUS_NUDGE_S = 5 * 60
@@ -3728,7 +3731,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             self._constraints = []
 
         if self._asked_for_reboot_at_time is not None:
-            return False
+            if not self._is_reboot_wait_expired(time):
+                return False
+            self._give_up_reboot_wait(time)
 
         if self.is_charger_unavailable(time) is False:
             if self.probe_for_possible_needed_reboot(time):
@@ -4976,6 +4981,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         return has_done_change
 
     async def set_charging_current(self, current, time: datetime, force=False, blocking=False) -> bool:
+        # By design, amps changes are NOT counted with `register_launch`: `_expected_amperage`
+        # never runs out of retries, and the set-point is re-sent on every ensure cycle while
+        # it differs. A set-point change does not wear the charger, unlike an on/off cycle or
+        # a phase switch, whose commands are capped (see QS-381).
 
         if not self.can_set_amps_when_not_charging():
             is_charging = self.is_charge_enabled(time)
@@ -5034,6 +5043,19 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             self._asked_for_reboot_at_time = time
             _LOGGER.warning("reboot: %s", self.name)
             await self.low_level_reboot(time)
+
+    def _is_reboot_wait_expired(self, time: datetime) -> bool:
+        # QS-381: a requested reboot is waited for at most CHARGER_REBOOT_WAIT_TIMEOUT_S.
+        return (
+            self._asked_for_reboot_at_time is not None
+            and (time - self._asked_for_reboot_at_time).total_seconds() >= CHARGER_REBOOT_WAIT_TIMEOUT_S
+        )
+
+    def _give_up_reboot_wait(self, time: datetime) -> None:
+        _LOGGER.warning(
+            "%s: reboot asked at %s never happened, giving up the wait", self.name, self._asked_for_reboot_at_time
+        )
+        self._asked_for_reboot_at_time = None
 
     def probe_for_possible_needed_reboot(self, time):
         if self.can_reboot() is False:
@@ -5258,10 +5280,15 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
         if one_bad is False:
             if self._asked_for_reboot_at_time is not None:
-                is_reboot_done = self.check_if_reboot_happened(from_time=self._asked_for_reboot_at_time, to_time=time)
+                is_reboot_done = await self.check_if_reboot_happened(
+                    from_time=self._asked_for_reboot_at_time, to_time=time
+                )
                 if is_reboot_done:
                     _LOGGER.info("Ensure State:%s reboot asked and now restart happened", self.name)
                     self._asked_for_reboot_at_time = None
+                elif self._is_reboot_wait_expired(time):
+                    # QS-381: go on as if it had happened (the done branch only clears it too)
+                    self._give_up_reboot_wait(time)
                 else:
                     _LOGGER.info("Ensure State:%s reboot asked but still not happened", self.name)
                     one_bad = True
@@ -5281,6 +5308,26 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                             f"Ensure State:{self.name} num_phases {current_active_phases} expected {self._expected_num_active_phases.value}"
                         )
                         await self.set_charging_num_phases(num_phases=self._expected_num_active_phases.value, time=time)
+                    elif (
+                        not self._expected_num_active_phases.can_launch()
+                        and self._expected_num_active_phases.last_time_set is not None
+                        and (time - self._expected_num_active_phases.last_time_set).total_seconds()
+                        > self._expected_num_active_phases.command_retries_s
+                    ):
+                        # QS-381: the phase switch never followed. Budget from the observed phase
+                        # count instead of blocking the group forever (set first: a different value
+                        # drops any reboot-on-success callback, for a switch that did not happen).
+                        # The set also restarts the phase-change spacing used by the budget.
+                        _LOGGER.warning(
+                            "Ensure State:%s phase switch never converged after %d launches: "
+                            "adopting the observed %s phases (expected %s)",
+                            self.name,
+                            self._expected_num_active_phases._num_launched,
+                            current_active_phases,
+                            self._expected_num_active_phases.value,
+                        )
+                        self._expected_num_active_phases.set(current_active_phases, time)
+                        await self._expected_num_active_phases.success(time=time)
                     else:
                         _LOGGER.debug(
                             f"Ensure State:{self.name} NOT OK TO LAUNCH num phases {current_active_phases} expected {self._expected_num_active_phases.value}"
@@ -5305,6 +5352,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 # === TRANSITION: charging -> want to stop ===
                 # Set amps to min first, only stop once amps are confirmed
                 amps_confirmed = charging_current_amp == self._expected_amperage.value
+                # only fires if a caller counts amps launches: `set_charging_current` does not,
+                # by design (see its comment)
                 amps_retries_exhausted = not self._expected_amperage.can_launch()
                 one_bad = True  # because of the charge state
 
