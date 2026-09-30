@@ -415,6 +415,8 @@ class QSChargerStatus:
         # QS-381 fix #05: when this snapshot was built, used for TIME-based staleness in
         # is_phase_snapshot_stale (a snapshot taken before the latest observation-side phase
         # change is stale). Stamped in get_stable_dynamic_charge_status; carried by duplicate().
+        # Invariant: `None` means "never stale" (is_phase_snapshot_stale returns False); every
+        # stored snapshot comes from get_stable_dynamic_charge_status, which always stamps it.
         self.snapshot_time: datetime | None = None
 
     def duplicate(self):
@@ -2495,8 +2497,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         # of re-driving it; a genuine new budget phase request clears it.
         self._phases_adopted_at: datetime | None = None
         # QS-381 fix #05: when the expected phase count last changed from an OBSERVATION (the D1
-        # adoption or a follow), not from a budget. is_phase_snapshot_stale drops a replayed
-        # snapshot taken before this instant while an adoption is live (TIME-based, not value).
+        # adoption, a follow, and the idle-path set while an adoption is live), not from a budget.
+        # is_phase_snapshot_stale drops a replayed snapshot taken before this instant while an
+        # adoption is live (TIME-based, not value).
         self._phases_observed_change_at: datetime | None = None
 
         self.possible_charge_error_start_time: datetime | None = None
@@ -2620,11 +2623,12 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
         For a switch-based 3->1 charger, current_num_phases returns a hard-coded 3 when the
         phase switch entity is missing, `unknown` or `unavailable`. *Following* that phantom
-        count (fix #03: only the follow branch of `_ensure_correct_state` is gated on this)
-        would lock in a phase number the charger never reported, so a phantom is never followed.
-        It is still *adopted* once the launch retries run out, which is bounded and safe (it
-        over-counts per-phase current). Chargers whose phase count comes from elsewhere always
-        have a real reading."""
+        count would lock in a phase number the charger never reported. Three gates consult this:
+        the follow branch of `_ensure_correct_state` (fix #03), the phase offer in
+        `get_stable_dynamic_charge_status` (fix #04), and `get_consign_amps_values` (fix #05).
+        The launch/adoption path is never gated on it: a phantom is still *adopted* once the
+        launch retries run out, which is bounded and safe (it over-counts per-phase current).
+        Chargers whose phase count comes from elsewhere always have a real reading."""
         if self.can_do_3_to_1_phase_switch() and self.physical_3p:
             state = self.hass.states.get(self.charger_three_to_one_phase_switch)
             return state is not None and state.state in (STATE_ON, STATE_OFF)
@@ -2632,7 +2636,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
     def _is_phase_adoption_live(self, time: datetime) -> bool:
         """QS-381 fix #05: one source of truth for "a phase adoption is live", i.e. adopted and
-        still inside the 30 min follow window. Used by the expiry clear and the follow gate."""
+        still inside the 30 min follow window. Used by the expiry clear, the follow gate, and the
+        idle-path stamp."""
         return (
             self._phases_adopted_at is not None
             and (time - self._phases_adopted_at).total_seconds() < TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES
@@ -2782,9 +2787,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         the observed count instead of re-driving the switch).
 
         This is the BUDGET side; it does NOT stamp `_phases_observed_change_at` (that tracks
-        observation-side changes only — the D1 adoption and the follow, see
-        `_follow_observed_num_phases`). A stale split replay is dropped before it reaches here
-        by `is_phase_snapshot_stale` (TIME-based since fix #05)."""
+        observation-side changes only — the D1 adoption, the follow (see
+        `_follow_observed_num_phases`), and the idle-path set while an adoption is live). A stale
+        split replay is dropped before it reaches here by `is_phase_snapshot_stale` (TIME-based
+        since fix #05)."""
         if self._expected_num_active_phases.set(num_phases, time):
             self._phases_adopted_at = None
 
@@ -2843,8 +2849,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         cs = QSChargerStatus(self)
         # QS-381 fix #05: stamp the snapshot so TIME-based staleness (is_phase_snapshot_stale)
         # can tell a fresh post-adoption budget from one taken before the latest observation
-        # change. The idle-path set (~:6053) needs no stamp: it changes no snapshot and never
-        # sets _phases_adopted_at, so it can never mark a snapshot stale on its own.
+        # change. The idle path stamps `_phases_observed_change_at` itself while an adoption is
+        # live and builds no snapshot, so it needs no `snapshot_time`.
         cs.snapshot_time = time
 
         cs.accurate_current_power = self.get_median_sensor(

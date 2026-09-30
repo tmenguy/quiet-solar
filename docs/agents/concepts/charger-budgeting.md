@@ -407,13 +407,15 @@ expected state are bounded or contained too (QS-381):
   snapshot is dropped (`charger.is_phase_snapshot_stale(cs)`). Since QS-381 fix #05
   staleness is **TIME-based**, not value-based: while an adoption is live, a snapshot is
   stale only when its `snapshot_time` predates the latest *observation-side* phase change
-  (`_phases_observed_change_at`, stamped on the D1 adoption and every follow in
-  `_follow_observed_num_phases`). This drops the genuinely stale replays (fix #03's
+  (`_phases_observed_change_at`, stamped on the D1 adoption, every follow in
+  `_follow_observed_num_phases`, and the idle-path set while an adoption is live). This
+  drops the genuinely stale replays (fix #03's
   follow-after-snapshot and fix #04's 3->1 split) but no longer drops a **fresh**
   post-adoption split budget — which is field-for-field identical to the stale one
   (current 3 / budget 1) yet must land, so an unrelated charger's amps increase in the
   same replay is not starved. `_is_phase_adoption_live(time)` is the single "adoption is
-  live" predicate shared by the window-expiry clear and the follow gate.
+  live" predicate shared by the window-expiry clear, the follow gate, and the idle-path
+  stamp.
 - **Amps mismatch while charging** — keeps blocking the group, by design
   (circuit safety: the member may draw more than its budget). It is not
   silent: amps changes are never counted with `register_launch`, so the

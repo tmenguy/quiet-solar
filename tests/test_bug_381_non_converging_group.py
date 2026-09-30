@@ -282,15 +282,24 @@ async def test_stale_replayed_budget_after_follow_does_not_revert_adoption():
     stale.current_active_phase_number = 3
     stale.budgeted_amp = 6
     stale.budgeted_num_phases = 3
-    # fix #05: staleness is now TIME-based. This snapshot was taken before the follow below
-    # changes the observed phase count, so stamp it before any observation-side change.
-    stale.snapshot_time = T0
+    # fix #07: pin that the follow stamps `_phases_observed_change_at`. Stamp the snapshot AT the
+    # D1 adoption's observation change (not the earlier T0), so it is NOT stale yet — only a LATER
+    # observation change can make it stale. If `_follow_observed_num_phases` stopped stamping on
+    # the follow below, `_phases_observed_change_at` would stay at the adoption stamp, the snapshot
+    # would never become stale, and the post-follow assertion would fail.
+    adoption_stamp = broken._phases_observed_change_at
+    assert adoption_stamp is not None
+    stale.snapshot_time = adoption_stamp
+    assert broken.is_phase_snapshot_stale(stale) is False
 
     # cycle N+1: the switch finally flips on -> the follow sets the expected count to 1
     states.set(phase_sw, "on", t)
     await broken._ensure_correct_state(t)
     assert broken._expected_num_active_phases.value == 1
     assert broken._phases_adopted_at is not None
+    # the follow stamped a LATER observation change, so the pre-follow snapshot is now stale
+    assert broken._phases_observed_change_at > adoption_stamp
+    assert broken.is_phase_snapshot_stale(stale) is True
 
     broken.set_charging_num_phases = AsyncMock(wraps=broken.set_charging_num_phases)
     phase_calls_before = _calls_on(hass, phase_sw)
@@ -452,8 +461,16 @@ async def test_fresh_split_through_apply_budget_strategy_is_not_dropped():
 
     a._ensure_correct_state = AsyncMock()
     b._ensure_correct_state = AsyncMock()
-    # the strategy splits (worst-case current not acceptable), the replay is acceptable
-    group._is_current_acceptable = MagicMock(side_effect=[False, True])
+    # the strategy splits (worst-case current not acceptable), the replay is acceptable.
+    # fix #07: a robust callable (False on the first call, True after) rather than a fixed
+    # side_effect list, which would raise StopIteration if this is consulted a third time.
+    _acceptable_calls = {"n": 0}
+
+    def _acceptable(*_args, **_kwargs):
+        _acceptable_calls["n"] += 1
+        return _acceptable_calls["n"] > 1
+
+    group._is_current_acceptable = MagicMock(side_effect=_acceptable)
     # skip the real decrease apply in the strategy (it would mutate the chargers); the split
     # classification that fills remaining_budget_to_apply is what we exercise end-to-end
     real_apply_budgets = group.apply_budgets
