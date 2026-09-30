@@ -120,8 +120,10 @@ The five priority tiers (highest first):
   `MultiStepsPowerLoadConstraint.compute_best_period_repartition`'s available
   loop (both `available_only` and `available_and_to_deplete` passes), when the
   headroom-limited `adapt_power_steps_budgeting` list is empty for a slot the
-  min-state hold forces ON, it is recomputed **without** headroom: on-grid the
-  hold wins and only an amps/phase limit may still drop it. Off-grid the
+  min-state hold forces ON, it is recomputed **without** headroom and clamped to
+  its **smallest step** (`power_sorted_cmds[:1]`), so the hold is kept at the
+  minimum, never a higher step the exhausted headroom cannot cover (N2). On-grid
+  the hold wins and only an amps/phase limit may still drop it. Off-grid the
   headroom guard keeps priority (no grid to absorb an overshoot). Without it the
   empty slot 0 became a protected OFF 5 min after every ON (5 on / 15 off
   pump cycling, QS-390).

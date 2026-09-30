@@ -349,14 +349,16 @@ transport based on which `CONF_*` the user filled.
   `update_live_constraints` has acked an expired constraint, so on the first
   check after a cycle end (daily rollover, calendar-event boundary) the
   expired, unmet constraint is still in `_constraints`. The mode-change block
-  therefore ignores every constraint with
-  `end_of_constraint <= time + _CYCLE_END_MARGIN` (5 min) — both in the
-  end-time `mode_changed` detection and in the `saved_runtime` max (override
-  constraints included). Without it, a short day seeded the next day's
-  constraint and the pool ran ~1 h (QS-390). The expired constraint is then
-  dropped silently by `set_live_constraints`' met filter on the new push. Side
-  effect (accepted): a genuine mode switch in the last 5 min of a cycle starts
-  from 0.
+  therefore treats a constraint as the finished previous cycle — skipping it in
+  the end-time `mode_changed` detection and in the `saved_runtime` max — only
+  when `end_of_constraint <= time + _CYCLE_END_MARGIN` (5 min) **and** its end
+  is not one of the new cycle's ends **and** it is not a user override. A
+  same-end mode switch (N1) and an override ending in the last minutes (S1) keep
+  their runtime. Without the margin a short day seeded the next day's constraint
+  and the pool ran ~1 h (QS-390). The expired constraint is then dropped
+  silently by `set_live_constraints`' met filter on the new push. Side effect
+  (accepted): a genuine mode switch to a **different-ended** cycle in the last
+  5 min starts from 0.
 
 ## See also
 

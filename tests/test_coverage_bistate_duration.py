@@ -1132,6 +1132,87 @@ class TestQS390RolloverCarryOver:
         assert len(new_cts) == 1
         assert new_cts[0].current_value == 0
 
+    @pytest.mark.asyncio
+    async def test_s1_override_runtime_in_margin_is_carried_on_mode_switch(self, hass, device):
+        """S1: an override ending within the 5-min margin still carries its runtime on a mode switch.
+
+        The margin skip must not drop a user-override's runtime: an override
+        counts toward the daily target, so switching the mode string in its last
+        minutes still seeds the new constraint with the override's runtime
+        (capped at the new target).
+        """
+        t = datetime.datetime(2026, 9, 30, 4, 56, 0, tzinfo=pytz.UTC)  # 06:56 local
+        device.is_load_command_set = MagicMock(return_value=False)
+        device.default_on_duration = 8.0
+        device.default_on_finish_time = dt_time(hour=7, minute=0, second=0)
+        override_ct = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=t - timedelta(hours=2),
+            load=device,
+            from_user=True,
+            load_info={"originator": "user_override"},
+            end_of_constraint=t + timedelta(minutes=4),
+            power=device.power_use,
+            initial_value=0,
+            current_value=7080.0,  # 1h58 of override runtime
+            target_value=8 * 3600.0,
+        )
+        device._constraints = [override_ct]
+        device._previous_bistate_mode = "bistate_mode_default"
+
+        force_on_end = datetime.datetime(2026, 9, 30, 22, 0, 0, tzinfo=pytz.UTC)  # next local midnight
+        device.get_proper_local_adapted_tomorrow = MagicMock(return_value=force_on_end)
+        device.bistate_mode = "bistate_mode_on"
+
+        await device.check_load_activity_and_constraints(t)
+
+        force_on_cts = _qs390_ct_ending(device, force_on_end)
+        assert len(force_on_cts) == 1
+        assert force_on_cts[0].current_value == 7080.0
+        # the override itself is preserved (mode-change removal keeps overrides)
+        assert override_ct in device._constraints
+
+    @pytest.mark.asyncio
+    async def test_n1_same_end_mode_switch_in_margin_carries_runtime(self, hass, device):
+        """N1: a same-end mode switch within the margin keeps the current cycle's runtime.
+
+        The margin skip must not drop a constraint whose end is one of the new
+        cycle's ends (the CURRENT cycle, not the finished previous one): carrying
+        min(run, new_target) still lets the new mode's constraint be met.
+        """
+        now = _QS390_T - timedelta(minutes=3)  # 23:57 local, cycle ends at local midnight
+        end = _QS390_T  # 00:00 local, same end for the old auto and the new winter cycle
+        device.is_load_command_set = MagicMock(return_value=False)
+        device.default_on_duration = 4.0  # winter target 4 h
+        device.default_on_finish_time = dt_time(hour=0, minute=0, second=0)
+        device.get_next_time_from_hours = MagicMock(return_value=end)
+        existing_ct = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=now - timedelta(hours=20),
+            load=device,
+            from_user=False,
+            end_of_constraint=end,
+            power=device.power_use,
+            initial_value=0,
+            current_value=5 * 3600.0,  # 5 h run in the auto cycle
+            target_value=12 * 3600.0,
+        )
+        device._constraints = [existing_ct]
+        device._previous_bistate_mode = "bistate_mode_auto"
+        device.bistate_mode = "bistate_mode_default"
+
+        await device.check_load_activity_and_constraints(now)
+
+        # min(5 h run, 4 h winter target) carried → the new winter cycle is met.
+        # A met constraint is completed and removed from the live list, so assert
+        # the carry either on a still-present constraint or on the completed one.
+        new_cts = _qs390_ct_ending(device, end)
+        lcc = device._last_completed_constraint
+        carried_met = (new_cts and new_cts[0].current_value == 4 * 3600.0) or (
+            lcc is not None and lcc.end_of_constraint == end and lcc.current_value >= 4 * 3600.0
+        )
+        assert carried_met
+
 
 # ===================================================================
 # Finding 6: Off-mode (AC 4) — switching to off clears constraints,

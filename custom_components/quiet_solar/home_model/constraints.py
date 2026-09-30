@@ -2267,6 +2267,11 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         power_sorted_cmds, is_current_empty_command, power_piloted_delta = (
                             self.adapt_power_steps_budgeting(slot_idx=i, commands=None, for_add=True)
                         )
+                        # QS-390 (N2): production headroom is exhausted here, so only the
+                        # minimum step is justified to keep the hold. power_sorted_cmds is
+                        # sorted ascending, so keep the smallest command only.
+                        if len(power_sorted_cmds) > 0:
+                            power_sorted_cmds = power_sorted_cmds[:1]
 
                     # stronger than the forced slots : may be dangerous to output a command if forbidden by amps or other stuffs
                     if len(power_sorted_cmds) == 0:

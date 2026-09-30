@@ -34,10 +34,13 @@ bistate_modes = [
 ]
 
 DEFAULT_USER_OVERRIDE_DURATION_S = 4 * 3600
-# QS-390: a constraint ending at or before `time + margin` is the finished
-# previous cycle (already ended, or ending within the margin). The mode-change
-# block runs BEFORE update_live_constraints acks an expired constraint, so such
-# a constraint must neither flag a mode change nor seed its runtime.
+# QS-390: a constraint ending at or before `time + margin` is treated as the
+# finished previous cycle (already ended, or ending within the margin) ONLY
+# when its end is not one of the new cycle's ends and it is not a user
+# override. The mode-change block runs BEFORE update_live_constraints acks an
+# expired constraint, so such a finished-cycle constraint must neither flag a
+# mode change nor seed its runtime. A same-end mode switch (N1) and an override
+# (S1) keep their runtime.
 _CYCLE_END_MARGIN = timedelta(minutes=5)
 # QS-256: post-override cooldown before a new override can be classified.
 # Bounded at the check site by half the override window.
@@ -1127,8 +1130,21 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     # Save runtime from ALL constraints (override counts toward
                     # daily target just like force-on)
                     for c in self._constraints:
-                        # QS-390: never carry the runtime of the finished previous cycle
-                        if c.end_of_constraint <= cycle_end_limit:
+                        is_override = (
+                            c.load_info is not None
+                            and c.load_info.get(CONSTRAINT_ORIGINATOR_KEY, "") == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
+                        )
+                        # QS-390: never carry the runtime of the finished
+                        # previous cycle — a non-override constraint that ends
+                        # within the margin AND whose end is not one of the new
+                        # cycle's ends. A same-end mode switch (N1, end kept in
+                        # new_ends) or a user override (S1) still carries its
+                        # runtime.
+                        if (
+                            c.end_of_constraint <= cycle_end_limit
+                            and c.end_of_constraint not in new_ends
+                            and not is_override
+                        ):
                             continue
                         if c.current_value > saved_runtime:
                             saved_runtime = c.current_value
