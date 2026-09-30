@@ -371,23 +371,45 @@ re-arm. The household is notified once per stuck episode:
 showing `CAR_CHARGE_NO_POWER_ERROR` until a check sees power.
 
 The episode is bounded so the latch cannot outlive the stuck start (QS-379
-review-fix #01). `ensure_correct_state` tracks how long QS has not wanted charge
-(`_expected_charge_state.value is not True`); once that exceeds one re-check
-window (600 s) the latch is cleared, so the card recovers and a genuinely new
-stuck start later in the same plug session notifies again. The F2 re-arm a few
-cycles after REARM keeps the latch (the gap is shorter than the window); "next
-morning" starts a fresh episode. A genuine car swap (`attach_car` with a
-different car than the one last attached) also clears the latch, while pure
-allocation churn (detach/re-attach of the same car) keeps it.
+review-fix #01, corrected in #02). `_update_no_power_episode` tracks how long QS
+has not wanted charge (`_expected_charge_state.value is not True`, a missing
+command object counting as "not wanting"); once that exceeds
+`CHARGER_NO_POWER_EPISODE_END_S` the latch is cleared, so the card recovers and a
+genuinely new stuck start later in the same plug session notifies again. It runs
+from **`check_load_activity_and_constraints`** — the real every-cycle path
+`Home.update_loads_constraints` drives for every load regardless of
+`is_load_active` or whether the SOC callback fires (review-fix #02 M1); the
+earlier placement in `ensure_correct_state` only ran while the constraint was
+unmet and the load active, so once the constraint ended / was met / the charger
+faulted the latch lived until unplug, and one stuck group member starved the rest.
+The threshold is set **one re-check window above the off→on re-arm spacing**
+(`TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S`): after a start-stuck
+charger is re-armed through the group (`set(False)`), the soonest the group may
+re-set `True` is that spacing, so the latch survives a normal F2 re-arm driven
+cycle-by-cycle and is only dropped when the charger is left genuinely idle ("next
+morning"). The end-of-episode clock is reset whenever a fresh latch is set and in
+`reset()`, so a stale timestamp cannot clear a new latch on its first not-wanted
+cycle (review-fix #02 S5). A genuine swap of one **real** car for a **different
+real** car (`attach_car`, compared by car *name* so a config-reload refresh of the
+same car is not a swap, and ignoring transitions to/from the per-charger default
+generic car) clears the latch and re-arms the zero-power reference so the new car
+gets its own window; pure allocation churn (detach/re-attach of the same car)
+keeps it (review-fix #02 S4).
 
 Fault recovery does not chase the QS-346 fault alert with a zero-power one
-(QS-379 review-fix #01). The SOC callback is gated off while a charger is
-faulted (`is_load_active=False`), so `last_ping_time_success` freezes and would
-be stale the instant the charger recovers. The fault state machine records when
-a fault last cleared (`_charger_fault_cleared_at`); while the charger is faulted
-or the fault cleared less than one window ago, the zero-power check skips and
-re-arms the reference, giving the restarted charger its own full window before
-any alert. A still-faulted charger gets no zero-power alert at all, because
+(QS-379 review-fix #01, tightened in #02). The SOC callback is gated off while a
+charger is faulted (`is_load_active=False`), so `last_ping_time_success` freezes
+and would be stale the instant the charger recovers. The fault state machine
+records when a **real** fault last cleared (`_charger_fault_cleared_at`, only for
+a fault that held at least `CHARGER_FAULT_NOTIFY_DEBOUNCE_S` — a sub-debounce
+`unavailable`/`unknown` status blip no longer refreshes the grace, so a stuck
+charger with a flaky status entity is still alerted on schedule, review-fix #02
+S2). While the charger is in a real fault or a real fault cleared less than one
+window ago, the zero-power check skips and re-arms the reference **to the recovery
+time** (`max(last_ping_time_success, _charger_fault_cleared_at)`, review-fix #02
+S3) — not to `now`, which could push the next check a whole F2 round later — so
+the restarted charger's first real check lands exactly one full window after
+recovery. A still-faulted charger gets no zero-power alert at all, because
 `is_load_active=False` skips the SOC callback — only the QS-346 fault alert is
 sent, so there is no double alert.
 

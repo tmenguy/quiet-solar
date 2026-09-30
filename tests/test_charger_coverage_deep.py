@@ -66,23 +66,11 @@ _LOGGER = logging.getLogger(__name__)
 # and the cross-module importers stay unchanged.
 from tests.factories import (  # noqa: E402
     create_charger as _create_charger,
-)
-from tests.factories import (
     create_ocpp_charger as _create_ocpp_charger,
-)
-from tests.factories import (
     make_charger_group as _make_charger_group,
-)
-from tests.factories import (
     make_entity_entry as _make_entity_entry,
-)
-from tests.factories import (
     make_hass as _make_hass,
-)
-from tests.factories import (
     make_home as _make_home,
-)
-from tests.factories import (
     make_real_car as _make_real_car,
 )
 
