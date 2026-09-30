@@ -1869,7 +1869,7 @@ async def test_charger_ensure_correct_state_phase_change(
 
     charger_device.is_in_state_reset = MagicMock(return_value=False)
     charger_device._asked_for_reboot_at_time = datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC)
-    charger_device.check_if_reboot_happened = MagicMock(return_value=True)
+    charger_device.check_if_reboot_happened = AsyncMock(return_value=True)
     charger_device.update_data_request = AsyncMock()
     charger_device.set_charging_num_phases = AsyncMock()
     charger_device.is_charge_enabled = MagicMock(return_value=True)

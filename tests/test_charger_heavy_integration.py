@@ -10,7 +10,7 @@ Uses pytest-asyncio for proper async testing and comprehensive mocking.
 """
 
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, Mock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 import pytz
@@ -574,7 +574,7 @@ class TestEnsureCorrectStateInternal:
 
         with (
             patch.object(charger, "is_in_state_reset", return_value=False),
-            patch.object(charger, "check_if_reboot_happened", new_callable=Mock, return_value=True),
+            patch.object(charger, "check_if_reboot_happened", new_callable=AsyncMock, return_value=True),
             patch.object(type(charger), "current_num_phases", new_callable=PropertyMock, return_value=3),
             patch.object(charger, "is_charge_enabled", return_value=True),
             patch.object(charger, "is_charge_disabled", return_value=False),

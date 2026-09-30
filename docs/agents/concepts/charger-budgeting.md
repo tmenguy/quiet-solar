@@ -317,7 +317,7 @@ the status itself is valid, so `check_charge_state` answers `False` (not
 branch. The QS-346 alert uses an OCPP-specific text
 (`_charger_fault_message`, overridable per charger type).
 
-### A start-stuck charger does not starve the group (QS-376)
+### Non-converging members (QS-376, QS-381)
 
 `QSChargerGroup.ensure_correct_state` returns no actionable charger as
 soon as one member is not in its expected state. A charger whose start
@@ -340,7 +340,7 @@ block the whole group forever. Three pieces now contain it:
   charger-group budget: a non-charger load in the same dynamic group
   checks `is_delta_current_acceptable` directly.
   The *want to stop but still charging* direction keeps blocking the
-  group.
+  group (#386).
 - **Re-arm through the group (F2)** — in the start branch of
   `_ensure_correct_state`, once `CHARGER_START_RETRY_REARM_S` (15 min)
   has passed since the last launch, the target goes back to `False` and
@@ -358,6 +358,78 @@ block the whole group forever. Three pieces now contain it:
   control is held unavailable: on the first detection, then at most every
   `CHARGER_OCPP_STATUS_NUDGE_S` (5 min). The charger answers for every
   connector, which releases the OCPP hold.
+
+The other checks of `_ensure_correct_state` that can keep a member not in its
+expected state are bounded or contained too (QS-381):
+
+- **Phase switch that never follows** — after 4 `set_charging_num_phases`
+  launches plus their `STATE_CMD_TIME_BETWEEN_RETRY_S` retry delay (about
+  3:16 on a 7 s cycle), the observed `current_num_phases` is adopted as the
+  expected phase count (WARNING log) and the group is unblocked on the next
+  cycle. Budgeting reads the expected phase count, so it then budgets from
+  reality. The adoption restarts the 30 min
+  `TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES` spacing, which gates the phase
+  offer of non-consign commands. Consign commands pick phases in
+  `get_consign_amps_values` without that 30 min gate, so on a *real* reading they
+  can ask for the switch again right away (#388); on a **phantom** reading the
+  consign path no longer offers the other count either — it keeps `[current]` and
+  clamps the amps to the current-phase steps (QS-381 fix #05), because a phantom
+  switch can never succeed. If the switch finally flips *after* the adoption
+  (tracked by `_phases_adopted_at`), the expected count follows the observed
+  value instead of re-driving the switch back (which would register a spurious
+  reboot). The follow window counts from the **original** adoption — a follow
+  never refreshes `_phases_adopted_at` — so a flapping switch cannot hold the
+  window open forever; past the 30 min window a flip takes the normal launch
+  path (re-driven toward the still-expected count). A phantom reading (a missing,
+  `unknown` or `unavailable` switch reads a hard-coded 3) is never *followed* —
+  `_has_real_phase_reading()` gates only the **follow branch** (QS-381 fix #03) —
+  but it still falls through to the normal launch / adoption path and is *adopted*
+  once the launch retries run out, exactly like a real `off` reading. Adopting the
+  phantom 3 is bounded and safe (it over-counts per-phase current, which is
+  conservative), so a permanently unavailable switch no longer blocks the group
+  forever. The **phase offer** is also gated on a real reading: `get_stable_dynamic_charge_status`
+  offers `[1, 3]` only when `_has_real_phase_reading()` (QS-381 fix #04) — otherwise
+  a dead switch would be asked for 1 phase again the moment the 30 min spacing
+  expires, repeating the 4-launch adoption cycle every 30 min without end; it is
+  offered only `[current]` instead. Chargers without a phase switch always have a
+  real reading, so they are unaffected. Once the adoption window has expired,
+  `_phases_adopted_at` is cleared in `_ensure_correct_state` so "an adoption is live"
+  is literally true only inside the window; a D1 re-adoption inside a live window
+  keeps the **original** stamp (it never re-opens the window, QS-381 fix #04). A
+  genuine new budget phase request clears the adoption — the budget entry point is
+  `set_expected_num_active_phases`, which drops `_phases_adopted_at` whenever the
+  requested value actually changes — so a real switch is launched again.
+  `apply_budgets` routes a phase count through that entry point only when the budget
+  actually asks for a phase change, comparing the budgeted count against the **live**
+  expected count (via the public `expected_num_active_phases` accessor, not the frozen
+  snapshot — so a budget applied after the expected count changed underneath is never
+  silently skipped), and a `check_charger_state` replay of a **stale** split-budget
+  snapshot is dropped (`charger.is_phase_snapshot_stale(cs)`). Since QS-381 fix #05
+  staleness is **TIME-based**, not value-based: while an adoption is live, a snapshot is
+  stale only when its `snapshot_time` predates the latest *observation-side* phase change
+  (`_phases_observed_change_at`, stamped on the D1 adoption, every follow in
+  `_follow_observed_num_phases`, and the idle-path set while an adoption is live). This
+  drops the genuinely stale replays (fix #03's
+  follow-after-snapshot and fix #04's 3->1 split) but no longer drops a **fresh**
+  post-adoption split budget — which is field-for-field identical to the stale one
+  (current 3 / budget 1) yet must land, so an unrelated charger's amps increase in the
+  same replay is not starved. `_is_phase_adoption_live(time)` is the single "adoption is
+  live" predicate shared by the window-expiry clear, the follow gate, and the idle-path
+  stamp.
+- **Amps mismatch while charging** — keeps blocking the group, by design
+  (circuit safety: the member may draw more than its budget). It is not
+  silent: amps changes are never counted with `register_launch`, so the
+  set-point is re-sent on every cycle and the block ends as soon as the
+  charger follows. A set-point that stays below the budget (#387) and the stop
+  direction (#386) are follow-ups.
+- **Requested reboot that never happens** — `check_if_reboot_happened` is
+  awaited, and the wait is bounded by `CHARGER_REBOOT_WAIT_TIMEOUT_S` (10 min)
+  in both `_ensure_correct_state` and the `check_load_activity_and_constraints`
+  guard (`_is_reboot_wait_expired` / `_give_up_reboot_wait`, WARNING log). No
+  charger can arm a reboot wait today (no reboot button is configurable).
+- **Start-stuck member behind one of those checks** — the group still calls
+  its `ensure_correct_state` every cycle, so once the earlier check clears in
+  bounded time, the F2 re-arm runs (QS-376 review EC9).
 
 **Zero-power alert arms from the first start launch (QS-379).** The "no power
 being delivered to the car" check (SOC callback) needs
@@ -481,6 +553,10 @@ apply_budget_strategy()
   staging whenever the change crosses a phase boundary.
 - Treating `charge_score` as a tiebreaker. It's the primary ranking
   for budget conflicts.
+- Expecting amps commands to run out of retries. Amps changes have no
+  retry limit (`_expected_amperage` is never counted), by design: a
+  set-point change does not wear the charger. Only on/off and
+  phase-switch commands run out of retries.
 
 ## See also
 
