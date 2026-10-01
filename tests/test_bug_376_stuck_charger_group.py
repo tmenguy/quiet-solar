@@ -30,13 +30,13 @@ from custom_components.quiet_solar.home_model.commands import (
     CMD_AUTO_GREEN_ONLY,
     copy_command,
 )
-from tests.test_charger_coverage_deep import (
-    _create_charger,
-    _create_ocpp_charger,
-    _make_charger_group,
-    _make_hass,
-    _make_home,
-    _make_real_car,
+from tests.factories import (
+    create_charger as _create_charger,
+    create_ocpp_charger as _create_ocpp_charger,
+    make_charger_group as _make_charger_group,
+    make_hass as _make_hass,
+    make_home as _make_home,
+    make_real_car as _make_real_car,
 )
 
 # first start attempt of the production log (14:05:34 local)
@@ -55,7 +55,7 @@ FOURTH_LAUNCH = T0 + timedelta(seconds=273)
 REARM = T0 + timedelta(seconds=1176)
 
 
-class _States:
+class States:
     """Per-entity HA state store behind `hass.states.get`."""
 
     def __init__(self):
@@ -71,25 +71,42 @@ class _States:
         return self.values.get(entity_id)
 
 
-def _build_stuck_charger(switch_state: str, status: str = "Finishing", hass=None, home=None, states=None):
-    """Real QSChargerOCPP 'wallbox 2 parking' with a real car, stuck wanting to start."""
+def build_stuck_charger(
+    switch_state: str,
+    status: str = "Finishing",
+    hass=None,
+    home=None,
+    states=None,
+    name: str = STUCK_NAME,
+    car_name: str = "ID.buzz",
+):
+    """Real QSChargerOCPP 'wallbox 2 parking' with a real car, stuck wanting to start.
+
+    `name` / `car_name` default to the production-log identities; override them (and pass a
+    shared `states` store) to build several *distinct* stuck chargers (distinct entity ids)
+    in one group — see `test_bug_379`'s per-member independence test (QS-379 S3).
+    """
     if hass is None:
         hass = _make_hass()
     if home is None:
         home = _make_home()
         home.async_notify_all_mobile_apps = AsyncMock()
     if states is None:
-        states = _States()
+        states = States()
         hass.states.get = MagicMock(side_effect=states.get)
 
-    charger = _create_ocpp_charger(hass, home, name=STUCK_NAME)
-    car = _make_real_car(hass, home, name="ID.buzz")
+    dev = name.lower().replace(" ", "_")
+    switch_id = f"switch.{dev}_charge_control"
+    status_id = f"sensor.{dev}_status_connector"
+
+    charger = _create_ocpp_charger(hass, home, name=name)
+    car = _make_real_car(hass, home, name=car_name)
 
     t_seed = T0 - timedelta(minutes=10)
-    states.set(STATUS, status, t_seed)
-    states.set(SWITCH, switch_state, t_seed)
+    states.set(status_id, status, t_seed)
+    states.set(switch_id, switch_state, t_seed)
     # plug-probe history >= CHARGER_CHECK_STATE_WINDOW_S of a plugged, not-enabled value
-    charger.add_to_history(STATUS, t_seed)
+    charger.add_to_history(status_id, t_seed)
     charger.add_to_history(charger._internal_fake_is_plugged_id, t_seed)
     charger.attach_car(car, t_seed)
 
@@ -136,7 +153,7 @@ def _reserved(charger, amps: int) -> list[float]:
 
 
 async def _drive_group_with_healthy(order_stuck_first: bool):
-    hass, home, _states, stuck = _build_stuck_charger(switch_state="off")
+    hass, home, _states, stuck = build_stuck_charger(switch_state="off")
     healthy, cs_healthy = _make_healthy(hass, home)
     members = [stuck, healthy] if order_stuck_first else [healthy, stuck]
     group = _make_charger_group(home, members)
@@ -175,7 +192,7 @@ async def test_stuck_start_charger_does_not_starve_group_when_iterated_last():
 @pytest.mark.asyncio
 async def test_stuck_start_rearms_through_the_group():
     """QS-376 F2: exhausted start retries re-arm through the group, never outside the budget."""
-    hass, home, _states, stuck = _build_stuck_charger(switch_state="off")
+    hass, home, _states, stuck = build_stuck_charger(switch_state="off")
     group = _make_charger_group(home, [stuck])
 
     launches = []
@@ -241,7 +258,7 @@ async def test_stuck_start_rearms_through_the_group():
 @pytest.mark.asyncio
 async def test_ocpp_unavailable_charge_control_is_a_fault():
     """QS-376 F3: an unavailable OCPP charge_control on a plugged, idle charger is a fault."""
-    hass, home, states, charger = _build_stuck_charger(switch_state="unavailable")
+    hass, home, states, charger = build_stuck_charger(switch_state="unavailable")
     charger.on_device_state_change = AsyncMock()
     # keep the plugged car attached (car selection is not under test here)
     charger.get_best_car = MagicMock(return_value=charger.car)
@@ -284,7 +301,7 @@ async def test_ocpp_unavailable_charge_control_is_a_fault():
 @pytest.mark.asyncio
 async def test_ocpp_fault_message_without_car_and_on_plain_fault():
     """QS-376 F3: no-car OCPP text, and a real Faulted status keeps the QS-346 text."""
-    hass, home, states, charger = _build_stuck_charger(switch_state="unavailable")
+    hass, home, states, charger = build_stuck_charger(switch_state="unavailable")
     assert charger._charger_fault_message(T0, "Finishing", None) == (
         f"{STUCK_NAME}: charge control unavailable — please unplug and replug the car"
     )
@@ -298,7 +315,7 @@ async def test_ocpp_fault_message_without_car_and_on_plain_fault():
 @pytest.mark.asyncio
 async def test_ocpp_unavailable_charge_control_sends_status_nudge():
     """QS-376 F4: a connector-less StatusNotification nudge, at most every 5 min."""
-    hass, home, states, charger = _build_stuck_charger(switch_state="unavailable")
+    hass, home, states, charger = build_stuck_charger(switch_state="unavailable")
     charger.on_device_state_change = AsyncMock()
 
     nudged_at = []
@@ -333,7 +350,7 @@ async def test_ocpp_unavailable_charge_control_sends_status_nudge():
 async def test_ocpp_no_status_nudge_when_control_available_or_plain_fault():
     """QS-376 F4: no nudge when the switch is available, nor on a plain Faulted status."""
     for status in ("Finishing", "Faulted"):
-        hass, home, states, charger = _build_stuck_charger(switch_state="off", status=status)
+        hass, home, states, charger = build_stuck_charger(switch_state="off", status=status)
         charger.on_device_state_change = AsyncMock()
         t = T0
         while t <= T0 + timedelta(minutes=6):
@@ -345,7 +362,7 @@ async def test_ocpp_no_status_nudge_when_control_available_or_plain_fault():
 @pytest.mark.asyncio
 async def test_ocpp_status_nudge_failure_is_logged_not_raised():
     """QS-376 F4: a failing nudge service call must not break the cycle."""
-    hass, home, states, charger = _build_stuck_charger(switch_state="unavailable")
+    hass, home, states, charger = build_stuck_charger(switch_state="unavailable")
 
     async def _boom(*args, **kwargs):
         if args[:2] == ("ocpp", "trigger_custom_message") and args[2].get("requested_message") == "StatusNotification":
@@ -359,7 +376,7 @@ async def test_ocpp_status_nudge_failure_is_logged_not_raised():
 @pytest.mark.asyncio
 async def test_isolated_charger_amps_are_reserved_in_group_current_checks():
     """QS-376 F1: while a member is isolated, every group current check reserves its amps."""
-    hass, home, _states, stuck = _build_stuck_charger(switch_state="off")
+    hass, home, _states, stuck = build_stuck_charger(switch_state="off")
     healthy, _cs_healthy = _make_healthy(hass, home)
     group = _make_charger_group(home, [stuck, healthy])
     dg = group.dynamic_group
@@ -393,7 +410,7 @@ async def test_isolated_charger_amps_are_reserved_in_group_current_checks():
 
 
 async def _isolate_stuck_in_group():
-    hass, home, states, stuck = _build_stuck_charger(switch_state="off")
+    hass, home, states, stuck = build_stuck_charger(switch_state="off")
     healthy, cs_healthy = _make_healthy(hass, home)
     group = _make_charger_group(home, [stuck, healthy])
     t = T0
@@ -462,7 +479,7 @@ async def test_reservation_never_forces_a_member_below_its_minimum(reserved, rel
 
 def test_start_stuck_is_false_in_state_reset():
     """QS-376 review EC4: a charger in state reset is never 'start stuck' (no None amps reserved)."""
-    _hass, _home, _states, stuck = _build_stuck_charger(switch_state="off")
+    _hass, _home, _states, stuck = build_stuck_charger(switch_state="off")
     stuck._expected_charge_state._num_launched = 4
     assert stuck.is_start_stuck(T0) is True
     stuck._inner_amperage = None
@@ -471,7 +488,7 @@ def test_start_stuck_is_false_in_state_reset():
 
 def test_charge_control_check_without_status_sensor():
     """QS-376 review EC5: no status sensor -> not the held-control condition, no HA lookup of None."""
-    hass, _home, _states, charger = _build_stuck_charger(switch_state="unavailable")
+    hass, _home, _states, charger = build_stuck_charger(switch_state="unavailable")
     assert charger._is_charge_control_unavailable_while_plugged(T0) is True
     charger.charger_status_sensor = None
     assert charger._is_charge_control_unavailable_while_plugged(T0) is False

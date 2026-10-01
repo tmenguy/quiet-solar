@@ -34,6 +34,15 @@ bistate_modes = [
 ]
 
 DEFAULT_USER_OVERRIDE_DURATION_S = 4 * 3600
+# QS-390: a constraint ending at or before `time + margin` is treated as the
+# finished previous cycle (already ended, or ending within the margin) ONLY
+# when its end is not one of the new cycle's ends and it is not an ON user
+# override (a `TimeBasedHoldOffConstraint` idle override counts OFF-time, so it
+# is skipped, R2-S1). The mode-change block runs BEFORE update_live_constraints
+# acks an expired constraint, so such a finished-cycle constraint must neither
+# flag a mode change nor seed its runtime. A same-end mode switch (N1) and an ON
+# override (S1) keep their runtime.
+_CYCLE_END_MARGIN = timedelta(minutes=5)
 # QS-256: post-override cooldown before a new override can be classified.
 # Bounded at the check site by half the override window.
 USER_OVERRIDE_STATE_BACK_DURATION_S = 180
@@ -1099,6 +1108,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 # Detect mode change: existing non-override constraint has a
                 # different end time than the new constraints → mode switch
                 new_ends = {ct.end_schedule for ct in constraints}
+                cycle_end_limit = time + _CYCLE_END_MARGIN
                 mode_changed = any(
                     c.end_of_constraint not in new_ends
                     for c in self._constraints
@@ -1106,6 +1116,8 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         c.load_info is not None
                         and c.load_info.get(CONSTRAINT_ORIGINATOR_KEY, "") == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
                     )
+                    # QS-390: the finished previous cycle is not a mode change
+                    and c.end_of_constraint > cycle_end_limit
                 )
 
                 # Supplement end-time detection: if the bistate mode string
@@ -1119,6 +1131,28 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     # Save runtime from ALL constraints (override counts toward
                     # daily target just like force-on)
                     for c in self._constraints:
+                        is_override = (
+                            c.load_info is not None
+                            and c.load_info.get(CONSTRAINT_ORIGINATOR_KEY, "") == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
+                        )
+                        # QS-390 (R2-S1): only an ON override carries runtime in
+                        # the margin. A TimeBasedHoldOffConstraint is a
+                        # USER_OVERRIDE too, but its current_value is wall-clock
+                        # OFF-time, not run time (QS-256) — it must be dropped
+                        # like any finished cycle, not seeded onto the new ON
+                        # constraint.
+                        carries_runtime_in_margin = is_override and not isinstance(c, TimeBasedHoldOffConstraint)
+                        # QS-390: never carry the runtime of the finished
+                        # previous cycle — a constraint that ends within the
+                        # margin AND whose end is not one of the new cycle's ends.
+                        # A same-end mode switch (N1, end kept in new_ends) or an
+                        # ON user override (S1) still carries its runtime.
+                        if (
+                            c.end_of_constraint <= cycle_end_limit
+                            and c.end_of_constraint not in new_ends
+                            and not carries_runtime_in_margin
+                        ):
+                            continue
                         if c.current_value > saved_runtime:
                             saved_runtime = c.current_value
                     # Remove old non-override constraints

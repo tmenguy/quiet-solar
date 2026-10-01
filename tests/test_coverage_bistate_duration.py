@@ -19,6 +19,8 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
     CONF_SWITCH,
+    CONSTRAINT_ORIGINATOR_KEY,
+    CONSTRAINT_ORIGINATOR_USER_OVERRIDE,
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
     DATA_HANDLER,
@@ -33,6 +35,7 @@ from custom_components.quiet_solar.home_model.commands import (
     CMD_ON,
 )
 from custom_components.quiet_solar.home_model.constraints import (
+    TimeBasedHoldOffConstraint,
     TimeBasedSimplePowerLoadConstraint,
 )
 from tests.factories import create_minimal_home_model
@@ -950,6 +953,305 @@ class TestModeSwitchRuntimePreservationFullFlow:
         assert new_ct.target_value == 8.0 * 3600.0
         assert new_ct.current_value == 5 * 3600.0  # min(5h, 8h) = 5h, preserved
         assert not new_ct.is_constraint_met(time=time)
+
+
+# ===================================================================
+# QS-390: an expired, unmet previous-cycle constraint must not be taken
+# for a mode change and seed its runtime into the next cycle (RC-1)
+# ===================================================================
+
+_QS390_T = datetime.datetime(2026, 9, 29, 22, 0, 0, tzinfo=pytz.UTC)  # local midnight (Europe/Paris)
+_QS390_CARRY_S = 39528.0  # 10.98 h run on 09-29
+
+
+def _qs390_make_pool(hass, setup):
+    from custom_components.quiet_solar.const import CONF_POOL_TEMPERATURE_SENSOR, CONF_POWER
+    from custom_components.quiet_solar.ha_model.pool import QSPool
+
+    hass.states.async_set("sensor.qs390_pool_temp", "20.0")
+    pool = QSPool(
+        hass=hass,
+        config_entry=setup["entry"],
+        home=setup["home"],
+        **{
+            CONF_NAME: "Piscine",
+            CONF_SWITCH: "switch.qs390_pool_pump",
+            CONF_POOL_TEMPERATURE_SENSOR: "sensor.qs390_pool_temp",
+            CONF_POWER: 1470,
+        },
+    )
+    pool.load_is_auto_to_be_boosted = False
+    pool.externally_initialized_constraints = True
+    pool._constraints = []
+    pool.default_on_finish_time = dt_time(hour=0, minute=0, second=0)
+    pool.get_pool_filter_time_s = MagicMock(return_value=43200.0)
+    return pool
+
+
+async def _qs390_setup_rollover(hass, setup, device, path):
+    """Return (load, mode, expired_ct) right before the first check after the day change."""
+    if path == "pool_auto":
+        load = _qs390_make_pool(hass, setup)
+        mode = "bistate_mode_auto"
+    else:
+        load = device
+        mode = "bistate_mode_default"
+        load.default_on_duration = 12.0
+        load.default_on_finish_time = dt_time(hour=0, minute=0, second=0)
+
+    load.is_load_command_set = MagicMock(return_value=False)
+    load.get_next_time_from_hours = MagicMock(return_value=_QS390_T + timedelta(hours=24))
+    load.bistate_mode = mode
+    load._previous_bistate_mode = mode
+
+    expired_ct = TimeBasedSimplePowerLoadConstraint(
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        time=_QS390_T - timedelta(hours=24),
+        load=load,
+        from_user=False,
+        end_of_constraint=_QS390_T,
+        power=load.power_use,
+        initial_value=0,
+        current_value=_QS390_CARRY_S,
+        target_value=43200.0,
+    )
+    assert not expired_ct.is_constraint_met(time=_QS390_T - timedelta(seconds=1))
+    load._constraints = [expired_ct]
+    return load, mode, expired_ct
+
+
+def _qs390_ct_ending(load, end):
+    return [c for c in load._constraints if c.end_of_constraint == end]
+
+
+class TestQS390RolloverCarryOver:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["default", "pool_auto"])
+    async def test_t1_expired_unmet_constraint_does_not_seed_next_day(self, hass, setup, device, path):
+        """T1 (RC-1): the new day's constraint starts from 0.
+
+        The expired constraint is no longer deleted by the mode-change block: it
+        is left to set_live_constraints (run by push_live_constraint), whose
+        "met" filter drops it silently, without an ack.
+        """
+        load, _, expired_ct = await _qs390_setup_rollover(hass, setup, device, path)
+
+        await load.check_load_activity_and_constraints(_QS390_T + timedelta(seconds=6))
+
+        new_cts = _qs390_ct_ending(load, _QS390_T + timedelta(hours=24))
+        assert len(new_cts) == 1
+        assert new_cts[0].current_value == 0
+        # hand-off pinned: dropped by set_live_constraints' met filter, never acked
+        assert expired_ct not in load._constraints
+        assert load._last_completed_constraint is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["default", "pool_auto"])
+    async def test_t1c_full_tick_acks_expired_without_recarry(self, hass, setup, device, path):
+        """T1c (guard): check → update_live_constraints → check: expired dropped unacked, no re-carry."""
+        from custom_components.quiet_solar.const import DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED
+
+        load, _, expired_ct = await _qs390_setup_rollover(hass, setup, device, path)
+        status_changes = []
+
+        async def _record(time, change_type, *args, **kwargs):
+            status_changes.append(change_type)
+
+        load.on_device_state_change = _record
+
+        await load.check_load_activity_and_constraints(_QS390_T + timedelta(seconds=6))
+        await load.update_live_constraints(_QS390_T + timedelta(seconds=6), timedelta(seconds=7))
+        await load.check_load_activity_and_constraints(_QS390_T + timedelta(seconds=13))
+
+        assert expired_ct not in load._constraints
+        # silently dropped (as before QS-390): no ack, no midnight COMPLETED notification
+        assert load._last_completed_constraint is None
+        new_cts = _qs390_ct_ending(load, _QS390_T + timedelta(hours=24))
+        assert len(new_cts) == 1
+        assert new_cts[0].current_value == 0
+        assert status_changes.count(DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED) == 0
+
+    @pytest.mark.asyncio
+    async def test_t1b_mode_switch_in_last_minutes_starts_from_zero(self, hass, device):
+        """T1b (spec): a constraint ending within 5 min is the finished cycle — no saved_runtime carry."""
+        t = datetime.datetime(2026, 9, 30, 4, 56, 0, tzinfo=pytz.UTC)  # 06:56 local
+        device.is_load_command_set = MagicMock(return_value=False)
+        device.default_on_duration = 8.0
+        device.default_on_finish_time = dt_time(hour=7, minute=0, second=0)
+        ending_ct = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=t - timedelta(hours=20),
+            load=device,
+            from_user=False,
+            end_of_constraint=t + timedelta(minutes=4),
+            power=device.power_use,
+            initial_value=0,
+            current_value=5 * 3600.0,
+            target_value=8 * 3600.0,
+        )
+        device._constraints = [ending_ct]
+        device._previous_bistate_mode = "bistate_mode_default"
+
+        force_on_end = datetime.datetime(2026, 9, 30, 22, 0, 0, tzinfo=pytz.UTC)  # next local midnight
+        device.get_proper_local_adapted_tomorrow = MagicMock(return_value=force_on_end)
+        device.bistate_mode = "bistate_mode_on"
+
+        await device.check_load_activity_and_constraints(t)
+
+        force_on_cts = _qs390_ct_ending(device, force_on_end)
+        assert len(force_on_cts) == 1
+        assert force_on_cts[0].current_value == 0
+
+    @pytest.mark.asyncio
+    async def test_t1b_detect_constraint_inside_margin_ignored_by_detection(self, hass, device):
+        """T1b-detect (spec): a live constraint ending within 5 min, missing from the new ends, is no mode change."""
+        t = datetime.datetime(2026, 9, 30, 4, 56, 0, tzinfo=pytz.UTC)
+        device.is_load_command_set = MagicMock(return_value=False)
+        device.default_on_duration = 8.0
+        device.default_on_finish_time = dt_time(hour=7, minute=0, second=0)
+        ending_ct = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=t - timedelta(hours=20),
+            load=device,
+            from_user=False,
+            end_of_constraint=t + timedelta(minutes=4),
+            power=device.power_use,
+            initial_value=0,
+            current_value=5 * 3600.0,
+            target_value=8 * 3600.0,
+        )
+        device._constraints = [ending_ct]
+        device.bistate_mode = "bistate_mode_default"
+        device._previous_bistate_mode = "bistate_mode_default"
+        # finish time changed: the new end is not the existing one
+        new_end = t + timedelta(hours=24)
+        device.get_next_time_from_hours = MagicMock(return_value=new_end)
+
+        await device.check_load_activity_and_constraints(t)
+
+        # no deletion, no carry
+        assert ending_ct in device._constraints
+        new_cts = _qs390_ct_ending(device, new_end)
+        assert len(new_cts) == 1
+        assert new_cts[0].current_value == 0
+
+    @pytest.mark.asyncio
+    async def test_s1_override_runtime_in_margin_is_carried_on_mode_switch(self, hass, device):
+        """S1: an override ending within the 5-min margin still carries its runtime on a mode switch.
+
+        The margin skip must not drop a user-override's runtime: an override
+        counts toward the daily target, so switching the mode string in its last
+        minutes still seeds the new constraint with the override's runtime
+        (capped at the new target).
+        """
+        t = datetime.datetime(2026, 9, 30, 4, 56, 0, tzinfo=pytz.UTC)  # 06:56 local
+        device.is_load_command_set = MagicMock(return_value=False)
+        device.default_on_duration = 8.0
+        device.default_on_finish_time = dt_time(hour=7, minute=0, second=0)
+        override_ct = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=t - timedelta(hours=2),
+            load=device,
+            from_user=True,
+            load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+            end_of_constraint=t + timedelta(minutes=4),
+            power=device.power_use,
+            initial_value=0,
+            current_value=7080.0,  # 1h58 of override runtime
+            target_value=8 * 3600.0,
+        )
+        device._constraints = [override_ct]
+        device._previous_bistate_mode = "bistate_mode_default"
+
+        force_on_end = datetime.datetime(2026, 9, 30, 22, 0, 0, tzinfo=pytz.UTC)  # next local midnight
+        device.get_proper_local_adapted_tomorrow = MagicMock(return_value=force_on_end)
+        device.bistate_mode = "bistate_mode_on"
+
+        await device.check_load_activity_and_constraints(t)
+
+        force_on_cts = _qs390_ct_ending(device, force_on_end)
+        assert len(force_on_cts) == 1
+        assert force_on_cts[0].current_value == 7080.0
+        # the override itself is preserved (mode-change removal keeps overrides)
+        assert override_ct in device._constraints
+
+    @pytest.mark.asyncio
+    async def test_s1_holdoff_override_offtime_in_margin_is_not_carried_on_mode_switch(self, hass, device):
+        """R2-S1: a hold-off override ending within the margin must NOT carry its OFF-time.
+
+        A ``TimeBasedHoldOffConstraint`` (QS-256 user-OFF idle override) is a
+        USER_OVERRIDE, but its ``current_value`` is wall-clock time held OFF, not
+        run time. The S1 exemption carries ON-override runtime; it must exclude a
+        hold-off, or a mode switch inside the margin of a hold-off's end seeds the
+        new ON constraint with OFF-time. The new constraint must start at 0.
+        """
+        t = datetime.datetime(2026, 9, 30, 4, 56, 0, tzinfo=pytz.UTC)  # 06:56 local
+        device.is_load_command_set = MagicMock(return_value=False)
+        device.default_on_duration = 8.0
+        device.default_on_finish_time = dt_time(hour=7, minute=0, second=0)
+        holdoff_ct = TimeBasedHoldOffConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=t - timedelta(hours=4),
+            load=device,
+            from_user=True,
+            load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+            end_of_constraint=t + timedelta(minutes=4),
+            initial_value=0,
+            current_value=14160.0,  # 3h56 held OFF (wall-clock, not run time)
+            target_value=8 * 3600.0,
+        )
+        device._constraints = [holdoff_ct]
+        device._previous_bistate_mode = "bistate_mode_default"
+
+        force_on_end = datetime.datetime(2026, 9, 30, 22, 0, 0, tzinfo=pytz.UTC)  # next local midnight
+        device.get_proper_local_adapted_tomorrow = MagicMock(return_value=force_on_end)
+        device.bistate_mode = "bistate_mode_on"
+
+        await device.check_load_activity_and_constraints(t)
+
+        force_on_cts = _qs390_ct_ending(device, force_on_end)
+        assert len(force_on_cts) == 1
+        # the hold-off's OFF-time must NOT seed the new ON constraint
+        assert force_on_cts[0].current_value == 0
+        # the hold-off override itself is preserved (mode-change removal keeps overrides)
+        assert holdoff_ct in device._constraints
+
+    @pytest.mark.asyncio
+    async def test_n1_same_end_mode_switch_in_margin_carries_runtime(self, hass, device):
+        """N1: a same-end mode switch within the margin keeps the current cycle's runtime.
+
+        The margin skip must not drop a constraint whose end is one of the new
+        cycle's ends (the CURRENT cycle, not the finished previous one): carrying
+        min(run, new_target) still lets the new mode's constraint be met.
+        """
+        now = _QS390_T - timedelta(minutes=3)  # 23:57 local, cycle ends at local midnight
+        end = _QS390_T  # 00:00 local, same end for the old auto and the new winter cycle
+        device.is_load_command_set = MagicMock(return_value=False)
+        device.default_on_duration = 4.0  # winter target 4 h
+        device.default_on_finish_time = dt_time(hour=0, minute=0, second=0)
+        device.get_next_time_from_hours = MagicMock(return_value=end)
+        existing_ct = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=now - timedelta(hours=20),
+            load=device,
+            from_user=False,
+            end_of_constraint=end,
+            power=device.power_use,
+            initial_value=0,
+            current_value=5 * 3600.0,  # 5 h run in the auto cycle
+            target_value=12 * 3600.0,
+        )
+        device._constraints = [existing_ct]
+        device._previous_bistate_mode = "bistate_mode_auto"
+        device.bistate_mode = "bistate_mode_default"
+
+        await device.check_load_activity_and_constraints(now)
+
+        # min(5 h run, 4 h winter target) carried → the new winter cycle meets the
+        # winter target, so the constraint is completed and removed from the live
+        # list, surfacing on _last_completed_constraint with the carried runtime.
+        lcc = device._last_completed_constraint
+        assert lcc is not None and lcc.end_of_constraint == end and lcc.current_value >= 4 * 3600.0
 
 
 # ===================================================================

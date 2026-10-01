@@ -4,7 +4,7 @@ slug: solver
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/solver.py
-last_verified: 2026-08-22
+last_verified: 2026-09-30
 ---
 
 # PeriodSolver

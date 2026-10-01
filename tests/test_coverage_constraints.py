@@ -5505,3 +5505,67 @@ def test_adapt_commands_phase2_first_slot_sets_switch_false():
     assert isinstance(result, float)
     # The first-slot gap was filled by Phase 2
     assert out_commands[0] is not None, "First-slot gap at hysteresis boundary should be filled by Phase 2"
+
+
+# ===========================================================================
+# QS-390 N2 - F2 fallback keeps a forced-ON hold at its minimum step
+# ===========================================================================
+
+
+def test_qs390_n2_forced_on_hold_clamped_to_minimum_step():
+    """N2: in the F2 headroom-free fallback, a forced-ON hold keeps only the
+    smallest step, even when the solar surplus would otherwise pick a higher one.
+
+    Multi-step, ``num_max_on_off`` load, support_auto=False, held ON: slot-0
+    production headroom is exhausted (< min step) so the headroom-limited budget
+    is empty and F2 recomputes without headroom. Without the clamp the surplus
+    would select the 1470 W step; the hold must stay at the 500 W minimum.
+    """
+    now = datetime(2026, 9, 29, 19, 23, 29, tzinfo=pytz.UTC)
+    load = _FakeLoadForCoverage(
+        current_command=LoadCommand(command="on", power_consign=1000.0),
+        num_max_on_off=8,
+        num_on_off=0,
+        last_state_change_time=now,  # ON now → inside the min-state hold
+    )
+    constraint = MultiStepsPowerLoadConstraint(
+        time=now,
+        load=load,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500.0),
+            LoadCommand(command="on", power_consign=1000.0),
+            LoadCommand(command="on", power_consign=1470.0),
+        ],
+        support_auto=False,
+        end_of_constraint=now + timedelta(hours=6),
+        target_value=6 * 1470.0 * 3600.0 / 3600.0,
+        current_value=0.0,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    )
+
+    n_slots = 6
+    time_slots = [now + timedelta(hours=i) for i in range(n_slots + 1)]
+    # negative == free/surplus power, enough for the top step without a headroom cap
+    power_avail = np.full(n_slots, -2000.0, dtype=np.float64)
+    # production headroom exhausted at every slot (< the 500 W minimum step)
+    power_headroom = np.full(n_slots, 100.0, dtype=np.float64)
+    durations = np.full(n_slots, 3600.0, dtype=np.float64)
+    prices = np.full(n_slots, 0.15, dtype=np.float64)
+
+    # precondition: slot 0 is a forced ON hold
+    forced = constraint._get_forced_slot_commands(time_slots, 0, n_slots - 1)
+    assert forced.get(0) is not None and forced[0].command == "on"
+
+    result = constraint.compute_best_period_repartition(
+        do_use_available_power_only=True,
+        power_available_power=power_avail,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=_make_prices_ordered(prices),
+        time_slots=time_slots,
+        power_headroom=power_headroom,
+    )
+    assert result is not None
+    out_cmds = result[2]
+    assert out_cmds[0] is not None
+    assert out_cmds[0].power_consign == 500.0
