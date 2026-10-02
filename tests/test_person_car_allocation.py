@@ -32,6 +32,14 @@ _LOGGER = logging.getLogger(__name__)
 # cost-matrix thresholds (Wh) are exercised as in production.
 WH_PER_KM = 150.0
 
+# Fixed clock for the shared 4-car / 4-person scenario: "now" is the evening
+# before, departure is the next 07:30 (8.5 h horizon, well under the
+# far-future threshold). Tests must never depend on the wall clock: with
+# `datetime.now()` the horizon crossed 24 h before 07:30Z and the allocation
+# silently fell back to the preferred car (QS-396).
+SCENARIO_NOW = datetime(2026, 3, 15, 23, 0, tzinfo=UTC)
+SCENARIO_LEAVE = datetime(2026, 3, 16, 7, 30, tzinfo=UTC)
+
 
 class _FakeCharger:
     """Stub charger so car.charger is truthy and user_set_person_for_car works."""
@@ -186,7 +194,7 @@ def _build_scenario():
       Zoe     – charger,    150 km remaining
       IDBuzz  – charger,     10 km remaining
 
-    Persons (all depart at 07:30):
+    Persons (all depart at SCENARIO_LEAVE; allocate with time=SCENARIO_NOW):
       Arthur  – drives Zoe & Twingo, prefers Twingo, needs 100 km
       Magali  – drives all four,     prefers Zoe,    needs  20 km
       Thomas  – drives all four,     prefers Tesla,  needs  30 km
@@ -199,7 +207,7 @@ def _build_scenario():
     zoe = _FakeCar("Zoe", remaining_km=150, has_charger=True)
     idbuzz = _FakeCar("IDBuzz", remaining_km=10, has_charger=True)
 
-    leave = datetime.now(UTC).replace(hour=7, minute=30, second=0) + timedelta(days=1)
+    leave = SCENARIO_LEAVE
 
     arthur = _FakePerson(
         "Arthur",
@@ -250,7 +258,7 @@ class TestSetUserPersonEdgeCases:
         """Passing an unknown person name should log an error and convert to
         FORCE_CAR_NO_PERSON_ATTACHED (car.py lines 316-317)."""
         home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
-        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        await home.compute_and_set_best_persons_cars_allocations(time=SCENARIO_NOW, force_update=True)
 
         await twingo.user_set_person_for_car("GhostPerson")
 
@@ -261,7 +269,7 @@ class TestSetUserPersonEdgeCases:
         """Calling user_set_person_for_car with the already-set value should
         return immediately without touching the allocation (car.py line 322)."""
         home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
-        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        await home.compute_and_set_best_persons_cars_allocations(time=SCENARIO_NOW, force_update=True)
 
         await twingo.user_set_person_for_car("Arthur")
         assert twingo.get_user_originated("person_name") == "Arthur"
@@ -275,7 +283,7 @@ class TestSetUserPersonEdgeCases:
         """When the manual selection matches the already-forecasted person,
         no reallocation is needed (car.py line 331)."""
         home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
-        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        await home.compute_and_set_best_persons_cars_allocations(time=SCENARIO_NOW, force_update=True)
 
         # Arthur is auto-assigned to Twingo (his preferred car);
         # manually confirming should skip realloc
@@ -366,7 +374,7 @@ class TestNoPersonMultipleCars:
         must keep BOTH cars pinned to "no person" — the second call must not
         wipe the first car's user-originated state."""
         home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
-        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        await home.compute_and_set_best_persons_cars_allocations(time=SCENARIO_NOW, force_update=True)
 
         # Both cars must hold a forecasted person, otherwise the early
         # return in user_set_person_for_car skips the clearing loop and the
@@ -395,7 +403,7 @@ class TestNoPersonMultipleCars:
         """AC2: setting "no person" on Zoe must not touch Twingo's manual
         real-person assignment."""
         home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
-        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        await home.compute_and_set_best_persons_cars_allocations(time=SCENARIO_NOW, force_update=True)
 
         await twingo.user_set_person_for_car("Arthur")
         assert twingo.get_user_originated("person_name") == "Arthur"
@@ -415,7 +423,7 @@ class TestNoPersonMultipleCars:
         only remaining authorized car. Magali, displaced from Zoe, lands on
         IDBuzz."""
         home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
-        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        await home.compute_and_set_best_persons_cars_allocations(time=SCENARIO_NOW, force_update=True)
 
         assert _person_name(twingo) == "Arthur"
         assert _person_name(zoe) == "Magali"
@@ -490,14 +498,14 @@ class TestCacheHitReApply:
         a cache-hit call should restore it from the cached result."""
         home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
 
-        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        await home.compute_and_set_best_persons_cars_allocations(time=SCENARIO_NOW, force_update=True)
         assert _person_name(tesla) == "Thomas"
 
         # Corrupt Tesla's assignment (simulates what car.reset() used to do)
         tesla.current_forecasted_person = None
 
         # Call again without force_update -- cache hit should re-apply
-        await home.compute_and_set_best_persons_cars_allocations(force_update=False)
+        await home.compute_and_set_best_persons_cars_allocations(time=SCENARIO_NOW, force_update=False)
         assert _person_name(tesla) == "Thomas"
 
 
@@ -515,7 +523,7 @@ class TestPersonCarAllocationScenario:
         """
         home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
 
-        result = await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        result = await home.compute_and_set_best_persons_cars_allocations(time=SCENARIO_NOW, force_update=True)
 
         assert _person_name(tesla) == "Thomas", f"Tesla should be Thomas, got {_person_name(tesla)}"
         assert _person_name(twingo) == "Arthur", f"Twingo should be Arthur, got {_person_name(twingo)}"
@@ -535,7 +543,7 @@ class TestPersonCarAllocationScenario:
         home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
 
         # --- step 1: run the initial automatic allocation ---
-        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        await home.compute_and_set_best_persons_cars_allocations(time=SCENARIO_NOW, force_update=True)
 
         # --- step 2: manually override Arthur → Twingo ---
         await twingo.user_set_person_for_car("Arthur")
@@ -752,14 +760,14 @@ class TestPluggedCoveredPenalty:
         idbuzz = _FakeCar("IDBuzz", remaining_km=200, has_charger=True)  # plugged; covers Magali and Thomas
         twingo = _FakeCar("Twingo", remaining_km=20, has_charger=False)  # Arthur's preferred; needs charging
 
-        leave = datetime.now(UTC) + timedelta(hours=2)
+        leave = SCENARIO_NOW + timedelta(hours=2)
         arthur = _FakePerson("Arthur", "Twingo", ["Zoe", "Twingo"], leave, 99.0)
         magali = _FakePerson("Magali", "IDBuzz", ["IDBuzz", "Tesla"], leave, 113.0)
         thomas = _FakePerson("Thomas", "Tesla", ["Tesla", "IDBuzz"], leave, 13.0)
         brice = _FakePerson("Brice", "Zoe", ["Zoe", "Twingo"], leave, 24.0)
 
         home = _FakeHome([zoe, tesla, idbuzz, twingo], [arthur, magali, thomas, brice])
-        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        await home.compute_and_set_best_persons_cars_allocations(time=SCENARIO_NOW, force_update=True)
 
         # The first two assertions make the test discriminating: without them
         # the last two are exactly the *preferred* pass's output.
@@ -779,7 +787,7 @@ class TestPluggedCoveredPenalty:
         """
         home, tesla, twingo, zoe, idbuzz, *_ = _build_scenario()
         twingo._remaining_km = 70  # pre-fix premise: Arthur needs 4500 Wh on his preferred Twingo
-        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        await home.compute_and_set_best_persons_cars_allocations(time=SCENARIO_NOW, force_update=True)
 
         assert _person_name(zoe) == "Arthur"  # 4.5 kWh > 1 kWh: energy-optimal wins, Zoe covers him
         assert _person_name(twingo) == "Magali"  # Twingo covers her 20 km
@@ -797,12 +805,12 @@ class TestPluggedCoveredPenalty:
         constraint is pass 2's ``n·(E_max + 1.0 + PLUGGED) + eps`` offset (at
         E_max == 0, n == 1 that is 1.25 + 1.0 = 2.25).
         """
-        leave = datetime.now(UTC) + timedelta(hours=2)
+        leave = SCENARIO_NOW + timedelta(hours=2)
 
         y = _FakeCar("Y", remaining_km=200, has_charger=False)  # non-preferred, unplugged, covers, free
         x = _FakeCar("X", remaining_km=200, has_charger=True)  # P's preferred car, plugged, covers
         home = _FakeHome([y, x], [_FakePerson("P", "X", ["X", "Y"], leave, 50.0)])
-        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        await home.compute_and_set_best_persons_cars_allocations(time=SCENARIO_NOW, force_update=True)
         assert _person_name(x) == "P"  # E_max == 0: not moved off the preferred plugged car (pins penalty < 1.0)
 
         # lower bound: with NO preference the unplugged covered car must win (pins penalty > 0)
@@ -810,7 +818,7 @@ class TestPluggedCoveredPenalty:
             [_FakeCar("X", 200, True), _FakeCar("Y", 200, False)],
             [_FakePerson("P", None, ["X", "Y"], leave, 50.0)],
         )
-        await home2.compute_and_set_best_persons_cars_allocations(force_update=True)
+        await home2.compute_and_set_best_persons_cars_allocations(time=SCENARIO_NOW, force_update=True)
         assert _person_name(home2._cars[1]) == "P"
 
 
