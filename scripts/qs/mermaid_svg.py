@@ -26,8 +26,8 @@ comment line (``%% @...``); coordinates are SVG pixels:
 - ``@text X,Y "free text"``
 
 Supported Mermaid subset: ``flowchart``/``graph``/``direction`` lines,
-nodes ``id["…"]`` (box), ``id[("…")]`` (cylinder), ``id[["…"]]`` (queue),
-``id{"…"}`` (diamond), ``subgraph ID["…"]`` … ``end``, edges ``-->``,
+nodes ``id["…"]`` (box), ``id(["…"])`` (stadium), ``id[("…")]``
+(cylinder), ``id[["…"]]`` (queue), ``id{"…"}`` (diamond), ``subgraph ID["…"]`` … ``end``, edges ``-->``,
 ``-.->``, ``---``, ``-.-`` (optionally prefixed by ``<``) with an optional
 ``|"label"|``, ``classDef``, ``class``, ``style``. Labels split on
 ``<br/>``; ``<b>`` is dropped. A node title ending in ``· LLM`` gets an
@@ -127,10 +127,10 @@ class Hints:
 
 
 # --------------------------------------------------------------------- parsing
-NODE_RE = re.compile(r'^(\w+)(\[\(|\[\[|\[|\{)"(.*)"(\)\]|\]\]|\]|\})$')
-EDGE_RE = re.compile(r'^(\w+)\s*(<?)(-->|-\.->|-\.-|---)\s*(?:\|"?(.*?)"?\|)?\s*(\w+)$')
+NODE_RE = re.compile(r'^(\w+)(\[\(|\[\[|\(\[|\[|\{)"(.*)"(\)\]|\]\]|\]\)|\]|\})$')
+EDGE_STEP_RE = re.compile(r'\s*(<?)(-->|-\.->|-\.-|---)\s*(?:\|"?(.*?)"?\|)?\s*(\w+)')
 SUBGRAPH_RE = re.compile(r'^subgraph\s+(\w+)\["(.*)"\]$')
-SHAPES = {"[(": "cyl", "[[": "queue", "[": "box", "{": "diamond"}
+SHAPES = {"[(": "cyl", "[[": "queue", "([": "stadium", "[": "box", "{": "diamond"}
 
 
 def label_lines(label: str) -> list[str]:
@@ -191,14 +191,29 @@ def parse(block: str) -> Graph:
             ident = match.group(1)
             graph.nodes[ident] = Node(ident, SHAPES[match.group(2)], label_lines(match.group(3)))
             continue
-        if match := EDGE_RE.match(line):
-            a, back, kind, label, b = match.groups()
-            graph.edges.append(Edge(a, b, bool(back), "." in kind, kind in ("-->", "-.->"), label))
+        if (edges := parse_edges(line)) is not None:
+            graph.edges.extend(edges)
             continue
         raise MermaidSvgError(f"unsupported Mermaid line: {raw!r}")
     if stack:
         raise MermaidSvgError(f"subgraph {stack[-1]!r} is never closed")
     return graph
+
+
+def parse_edges(line: str) -> list[Edge] | None:
+    """The edges of a line like ``a -->|"x"| b -.-> c``, or None if it is not one."""
+    first = re.match(r"\w+", line)
+    if first is None:
+        return None
+    edges, a, pos = [], first.group(0), first.end()
+    while pos < len(line):
+        step = EDGE_STEP_RE.match(line, pos)
+        if step is None:
+            return None
+        back, kind, label, b = step.groups()
+        edges.append(Edge(a, b, bool(back), "." in kind, kind in ("-->", "-.->"), label))
+        a, pos = b, step.end()
+    return edges or None
 
 
 def _lookup_node(graph: Graph, ident: str, raw: str) -> Node:
@@ -349,22 +364,24 @@ class Renderer:
             self.parts.append(svg_text(x + w / 2, y + h / 2 + 4, [title, *body], size, INK, "middle"))
             return
         queue = node.shape == "queue"
+        radius = h / 2 if node.shape == "stadium" else 8 if queue else 10
         dash = ' stroke-dasharray="6 4"' if "stroke-dasharray" in style else ""
         self.parts.append(
-            f'<rect x="{x:g}" y="{y:g}" width="{w:g}" height="{h:g}" rx="{8 if queue else 10}" fill="{fill}" '
+            f'<rect x="{x:g}" y="{y:g}" width="{w:g}" height="{h:g}" rx="{radius:g}" fill="{fill}" '
             f'stroke="{stroke}" stroke-width="{2.5 if queue else 2}"{dash}/>'
         )
         if queue and node.id in self.hints.chips:
             self._draw_chips(node, x, y, w, stroke, title, body)
             return
+        pad = 10 + (h / 4 if node.shape == "stadium" else 0)  # clear a stadium's rounded ends
         cursor = y + title_size + 8
-        for line in wrap(title, w - (36 if llm else 20), title_size):
-            self.parts.append(svg_text(x + 10, cursor, [line], title_size, stroke, weight="bold"))
+        for line in wrap(title, w - 2 * pad - (16 if llm else 0), title_size):
+            self.parts.append(svg_text(x + pad, cursor, [line], title_size, stroke, weight="bold"))
             cursor += title_size * 1.22
         cursor += 3
         for text in body:
-            for line in wrap(text, w - 20, size):
-                self.parts.append(svg_text(x + 10, cursor, [line], size))
+            for line in wrap(text, w - 2 * pad, size):
+                self.parts.append(svg_text(x + pad, cursor, [line], size))
                 cursor += size * 1.3
             cursor += 2
         if llm:

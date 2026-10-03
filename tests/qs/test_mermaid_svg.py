@@ -15,6 +15,7 @@ import mermaid_svg  # type: ignore[import-not-found]  # noqa: E402
 
 BLOCK = """flowchart TB
     you["✋ You<br/>single voice"]
+    go(["start"])
     subgraph RUN["A run"]
         orch["<b>Orchestrator · LLM</b><br/>event loop"]
         rev{"review"}
@@ -38,6 +39,7 @@ BLOCK = """flowchart TB
     %% @canvas 800 500 origin=0,-20
     %% @group RUN at=200,20 size=400,200 title=bottom badge=PY
     %% @node you at=20,40 size=120,60
+    %% @node go at=20,420 size=100,40
     %% @node orch at=220,40 size=180,90 fs=11 tfs=14
     %% @node rev at=420,40 size=120,80
     %% @node db at=40,300 size=160,80
@@ -56,6 +58,7 @@ def test_parse_reads_nodes_groups_edges_and_styles() -> None:
     assert graph.nodes["db"].shape == "cyl"
     assert graph.nodes["q"].shape == "queue"
     assert graph.nodes["rev"].shape == "diamond"
+    assert graph.nodes["go"].shape == "stadium"
     assert graph.nodes["orch"].cls == "llm"
     assert graph.groups["RUN"].title == "A run"
     assert graph.groups["RUN"].style["stroke"] == "#3B5BDB"
@@ -63,7 +66,16 @@ def test_parse_reads_nodes_groups_edges_and_styles() -> None:
     assert keys == ["you<->orch", "orch->q", "orch->db", "rev->q", "q->db", "you->RUN"]
     assert graph.edges[3].dashed and graph.edges[3].arrow
     assert not graph.edges[4].arrow
-    assert len(graph.hints) == 13
+    assert len(graph.hints) == 14
+
+
+def test_parse_reads_chained_edges() -> None:
+    graph = mermaid_svg.parse('flowchart TB\n    a["A"]\n    a --> b -.->|"x"| c --- d\n')
+    assert [(e.key, e.label, e.dashed, e.arrow) for e in graph.edges] == [
+        ("a->b", None, False, True),
+        ("b->c", "x", True, True),
+        ("c->d", None, False, False),
+    ]
 
 
 def test_render_block_draws_everything() -> None:
@@ -86,6 +98,7 @@ def test_render_block_draws_everything() -> None:
     assert "M300,130 L300,260 L350,260 L350,298" in svg  # the vhv route
     assert 'stroke-dasharray="7 5"' in svg
     assert "marker-start=" in svg
+    assert 'rx="20"' in svg  # the stadium's rounded ends
 
 
 @pytest.mark.parametrize(
@@ -161,6 +174,8 @@ def test_label_without_hint_sits_on_the_longest_segment() -> None:
     ("block", "message"),
     [
         ('flowchart TB\n    a["A"] --> b\n', "unsupported Mermaid line"),
+        ("flowchart TB\n    a --> b junk\n", "unsupported Mermaid line"),
+        ("flowchart TB\n    -->\n", "unsupported Mermaid line"),
         ("flowchart TB\n    end\n", "'end' without a subgraph"),
         ('flowchart TB\n    subgraph G["g"]\n', "never closed"),
         ("flowchart TB\n    class x foo\n", "unknown node"),
