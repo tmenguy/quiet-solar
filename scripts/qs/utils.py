@@ -89,14 +89,16 @@ def get_current_branch() -> str:
 
 
 def get_issue_from_branch(branch: str | None = None) -> int | None:
-    """Parse the issue number out of ``QS_<N>`` branch names."""
+    """Parse the issue number out of ``QS_<N>`` branch names.
+
+    Pure digits only (#398): ``int()`` accepts underscore digit-grouping and
+    surrounding spaces, so ``QS_369_1`` would parse as issue 3691 — the same
+    fix ``quality_gate.py`` already carries.
+    """
     branch = branch or get_current_branch()
-    if branch.startswith("QS_"):
-        try:
-            return int(branch[3:])
-        except ValueError:
-            return None
-    return None
+    if not branch.startswith("QS_") or not branch[3:].isdigit():
+        return None
+    return int(branch[3:])
 
 
 def get_worktree_dir(issue_number: int) -> Path:

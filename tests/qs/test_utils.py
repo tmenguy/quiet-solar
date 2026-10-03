@@ -45,3 +45,22 @@ def test_run_without_env_passes_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(utils.subprocess, "run", fake_run)
     utils.run(["true"])
     assert seen["env"] is None
+
+
+@pytest.mark.parametrize(
+    ("branch", "expected"),
+    [
+        ("QS_369", 369),
+        ("QS_7", 7),
+        ("QS_369_1", None),  # #398: int() accepts "369_1" as 3691
+        ("QS_", None),
+        ("QS_abc", None),
+        ("QS_ 369", None),
+        ("main", None),
+    ],
+)
+def test_get_issue_from_branch_accepts_only_pure_digits(branch: str, expected: int | None) -> None:
+    """Only ``QS_<digits>`` names an issue, as in ``quality_gate.py`` (#398)."""
+    import utils
+
+    assert utils.get_issue_from_branch(branch) == expected
