@@ -428,3 +428,20 @@ def test_session_acquire_reprobes_a_row_changed_after_the_probe(world, monkeypat
     monkeypatch.setattr(world["probe"], "holder_alive", racing)
     assert acquire(world, world["n1"], "S-n1")[1]["status"] == "acquired"
     assert calls["n"] == 2
+
+
+def test_a_node_launched_after_the_listing_counts_and_is_not_refreshed_away(migrated, fake_clock) -> None:
+    from control_plane import nodes
+
+    run_id, _ = open_run()
+    insert_task(migrated, "T1", run_id)
+    insert_node(migrated, "N1", run_id, "T1", state="running", launch_at=clock.stamp(fake_clock))
+    c = db.connect(migrated)
+    with db.write(c):
+        assert locks.admit_node(c, fake_clock, listing=[], holders_alive={}, limit=5) == 1
+    assert nodes.refresh(c, fake_clock, [])["changes"] == []
+    fake_clock.advance(61)
+    with db.write(c):
+        assert locks.admit_node(c, fake_clock, listing=[], holders_alive={}, limit=5) == 0
+    assert nodes.refresh(c, fake_clock, [])["changes"] == [("N1", "running", "reaped")]
+    c.close()

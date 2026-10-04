@@ -91,6 +91,13 @@ class TestFaults:
             faults.reset()
             faults.hit("y")
 
+    def test_skip(self) -> None:
+        with faults.arm("z", skip=2):
+            faults.hit("z")
+            faults.hit("z")
+            with pytest.raises(faults.FaultInjected):
+                faults.hit("z")
+
     def test_fault_is_not_an_exception(self) -> None:
         assert not issubclass(faults.FaultInjected, Exception)
 

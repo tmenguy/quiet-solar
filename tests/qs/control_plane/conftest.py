@@ -41,12 +41,36 @@ MODULES = (
     "migrations",
     "db",
     "daemon",
+    "tokens",
+    "runs",
+    "messages",
+    "wait",
+    "tasks",
+    "reports",
+    "questions",
+    "decisions",
+    "nodes",
+    "locks",
+    "hooks",
+    "merge_policy",
+    "tools",
     "cli",
 )
 for _name in MODULES:
     importlib.import_module(f"control_plane.{_name}")
 
-from control_plane import cli, clock, db, faults, liveness, migrations, paths, procsetup  # noqa: E402
+from control_plane import (  # noqa: E402
+    cli,
+    clock,
+    db,
+    faults,
+    liveness,
+    merge_policy,
+    migrations,
+    paths,
+    procsetup,
+    tools,
+)
 from control_plane.runner import RunResult  # noqa: E402
 
 REAL_PROCSETUP_GET = procsetup.get
@@ -156,6 +180,7 @@ class FakeProbe(liveness.ProcessProbe):
         self.dead_groups: set[int] = set()
         self._next = 50_000
         self._lock = threading.Lock()
+        self.issued: dict[int, list[int]] = {}
 
     def alive(self, pid: int | None, start: str | None) -> bool:
         if pid is None or pid in self.dead_pids:
@@ -172,7 +197,15 @@ class FakeProbe(liveness.ProcessProbe):
         with self._lock:
             self._next += 1
             pid = self._next
+            self.issued.setdefault(threading.get_ident(), []).append(pid)
         return liveness.Holder(pid, f"start-{pid}", pid)
+
+    def reap_thread(self) -> None:
+        """A finished ``cp.py`` process is dead: kill the pids this thread's call handed out."""
+        with self._lock:
+            pids = self.issued.pop(threading.get_ident(), [])
+        for pid in pids:
+            self.kill(pid)
 
     def kill(self, pid: int | None, *, group: bool = True) -> None:
         if pid is not None:
@@ -305,6 +338,8 @@ def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deps: cli.Dep
         yield setup
     finally:
         faults.reset()
+        merge_policy.reset()
+        tools.reset()
 
 
 @pytest.fixture
@@ -320,7 +355,12 @@ def fake_main(tmp_path: Path) -> Path:
 def run_cli(*argv: str, stdin: str = "") -> tuple[int, Any]:
     """``cli.main`` in-process → ``(exit_code, parsed JSON | raw text | None)``."""
     out = io.StringIO()
-    code = cli.main(list(argv), stdin=io.StringIO(stdin), stdout=out)
+    try:
+        code = cli.main(list(argv), stdin=io.StringIO(stdin), stdout=out)
+    finally:
+        probe = cli.make_deps().probe
+        if isinstance(probe, FakeProbe):
+            probe.reap_thread()
     text = out.getvalue()
     if not text.strip():
         return code, None

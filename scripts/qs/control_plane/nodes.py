@@ -64,6 +64,12 @@ def listed(listing: list[liveness.Agent], row: sqlite3.Row) -> liveness.Agent | 
     return liveness.find(listing, name=row["name"])
 
 
+def recently_launched(row: sqlite3.Row, clock: clock_mod.Clock, settle_s: float = LAUNCH_SETTLE_S) -> bool:
+    """Launched less than ``settle_s`` ago: a listing taken earlier cannot judge it."""
+    elapsed = clock_mod.age(clock, row["launch_at"])
+    return elapsed is not None and elapsed < settle_s
+
+
 def refresh(
     conn: sqlite3.Connection, clock: clock_mod.Clock, listing: list[liveness.Agent] | None, run_id: str | None = None
 ) -> dict[str, Any]:
@@ -77,6 +83,8 @@ def refresh(
         ).fetchall()
         for row in rows:
             agent = listed(listing, row)
+            if agent is None and recently_launched(row, clock):
+                continue  # the listing may predate the launch: never reap within LAUNCH_SETTLE_S
             if agent is None:
                 new = "reaped"
             else:

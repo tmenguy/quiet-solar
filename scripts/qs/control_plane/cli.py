@@ -38,6 +38,7 @@ from . import (
     runner,
     runs,
     tasks,
+    tools,
     wait,
 )
 
@@ -706,6 +707,45 @@ COMMANDS: dict[str, Command] = {
 }
 
 
+def _conf_tool(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--task", required=True)
+    p.add_argument("--key", required=True)
+    p.add_argument("--args-file")
+    _token(p)
+
+
+def _tool_handler(name: str) -> Callable[[argparse.Namespace, Io], dict[str, Any]]:
+    def handler(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+        tool_args = messages.parse_payload(read_file(args.args_file)) if args.args_file else {}
+        if not isinstance(tool_args, dict):
+            raise errors.CpError("USAGE", "--args-file must hold a JSON object")
+        path = paths.select_db()
+        with connection(io, "write"):
+            pass  # the entry schema check (waits for a pending self-migration)
+        d = io.deps
+        ctx = tools.Ctx(
+            runner=d.runner,
+            conn_factory=lambda: db.connect(path),
+            clock=d.clock,
+            probe=d.probe,
+            claude=d.claude,
+            main=paths.main(),
+        )
+        return tools.invoke(name, key=args.key, task_id=args.task, args=tool_args, token=args.token, actor="", ctx=ctx)
+
+    return handler
+
+
+def all_commands() -> dict[str, Command]:
+    """``COMMANDS`` plus one ``tool <name>`` entry per registered tool."""
+    table = dict(COMMANDS)
+    for name in sorted(tools.REGISTRY):
+        table[f"tool {name}"] = Command(
+            f"tool {name}", "write", _tool_handler(name), _conf_tool, help=f"run the {name} tool"
+        )
+    return table
+
+
 # --------------------------------------------------------------------------- parsing
 
 
@@ -713,8 +753,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="cp.py", description="Quiet Solar Control Plane")
     groups: dict[str, argparse._SubParsersAction[Any]] = {}
     top = parser.add_subparsers(dest="_cmd0", required=True, parser_class=_Parser)
-    for name in sorted(COMMANDS):
-        cmd = COMMANDS[name]
+    table = all_commands()
+    for name in sorted(table):
+        cmd = table[name]
         words = name.split()
         sub_action = top
         prefix = ""
@@ -741,7 +782,7 @@ def main(argv: Sequence[str] | None = None, *, stdin: TextIO | None = None, stdo
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
         args = build_parser().parse_args(argv)
-        cmd = COMMANDS[args._command]
+        cmd = all_commands()[args._command]
         if cmd.name.startswith("tool "):
             procsetup.get().become_group_leader()
         result = cmd.handler(args, io)

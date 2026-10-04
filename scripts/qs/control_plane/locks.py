@@ -517,8 +517,8 @@ def admit_node(
                 )
                 continue
             count += 1
-        elif listing is None or on_list:
-            count += 1
+        elif listing is None or on_list or nodes.recently_launched(row, clock, settle_s):
+            count += 1  # a node launched after the listing was taken still counts
     if count >= limit:
         raise errors.CpError("BUSY", f"node cap reached ({count}/{limit})")
     return count

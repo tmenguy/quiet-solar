@@ -11,6 +11,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 _ARMED: dict[str, BaseException] = {}
+_SKIP: dict[str, int] = {}
 
 
 class FaultInjected(BaseException):
@@ -19,18 +20,26 @@ class FaultInjected(BaseException):
 
 def hit(name: str) -> None:
     exc = _ARMED.get(name)
-    if exc is not None:
-        raise exc
+    if exc is None:
+        return
+    if _SKIP.get(name, 0) > 0:
+        _SKIP[name] -= 1
+        return
+    raise exc
 
 
 @contextmanager
-def arm(name: str, exc: BaseException | None = None) -> Iterator[None]:
+def arm(name: str, exc: BaseException | None = None, *, skip: int = 0) -> Iterator[None]:
+    """Fire ``name`` on its ``skip + 1``-th hit (and every hit after) while armed."""
     _ARMED[name] = exc if exc is not None else FaultInjected(name)
+    _SKIP[name] = skip
     try:
         yield
     finally:
         _ARMED.pop(name, None)
+        _SKIP.pop(name, None)
 
 
 def reset() -> None:
     _ARMED.clear()
+    _SKIP.clear()
