@@ -74,6 +74,7 @@ class Sim:
         if not self.wt.exists():
             self.created += 1  # the script is idempotent: a second run creates nothing
         self.wt.mkdir(exist_ok=True)
+        (self.wt / ".git").write_text("gitdir: x\n")  # a linked worktree
         self.registered.add(str(self.wt.resolve()))
         return RunResult(0, json.dumps({"worktree_path": str(self.wt), "branch": "QS_11", "issue_number": 11}), "")
 

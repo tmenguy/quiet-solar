@@ -94,7 +94,7 @@ def snapshot(conn: sqlite3.Connection | None, clock: clock_mod.Clock, run_id: st
     p: tuple[Any, ...] = () if run_id is None else (run_id,)
     task_flt = "" if run_id is None else "AND task_id IN (SELECT id FROM tasks WHERE run_id = ?)"
     with db.read(conn):
-        runs = _rows(conn, f"SELECT * FROM runs WHERE 1 = 1 {flt.replace('run_id', 'id')} ORDER BY id", p)
+        runs = _rows(conn, f"SELECT * FROM runs WHERE 1 = 1 {flt.replace('run_id', 'id')} ORDER BY rowid", p)
         leases = {r["run_id"]: r for r in _rows(conn, "SELECT * FROM run_leases")}
         for run in runs:
             run["lease"] = leases.get(run["id"])
@@ -102,15 +102,15 @@ def snapshot(conn: sqlite3.Connection | None, clock: clock_mod.Clock, run_id: st
         return {
             "schema_version": db.user_version(conn),
             "runs": runs,
-            "tasks": _rows(conn, f"SELECT * FROM tasks WHERE 1 = 1 {flt} ORDER BY id", p),
+            "tasks": _rows(conn, f"SELECT * FROM tasks WHERE 1 = 1 {flt} ORDER BY rowid", p),
             "task_deps": _rows(conn, f"SELECT * FROM task_deps WHERE 1 = 1 {task_flt} ORDER BY task_id, depends_on", p),
             "run_roots": _rows(conn, f"SELECT * FROM run_roots WHERE 1 = 1 {flt} ORDER BY run_id, task_id", p),
             "work_list": _rows(conn, f"SELECT * FROM work_list WHERE 1 = 1 {flt} ORDER BY run_id, task_id", p),
             "criteria": _rows(conn, f"SELECT * FROM criteria WHERE 1 = 1 {task_flt} ORDER BY task_id, idx", p),
             "task_history": _rows(conn, f"SELECT * FROM task_history WHERE 1 = 1 {task_flt} ORDER BY id", p),
-            "nodes": _rows(conn, f"SELECT * FROM nodes WHERE 1 = 1 {flt} ORDER BY id", p),
+            "nodes": _rows(conn, f"SELECT * FROM nodes WHERE 1 = 1 {flt} ORDER BY rowid", p),
             "queues": _queues(conn, clock, flt, p),
-            "questions": _rows(conn, f"SELECT * FROM questions WHERE 1 = 1 {flt} ORDER BY created_at, id", p),
+            "questions": _rows(conn, f"SELECT * FROM questions WHERE 1 = 1 {flt} ORDER BY created_at, rowid", p),
             "decisions": _rows(conn, f"SELECT * FROM decisions WHERE 1 = 1 {flt} ORDER BY id", p),
             "digests": _rows(
                 conn,

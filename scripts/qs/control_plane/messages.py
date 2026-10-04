@@ -1,7 +1,8 @@
 """Run queues (§7.1): one per recipient, in order of arrival.
 
 ``queued → in_flight`` (visibility timeout + a fresh receipt) ``→ acked``, or
-``dead`` once a message reached ``MAX_ATTEMPTS`` pops. Not acking in time is
+``dead`` once a message reached ``MAX_ATTEMPTS`` pops (an ack carrying the
+receipt of its last delivery still acks it). Not acking in time is
 the requeue path: an expired in-flight message is redelivered first (its id
 is lower).
 """
@@ -167,7 +168,7 @@ def ack(conn: sqlite3.Connection, clock: clock_mod.Clock, *, token: str, msg_id:
         if row is None or row["run_id"] != who.run_id:
             raise errors.CpError("NOT_FOUND", f"no message {msg_id} in run {who.run_id}")
         _check_reader(who, row["recipient"])
-        if row["state"] in ("queued", "dead"):
+        if row["state"] == "queued" or (row["state"] == "dead" and row["receipt"] != receipt):
             raise errors.CpError("INVALID_STATE", f"message {msg_id} is {row['state']}")
         if row["receipt"] != receipt:
             raise errors.CpError("CONFLICT", f"stale receipt: message {msg_id} was redelivered")

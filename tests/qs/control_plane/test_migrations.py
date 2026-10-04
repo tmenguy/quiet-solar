@@ -126,3 +126,50 @@ def test_lock_held_elsewhere_is_busy(db_path: Path) -> None:
         with pytest.raises(errors.CpError) as exc:
             migrations.migrate(db_path, role="test", lock_timeout=0.05)
     assert exc.value.code == "BUSY"
+
+
+# --------------------------------------------------------------------------- review fix #01 (F6, F7)
+
+
+class TestReviewFix01:
+    def test_a_current_db_is_a_noop_on_a_feature_branch(self, fake_main: Path, monkeypatch) -> None:
+        """F6: no migration needed → no authorisation needed, whatever main's checkout."""
+        live = fake_main / "harness_state.db"
+        migrations.migrate(live, role="daemon")
+        monkeypatch.setattr(paths, "main_head_branch", lambda m: None)  # detached HEAD or a feature branch
+        assert migrations.migrate(live, role="daemon")["result"] == "noop"
+        assert migrations.migrate(live, role="test")["result"] == "noop"
+
+    def test_an_older_live_db_is_still_refused_off_main(self, fake_main: Path, monkeypatch) -> None:
+        live = fake_main / "harness_state.db"
+        migrations.migrate(live, role="daemon")
+        monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, V2))
+        monkeypatch.setattr(paths, "main_head_branch", lambda m: "QS_1")
+        with pytest.raises(errors.CpError) as exc:
+            migrations.migrate(live, role="daemon")
+        assert exc.value.code == "POLICY_REFUSED" and _version(live) == 1
+
+    def test_a_busy_begin_is_busy(self, migrated: Path, monkeypatch) -> None:
+        """F7: lock contention is ``BUSY``, never a raw ``OperationalError``."""
+        monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, V2))
+        monkeypatch.setattr(db, "BUSY_TIMEOUT_MS", 20)
+        holder = sqlite3.connect(migrated, isolation_level=None)
+        holder.execute("BEGIN IMMEDIATE")
+        try:
+            with pytest.raises(errors.CpError) as exc:
+                migrations.migrate(migrated, role="test")
+            assert exc.value.code == "BUSY"
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()
+        assert _version(migrated) == 1
+
+    def test_an_auto_rolled_back_step_keeps_its_own_error(self, migrated: Path, monkeypatch) -> None:
+        """F7: SQLite already rolled back; a bare ROLLBACK would hide the IntegrityError."""
+        rb = migrations.Migration(
+            2, "rb", ("CREATE TABLE t (x UNIQUE)", "INSERT INTO t VALUES (1)", "INSERT OR ROLLBACK INTO t VALUES (1)")
+        )
+        monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, rb))
+        with pytest.raises(sqlite3.IntegrityError):
+            migrations.migrate(migrated, role="test")
+        assert _version(migrated) == 1 and "t" not in _tables(migrated)

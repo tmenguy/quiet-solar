@@ -168,3 +168,35 @@ def test_next_id_and_helpers(conn: sqlite3.Connection, fake_clock) -> None:
     assert db.as_dict(None) is None
     assert db.as_dict(conn.execute("SELECT 1 AS a").fetchone()) == {"a": 1}
     assert db.now(fake_clock) == "2026-10-03T12:00:00.000000Z"
+
+
+# --------------------------------------------------------------------------- review fix #01 (F20, F24)
+
+
+class TestReviewFix01:
+    def test_a_failed_commit_rolls_back(self, conn: sqlite3.Connection) -> None:
+        """F20: a deferred foreign-key violation fails the COMMIT; the connection must not stay in a transaction."""
+        conn.execute("CREATE TEMP TABLE p (id INTEGER PRIMARY KEY)")
+        conn.execute("CREATE TEMP TABLE c (pid INTEGER REFERENCES p (id) DEFERRABLE INITIALLY DEFERRED)")
+        with pytest.raises(sqlite3.IntegrityError), db.write(conn):
+            conn.execute("INSERT INTO c (pid) VALUES (42)")
+        assert not conn.in_transaction
+        with db.write(conn):  # the connection is usable again
+            conn.execute("INSERT INTO meta (key, value) VALUES ('ok', '1')")
+
+    def test_only_busy_and_locked_map_to_busy(self, conn: sqlite3.Connection) -> None:
+        conn.execute("BEGIN")
+        try:
+            with pytest.raises(errors.CpError) as exc, db.write(conn):
+                pass
+            assert exc.value.code == "INTERNAL" and "within a transaction" in exc.value.detail
+        finally:
+            conn.execute("ROLLBACK")
+
+    def test_a_running_migration_has_its_own_message(self, migrated: Path, fake_clock) -> None:
+        """F24: the ``_MIGRATING`` sentinel is not reported as "schema v-1"."""
+        with db.file_lock(paths.sidecar(migrated, ".migrate.lock"), exclusive=True, timeout=0):
+            with pytest.raises(errors.CpError) as exc:
+                db.check_schema(migrated, wait=False, clock=fake_clock)
+        assert exc.value.code == "SCHEMA_PENDING" and "a migration is in progress" in exc.value.detail
+        assert "v-1" not in exc.value.detail

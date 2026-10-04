@@ -9,13 +9,16 @@
 * Liveness is probed **outside** the transaction; inside ``BEGIN IMMEDIATE``
   the lock is taken only if its row is still what was probed (compare-and-set).
 * Caps: ``gates`` slots (``QS_CP_MAX_GATES``) and the node cap
-  (``QS_CP_MAX_NODES``), counted across all runs.
+  (``QS_CP_MAX_NODES``), counted across all runs: a cap compares the number
+  of live rows with the caller's limit, so a process with a smaller limit
+  never exceeds it.
 """
 
 from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -98,7 +101,7 @@ class Facts:
 
     holder_alive: bool = False  # process-held rows
     listing: list[liveness.Agent] | None = None  # session-held rows
-    pid_alive: bool = False  # session-held rows, used only when the listing failed
+    pid_alive: bool = False  # session-held rows, used only when the listing failed (unknown counts as alive)
     cohold_alive: bool = False
 
 
@@ -116,7 +119,7 @@ def probe_row(
     cohold_alive = row["cohold_pid"] is not None and probe.holder_alive(
         row["cohold_pid"], row["cohold_pid_start"], row["cohold_pgid"]
     )
-    pid_alive = listing is None and probe.alive(row["holder_pid"], row["holder_pid_start"])
+    pid_alive = listing is None and probe.alive(row["holder_pid"], row["holder_pid_start"]) is not False
     return Facts(listing=listing, pid_alive=pid_alive, cohold_alive=cohold_alive)
 
 
@@ -137,11 +140,14 @@ def session_holder_dead(conn: sqlite3.Connection, row: sqlite3.Row, facts: Facts
     if run is None or run["state"] != "open":
         return True
     branch = str(row["name"])[len(INTEGRATION) :]
+    marks = ", ".join("?" for _ in _TERMINAL_TASKS)
     owner = conn.execute(
-        "SELECT state FROM tasks WHERE branch = ? AND is_deliverable = 1 ORDER BY id DESC LIMIT 1", (branch,)
+        "SELECT EXISTS (SELECT 1 FROM tasks WHERE branch = ? AND is_deliverable = 1) AS known,"
+        f" EXISTS (SELECT 1 FROM tasks WHERE branch = ? AND is_deliverable = 1 AND state NOT IN ({marks})) AS live",
+        (branch, branch, *_TERMINAL_TASKS),
     ).fetchone()
-    if owner is not None and owner["state"] in _TERMINAL_TASKS:
-        return True
+    if owner["known"] and not owner["live"]:
+        return True  # every deliverable on the branch is finished
     if facts.listing is not None:
         return liveness.find(facts.listing, session_id=row["holder_session_id"]) is None
     return not facts.pid_alive
@@ -217,7 +223,10 @@ def _take_lock(
         if row is not None and row["holder_kind"] == "session" and facts.listing is not None:
             agent = liveness.find(facts.listing, session_id=row["holder_session_id"])
             if agent is not None and agent.pid is not None:
-                restamp = (agent.pid, probe.start_of(agent.pid))
+                try:
+                    restamp = (agent.pid, probe.start_of(agent.pid))
+                except liveness.ProbeUnknown:
+                    restamp = None  # keep the recorded pid
         blocker: sqlite3.Row | None = None
         with db.write(conn):
             who = tokens.require(conn, held.token, kinds={"run", "node"}, allow_stopped=held.allow_stopped)
@@ -282,10 +291,9 @@ def _take_slot(
         with db.write(conn):
             tokens.require(conn, held.token, kinds={"run", "node"}, allow_stopped=held.allow_stopped)
             current = {r["slot"]: r for r in conn.execute("SELECT * FROM cap_slots WHERE cap = ?", (cap,))}
-            for slot in range(limit):
-                r = current.get(slot)
-                if r is not None and dead.get(slot) != r["holder_pid"]:
-                    continue
+            live = {slot for slot, r in current.items() if dead.get(slot) != r["holder_pid"]}
+            if len(live) < limit:
+                slot = min(set(range(len(live) + 1)) - live)
                 conn.execute("DELETE FROM cap_slots WHERE cap = ? AND slot = ?", (cap, slot))
                 conn.execute(
                     "INSERT INTO cap_slots (cap, slot, holder_pid, holder_pid_start, holder_pgid, holder_actor,"
@@ -353,6 +361,8 @@ def hold(
     finally:
         try:
             release(conn, held)
+        except sqlite3.Error as exc:  # liveness frees the rows later; never mask the tool's own outcome
+            sys.stderr.write(f"[cp-locks] release failed: {exc!r}\n")
         finally:
             conn.close()
 
@@ -420,7 +430,10 @@ def acquire_session(
             raise errors.CpError("BUSY", "liveness unknown (the session listing failed), retry")
         mine = liveness.find(listing, session_id=session_id)
         pid = mine.pid if mine is not None else None
-        pid_start = probe.start_of(pid) if pid is not None else None
+        try:
+            pid_start = probe.start_of(pid) if pid is not None else None
+        except liveness.ProbeUnknown as exc:
+            raise errors.CpError("BUSY", f"liveness unknown ({exc}), retry") from exc
         if pid is None or pid_start is None:
             raise errors.CpError("USAGE", f"session {session_id} is not running")
         row = conn.execute("SELECT * FROM locks WHERE name = ?", (name,)).fetchone()

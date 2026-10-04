@@ -243,3 +243,13 @@ class TestTaskShow:
         for side in ("-wal", "-shm"):
             Path(str(db_path) + side).unlink(missing_ok=True)
         assert run_cli("task", "show", "--task", "T1")[1]["error"] == "NOT_FOUND"
+
+
+def test_snapshot_orders_text_ids_by_insertion(world, fake_clock) -> None:
+    """F1 sweep: ``ORDER BY id`` on ``T<n>`` text ids put T10 before T9."""
+    from .conftest import insert_task
+
+    for task_id in ("T9", "T10"):
+        insert_task(world["db"], task_id, world["run"])
+    ids = [t["id"] for t in run_cli("snapshot")[1]["tasks"]]
+    assert ids.index("T9") < ids.index("T10")

@@ -181,3 +181,57 @@ def test_live_waiter(migrated, run, fake_probe) -> None:
     fake_probe.kill(7)
     assert not wait.live_waiter(c, fake_probe, run_id)
     c.close()
+
+
+# --------------------------------------------------------------------------- review fix #01 (F4, F8, F9)
+
+
+def test_live_waiter_with_unknown_liveness_counts_as_alive(migrated, run, fake_probe, monkeypatch) -> None:
+    run_id, _ = run
+    c = sqlite3.connect(migrated)
+    c.row_factory = sqlite3.Row
+    c.execute(
+        "INSERT INTO waiters (run_id, pid, pid_start, started_at, heartbeat_at) VALUES (?, 7, 'start-7', 'x', 'x')",
+        (run_id,),
+    )
+    monkeypatch.setattr(fake_probe, "alive", lambda pid, start: None)
+    assert wait.live_waiter(c, fake_probe, run_id)
+    c.close()
+
+
+def test_a_busy_heartbeat_keeps_waiting(migrated, run, fake_clock, tmp_path, monkeypatch, capsys) -> None:
+    """F8: one BUSY poll is logged and skipped, never the end of ``wait``."""
+    from control_plane import db
+
+    run_id, token = run
+    monkeypatch.setattr(db, "BUSY_TIMEOUT_MS", 20)
+    holder = sqlite3.connect(migrated, isolation_level=None)
+
+    def on_sleep(n: int) -> None:
+        if n == 1:
+            holder.execute("BEGIN IMMEDIATE")
+        elif n == 2:
+            holder.execute("ROLLBACK")
+            _post(run_id, token, tmp_path)
+
+    _hook(fake_clock, on_sleep)
+    try:
+        code, out = run_cli("wait", "--run", run_id, "--token", token, "--poll", "1")
+    finally:
+        if holder.in_transaction:
+            holder.execute("ROLLBACK")
+        holder.close()
+    assert (code, out) == (0, {"ok": True, "pending": 1})
+    assert "busy" in capsys.readouterr().err
+    assert _waiters(migrated) == 0
+
+
+def test_restart_pending_from_ensure_is_restart_wait(migrated, run, monkeypatch) -> None:
+    """F9: an older daemon still running → exit 5 with ``restart_wait``, like a migration mid-wait."""
+    from control_plane import cli
+
+    run_id, token = run
+    monkeypatch.setattr(cli, "ensure_daemon", lambda io, path=None: {"status": "restart_pending", "pid": 7})
+    code, out = run_cli("wait", "--run", run_id, "--token", token)
+    assert code == 5 and out["restart_wait"] is True
+    assert _waiters(migrated) == 0

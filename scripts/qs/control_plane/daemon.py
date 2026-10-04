@@ -1,8 +1,10 @@
 """The daemon skeleton (§5.2) and ``ensure`` (§5.3) — the core of child 14's active loop.
 
-``run``: a singleton ``flock``, ``migrate(role="daemon")``, a ``daemon_lease``
-row, a heartbeat, the tick hooks, and an idle exit. ``ensure``: start the
-daemon when its lease is stale, restart it when it runs an older schema.
+``run``: a singleton ``flock``, ``migrate(role="daemon")`` (retried on
+``BUSY``, which never writes the backoff sidecar), a ``daemon_lease`` row, a
+heartbeat (a ``BUSY`` beat is logged and skipped), the tick hooks, and an
+idle exit. ``ensure``: start the daemon when its lease is stale, restart it
+when it runs an older schema — ``restart_pending`` while the old one lives on.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ IDLE_EXIT_S = 1800.0
 STALE_AFTER_S = 30.0
 DAEMON_RESTART_WAIT_S = 15.0
 MIGRATE_BACKOFF_S = 300.0
+MIGRATE_BUSY_RETRIES = 6
 LOG_NAME = "harness_state.daemon.log"
 
 TickHook = Callable[[Any, clock_mod.Clock], None]
@@ -47,6 +50,20 @@ def _write_migrate_error(db_path: Path, clock: clock_mod.Clock, error: str) -> N
     paths.sidecar(db_path, ".migrate-error.json").write_text(json.dumps(payload, sort_keys=True))
 
 
+def _migrate(db_path: Path, clock: clock_mod.Clock, tick_s: float) -> dict[str, Any]:
+    """``migrate(role="daemon")``, retrying contention; ``BUSY`` at the end is raised without the sidecar."""
+    attempt = 0
+    while True:
+        try:
+            return migrations.migrate(db_path, role="daemon")
+        except errors.CpError as exc:
+            if exc.code != "BUSY" or attempt >= MIGRATE_BUSY_RETRIES:
+                raise
+            attempt += 1
+            _log(f"migration busy, retrying: {exc.detail}")
+            clock.sleep(tick_s)
+
+
 def _any_open_run(conn: Any) -> bool:
     return conn.execute("SELECT 1 FROM runs WHERE state = 'open' LIMIT 1").fetchone() is not None
 
@@ -66,8 +83,11 @@ def run(
         if not got:
             return {"singleton": "held_elsewhere"}
         try:
-            migrated = migrations.migrate(db_path, role="daemon")
-        except Exception as exc:  # noqa: BLE001 — every failure is recorded for `ensure`
+            migrated = _migrate(db_path, clock, tick_s)
+        except Exception as exc:  # noqa: BLE001 — every failure but contention is recorded for `ensure`
+            if isinstance(exc, errors.CpError) and exc.code == "BUSY":
+                _log(f"migration still busy, exiting without the backoff sidecar: {exc.detail}")
+                raise
             error = (
                 exc.payload() if isinstance(exc, errors.CpError) else {"error": type(exc).__name__, "detail": str(exc)}
             )
@@ -92,8 +112,13 @@ def run(
             last_open = clock.now()
             reason = "max_ticks"
             while True:
-                with db.write(conn):
-                    conn.execute("UPDATE daemon_lease SET heartbeat_at = ? WHERE id = 1", (db.now(clock),))
+                try:
+                    with db.write(conn):
+                        conn.execute("UPDATE daemon_lease SET heartbeat_at = ? WHERE id = 1", (db.now(clock),))
+                except errors.CpError as exc:
+                    if exc.code != "BUSY":
+                        raise
+                    _log(f"heartbeat skipped (busy): {exc.detail}")
                 for hook in tick_hooks:
                     try:
                         hook(conn, clock)
@@ -179,14 +204,22 @@ def ensure(
         if elapsed is not None and elapsed < migrate_backoff_s:
             return {"status": "migrate_failed", "error": error.get("error")}
     status = "started"
-    if fresh and lease is not None:
+    older = lease is not None and lease["pid"] is not None and lease["schema_version"] < target
+    alive = probe.alive(lease["pid"], lease["pid_start"]) if older and lease is not None else False
+    if older and lease is not None and (fresh or alive is not False):
+        old_pid = lease["pid"]
+        # An older daemon, alive (fresh or hung) or freshly beating: stop it before starting this code's.
         status = "restarted"
-        if probe.alive(lease["pid"], lease["pid_start"]):
-            kill(lease["pid"], signal.SIGTERM)
+        if alive is True:
+            kill(old_pid, signal.SIGTERM)  # never on "unknown": the pid may have been reused
         deadline = clock.now().timestamp() + restart_wait_s
-        while clock.now().timestamp() < deadline:
+        while True:
             current = read_lease(db_path)
             if current is None or current["pid"] is None:
+                break
+            if clock.now().timestamp() >= deadline:
+                if probe.alive(old_pid, lease["pid_start"]) is not False:
+                    return {"status": "restart_pending", "pid": old_pid}
                 break
             clock.sleep(db.POLL_S)
     if argv is None:

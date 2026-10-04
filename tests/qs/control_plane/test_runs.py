@@ -208,3 +208,45 @@ class TestSessionStatus:
             assert (out["role"], out["state"], out["task_id"]) == ("node", state, "T1")
         assert run_cli("session", "status", "--session-id", "S-zz")[1]["role"] == "none"
         assert runs.session_status(None, "x")["role"] == "none"
+
+
+# --------------------------------------------------------------------------- review fix #01 (F23, F24)
+
+
+@pytest.mark.parametrize("command", ["open", "claim"])
+def test_a_daemon_start_error_still_prints_the_token(migrated, fake_popen, command: str) -> None:
+    """F24: the run is opened or claimed; a failing ``ensure`` is reported, never the whole command's error."""
+    run_id = open_run()[0] if command == "claim" else None
+
+    def boom(argv: list[str], kwargs: dict) -> None:
+        raise OSError("cannot spawn")
+
+    fake_popen.on_call = boom
+    if command == "open":
+        code, out = run_cli("run", "open", "--name", "r2", "--title", "t", "--session-id", "S-2")
+    else:
+        code, out = run_cli("run", "claim", run_id, "--session-id", ORCH)
+    assert code == 0 and out["token"] and out["daemon"] == "error"
+    assert "cannot spawn" in out["daemon_error"]
+
+
+@pytest.mark.parametrize(
+    ("argv", "flag"),
+    [
+        (["msg", "pop", "--run", "R1", "--as", "orchestrator", "--token", "x"], "--visibility"),
+        (["wait", "--run", "R1", "--token", "x"], "--poll"),
+        (["wait", "--run", "R1", "--token", "x"], "--timeout"),
+    ],
+)
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "abc"])
+def test_float_flags_must_be_finite_and_positive(argv: list[str], flag: str, value: str) -> None:
+    """F23."""
+    code, out = run_cli(*argv, f"{flag}={value}")
+    assert code == 2 and out["error"] == "USAGE"
+
+
+@pytest.mark.parametrize("value", ["-1", "nan", "inf"])
+def test_lock_timeout_must_be_finite_and_not_negative(value: str) -> None:
+    argv = ["lock", "acquire", "--name", "integration:QS_1", "--purpose", "p", "--token", "x", "--session-id", "S"]
+    code, out = run_cli(*argv, f"--timeout={value}")
+    assert code == 2 and out["error"] == "USAGE"

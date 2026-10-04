@@ -102,6 +102,8 @@ def stop(conn: sqlite3.Connection, clock: clock_mod.Clock, *, token: str, task_i
     with db.write(conn):
         who = tokens.require(conn, token, kinds={"run"}, task_id=task_id)
         node = current(conn, task_id)
+        if node["state"] == "stopped":
+            return {"node_id": node["id"], "state": "stopped", "noop": True}
         move(conn, clock, node["id"], "stopped")
         msg = messages.post_locked(
             conn,
@@ -112,7 +114,7 @@ def stop(conn: sqlite3.Connection, clock: clock_mod.Clock, *, token: str, task_i
             sender=who.actor,
             payload={"node_id": node["id"]},
         )
-    return {"node_id": node["id"], "state": "stopped", "message_id": msg["id"]}
+    return {"node_id": node["id"], "state": "stopped", "message_id": msg["id"], "noop": False}
 
 
 def take_over(conn: sqlite3.Connection, clock: clock_mod.Clock, *, token: str, task_id: str) -> dict[str, Any]:

@@ -2,6 +2,9 @@
 
 * ``ProcessProbe`` — a pid is alive iff it exists and its start time still
   matches (pid reuse); a group is alive while ``killpg(pgid, 0)`` succeeds.
+  ``alive`` is tri-state: when ``ps`` itself fails (timeout, exec failure,
+  unparseable output) it returns ``None`` (unknown), and every caller keeps
+  the holder: a failed probe is never evidence of absence.
 * ``ClaudeCli`` — ``claude agents --json`` lists interactive and background
   sessions. Any failure raises ``CpError("INTERNAL")``, which callers treat
   as *unknown*: a failed listing is never evidence of absence.
@@ -31,11 +34,16 @@ class Holder:
     pgid: int | None
 
 
+class ProbeUnknown(Exception):
+    """``ps`` could not tell a pid's start time: unknown, never "dead"."""
+
+
 class ProcessProbe:
     def __init__(self, run: runner.Runner | None = None) -> None:
         self.runner = run or runner.Runner()
 
-    def alive(self, pid: int | None, start: str | None) -> bool:
+    def alive(self, pid: int | None, start: str | None) -> bool | None:
+        """``True``, ``False``, or ``None`` when the start-time probe failed (callers keep the holder)."""
         if pid is None:
             return False
         try:
@@ -46,7 +54,10 @@ class ProcessProbe:
             pass  # exists, owned by someone else
         if start is None:
             return True
-        return self.start_of(pid) == start
+        try:
+            return self.start_of(pid) == start
+        except ProbeUnknown:
+            return None
 
     def group_alive(self, pgid: int | None) -> bool:
         if pgid is None:
@@ -60,23 +71,34 @@ class ProcessProbe:
         return True
 
     def start_of(self, pid: int) -> str | None:
-        """The pid's start time (``ps -o lstart=``), or ``None`` if it no longer exists."""
-        res = self.runner.run(["ps", "-o", "lstart=", "-p", str(pid)], env_extra={"LC_ALL": "C"}, timeout=10)
+        """The pid's start time (``ps -o lstart=``, in UTC), or ``None`` if it no longer exists.
+
+        Raises ``ProbeUnknown`` when ``ps`` failed for any other reason.
+        """
+        res = self.runner.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)], env_extra={"LC_ALL": "C", "TZ": "UTC0"}, timeout=10
+        )
         text = " ".join(res.stdout.split())
+        if res.returncode == 1 and not text:
+            return None  # ps: no such process
         if res.returncode != 0 or not text:
-            return None
+            raise ProbeUnknown(f"ps exited {res.returncode}: {res.stderr.strip()[-200:]}")
         try:
             return datetime.strptime(text, "%a %b %d %H:%M:%S %Y").strftime("%Y-%m-%dT%H:%M:%S")
-        except ValueError:
-            return None
+        except ValueError as exc:
+            raise ProbeUnknown(f"ps: unparseable start time {text!r}") from exc
 
     def me(self) -> Holder:
         pid = os.getpid()
-        return Holder(pid, self.start_of(pid), os.getpgid(0))
+        try:
+            start = self.start_of(pid)
+        except ProbeUnknown:
+            start = None
+        return Holder(pid, start, os.getpgid(0))
 
     def holder_alive(self, pid: int | None, start: str | None, pgid: int | None) -> bool:
-        """A holder is dead iff its pid is dead **and** its group is gone."""
-        return self.alive(pid, start) or self.group_alive(pgid)
+        """A holder is dead iff its pid is proven dead **and** its group is gone (unknown keeps it)."""
+        return self.alive(pid, start) is not False or self.group_alive(pgid)
 
 
 @dataclass(frozen=True)
@@ -105,7 +127,7 @@ def _opt_str(entry: dict[str, Any], key: str) -> str | None:
 
 def _opt_int(entry: dict[str, Any], key: str) -> int | None:
     value = entry.get(key)
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
 class ClaudeCli:

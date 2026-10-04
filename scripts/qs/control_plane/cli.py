@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sqlite3
 import subprocess
@@ -87,6 +88,33 @@ class Io:
 def ensure_daemon(io: Io, path: Any = None) -> dict[str, Any]:
     d = io.deps
     return daemon.ensure(popen=d.popen, clock=d.clock, probe=d.probe, db_path=path, kill=d.kill)
+
+
+def _daemon_status(io: Io, result: dict[str, Any]) -> dict[str, Any]:
+    """After ``run open`` / ``run claim``: the daemon's status; a start error never hides the run token."""
+    try:
+        result["daemon"] = ensure_daemon(io)["status"]
+    except Exception as exc:  # noqa: BLE001 — the run is already opened or claimed
+        result["daemon"] = "error"
+        result["daemon_error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def _float_flag(*, allow_zero: bool) -> Callable[[str], float]:
+    def parse(text: str) -> float:
+        try:
+            value = float(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
+        if not math.isfinite(value) or value < 0 or (value == 0 and not allow_zero):
+            raise argparse.ArgumentTypeError(f"must be finite and {'>= 0' if allow_zero else '> 0'}: {text!r}")
+        return value
+
+    return parse
+
+
+POSITIVE = _float_flag(allow_zero=False)
+NON_NEGATIVE = _float_flag(allow_zero=True)
 
 
 @contextmanager
@@ -187,8 +215,7 @@ def _run_open(args: argparse.Namespace, io: Io) -> dict[str, Any]:
             permission_mode=args.permission_mode,
             full_grant=args.full_grant,
         )
-    result["daemon"] = ensure_daemon(io)["status"]
-    return result
+    return _daemon_status(io, result)
 
 
 def _conf_run_claim(p: argparse.ArgumentParser) -> None:
@@ -215,8 +242,7 @@ def _run_claim(args: argparse.Namespace, io: Io) -> dict[str, Any]:
             permission_mode=args.permission_mode,
             full_grant=args.full_grant,
         )
-    result["daemon"] = ensure_daemon(io)["status"]
-    return result
+    return _daemon_status(io, result)
 
 
 def _conf_run_bind(p: argparse.ArgumentParser) -> None:
@@ -295,7 +321,7 @@ def _msg_post(args: argparse.Namespace, io: Io) -> dict[str, Any]:
 def _conf_msg_pop(p: argparse.ArgumentParser) -> None:
     p.add_argument("--run", required=True)
     p.add_argument("--as", dest="recipient", required=True)
-    p.add_argument("--visibility", type=float, default=None)
+    p.add_argument("--visibility", type=POSITIVE, default=None)
     _token(p)
 
 
@@ -329,8 +355,8 @@ def _msg_ack(args: argparse.Namespace, io: Io) -> dict[str, Any]:
 def _conf_wait(p: argparse.ArgumentParser) -> None:
     p.add_argument("--run", required=True)
     _token(p)
-    p.add_argument("--timeout", type=float, default=None)
-    p.add_argument("--poll", type=float, default=None)
+    p.add_argument("--timeout", type=POSITIVE, default=None)
+    p.add_argument("--poll", type=POSITIVE, default=None)
 
 
 def _wait(args: argparse.Namespace, io: Io) -> dict[str, Any]:
@@ -608,7 +634,7 @@ def _conf_lock(p: argparse.ArgumentParser) -> None:
 def _conf_lock_acquire(p: argparse.ArgumentParser) -> None:
     _conf_lock(p)
     p.add_argument("--purpose", required=True)
-    p.add_argument("--timeout", type=float, default=0.0)
+    p.add_argument("--timeout", type=NON_NEGATIVE, default=0.0)
 
 
 def _lock_acquire(args: argparse.Namespace, io: Io) -> dict[str, Any]:

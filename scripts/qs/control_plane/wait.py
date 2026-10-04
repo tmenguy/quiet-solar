@@ -2,13 +2,16 @@
 
 It checks the token first (a stale token exits 3 with no write), registers a
 ``waiters`` row, makes sure the daemon runs, then polls: heartbeat, token,
-schema version (a migration → exit 5 with ``restart_wait``), queue. It never
-pops. The ``waiters`` row is always removed on exit, SIGTERM included.
+schema version (a migration, or an older daemon that will not stop
+(``restart_pending``) → exit 5 with ``restart_wait``), queue. A ``BUSY`` poll
+is logged and skipped. It never pops. The ``waiters`` row is always removed
+on exit, SIGTERM included.
 """
 
 from __future__ import annotations
 
 import sqlite3
+import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -27,7 +30,14 @@ def _on_sigterm(signum: int, frame: Any) -> None:
 def live_waiter(conn: sqlite3.Connection, probe: liveness.ProcessProbe, run_id: str) -> bool:
     """A ``waiters`` row whose process is alive (a dead pid counts as absent)."""
     rows = conn.execute("SELECT pid, pid_start FROM waiters WHERE run_id = ?", (run_id,)).fetchall()
-    return any(probe.alive(r["pid"], r["pid_start"]) for r in rows)
+    return any(probe.alive(r["pid"], r["pid_start"]) is not False for r in rows)  # unknown counts as alive
+
+
+def _ensure(ensure: Callable[[], dict[str, Any]]) -> None:
+    if ensure().get("status") == "restart_pending":
+        raise errors.CpError(
+            "SCHEMA_TOO_NEW", "an older daemon is still running: restart `wait` shortly", restart_wait=True
+        )
 
 
 def wait(
@@ -56,7 +66,7 @@ def wait(
         waiter_id = cur.lastrowid
     procsetup.get().install_sigterm(_on_sigterm)
     try:
-        ensure()
+        _ensure(ensure)
         last_ensure = clock.now()
         deadline = clock.now().timestamp() + timeout
         while True:
@@ -64,16 +74,22 @@ def wait(
                 raise errors.CpError(
                     "SCHEMA_TOO_NEW", "the DB was migrated: restart `wait` with the new code", restart_wait=True
                 )
-            with db.write(conn):
-                conn.execute("UPDATE waiters SET heartbeat_at = ? WHERE id = ?", (db.now(clock), waiter_id))
-                tokens.require(conn, token, kinds={"run"})
-                pending = messages.visible_count(conn, run_id, messages.ORCHESTRATOR, db.now(clock))
+            try:
+                with db.write(conn):
+                    conn.execute("UPDATE waiters SET heartbeat_at = ? WHERE id = ?", (db.now(clock), waiter_id))
+                    tokens.require(conn, token, kinds={"run"})
+                    pending = messages.visible_count(conn, run_id, messages.ORCHESTRATOR, db.now(clock))
+            except errors.CpError as exc:
+                if exc.code != "BUSY":
+                    raise
+                sys.stderr.write(f"[cp-wait] poll skipped (busy): {exc.detail}\n")
+                pending = 0
             if pending:
                 return {"pending": pending}
             lease = daemon.read_lease(db_path)
             since = (clock.now() - last_ensure).total_seconds()
             if not daemon._fresh(lease, clock, stale_after_s) and since >= stale_after_s:
-                ensure()
+                _ensure(ensure)
                 last_ensure = clock.now()
             if clock.now().timestamp() >= deadline:
                 return {"timeout": True}

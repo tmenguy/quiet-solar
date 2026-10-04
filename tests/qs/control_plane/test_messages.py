@@ -190,3 +190,17 @@ def test_visible_helpers(world, fake_clock) -> None:
     c.close()
     with pytest.raises(errors.CpError):
         messages.parse_payload("{")
+
+
+def test_ack_of_the_last_delivery_of_a_dead_lettered_message(world, fake_clock) -> None:
+    """F24: the handler finished just as the message was dead-lettered: its ack still lands."""
+    m1 = post(world)[1]["id"]
+    for _ in range(5):
+        last = pop(world)[1]
+        fake_clock.advance(messages.VISIBILITY_S + 1)
+    assert pop(world)[1]["empty"] is True  # the 6th pop marks m1 dead
+    assert sql(world["db"], "SELECT state FROM messages WHERE id = ?", [m1])[0][0] == "dead"
+    assert ack(world, m1, "stale")[1]["error"] == "INVALID_STATE"
+    code, out = ack(world, m1, last["receipt"])
+    assert code == 0 and out == {"ok": True, "id": m1, "acked": True, "noop": False}
+    assert sql(world["db"], "SELECT state FROM messages WHERE id = ?", [m1])[0][0] == "acked"

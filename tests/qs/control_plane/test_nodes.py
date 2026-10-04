@@ -98,7 +98,10 @@ class TestCommands:
         assert code == 0 and out["state"] == "stopped"
         msg = dict(sql(world["db"], "SELECT * FROM messages WHERE id = ?", [out["message_id"]])[0])
         assert (msg["recipient"], msg["kind"]) == ("node:T1", "stop")
-        assert run_cli("node", "stop", "--task", "T1", "--token", world["token"])[1]["error"] == "INVALID_STATE"
+        again = run_cli("node", "stop", "--task", "T1", "--token", world["token"])  # F24: a noop, no second message
+        assert again == (0, {"ok": True, "node_id": "N1", "state": "stopped", "noop": True})
+        assert sql(world["db"], "SELECT count(*) FROM messages WHERE kind = 'stop'")[0][0] == 1
+        assert out["noop"] is False
         assert run_cli("node", "stop", "--task", "T3", "--token", world["token"])[1]["error"] == "NOT_FOUND"
         assert run_cli("task", "state", "--task", "T1", "--to", "blocked", "--token", world["node"])[0] == 4
         assert run_cli("session", "status", "--session-id", "S-n1")[1]["state"] == "stopped"

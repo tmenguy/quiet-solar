@@ -1,10 +1,14 @@
 """The tools layer (§9): idempotent, recorded, fenced effects.
 
 Every effect a session asks for goes through ``run_recorded``: the token is
-verified, the call is claimed in ``tool_calls`` under PK ``(tool, key)``
-**before** any effect, a probe tells which steps the real world already
-holds, then each missing step runs under the tool's locks / cap, with the
-token and lock ownership re-checked before every step.
+verified, a finished call under the key is replayed at once (before its steps
+are even built, so a deleted argument file or a cleared task column cannot
+break a replay), else the call is claimed in ``tool_calls`` under PK
+``(tool, key)`` **before** any effect, a probe tells which steps the real
+world already holds, then each missing step runs under the tool's locks /
+cap, with the token and lock ownership re-checked before every step. The
+``args_hash`` covers the arguments and the content of every ``*_file``
+argument: the same key with an edited file is a ``CONFLICT``.
 
 The frozen API for #400 and later children: ``StepCtx``, ``Step``,
 ``ToolSpec``, ``register`` and ``invoke``. ``argv_step`` is a helper and may
@@ -195,6 +199,24 @@ def _ident(row: sqlite3.Row | None) -> tuple[Any, ...] | None:
     return None if row is None else tuple(row[k] for k in _CALL_IDENT)
 
 
+def _files_digest(args: Mapping[str, Any]) -> str | None:
+    """sha256 over the content of every ``*_file`` argument; ``None`` when one cannot be read now."""
+    digests: dict[str, str] = {}
+    for name, value in args.items():
+        if name.endswith("_file") and isinstance(value, str):
+            try:
+                digests[name] = hashlib.sha256(Path(value).read_bytes()).hexdigest()
+            except OSError:
+                return None
+    return hashlib.sha256(_canonical(digests).encode()).hexdigest()
+
+
+def _owned(cur: sqlite3.Cursor) -> None:
+    """A compare-and-set on this call's claim matched nothing: another process took the key over."""
+    if cur.rowcount != 1:
+        raise errors.CpError("STALE_TOKEN", "this call's claim was taken over by another process")
+
+
 class _Call:
     def __init__(
         self, spec: ToolSpec, ctx: Ctx, *, key: str, task_id: str, args: Mapping[str, Any], token: str, actor: str
@@ -211,6 +233,8 @@ class _Call:
         self.outputs: dict[str, Any] = {}
         self.recorded: set[str] = set()
         self.who: tokens.Principal | None = None
+        self.args_digest = hashlib.sha256(_canonical(self.args).encode()).hexdigest()
+        self.files_digest = _files_digest(self.args)
 
     # -- helpers
     def task(self) -> TaskRow:
@@ -247,12 +271,18 @@ class _Call:
         self.outputs[step] = value
         self.recorded.add(step)
         where, params = self._where()
-        self.conn.execute(f"UPDATE tool_calls SET outputs = ? WHERE {where}", (_canonical(self.outputs), *params))
+        _owned(
+            self.conn.execute(f"UPDATE tool_calls SET outputs = ? WHERE {where}", (_canonical(self.outputs), *params))
+        )
 
     def persist_outputs(self) -> None:
         where, params = self._where()
         with db.write(self.conn):
-            self.conn.execute(f"UPDATE tool_calls SET outputs = ? WHERE {where}", (_canonical(self.outputs), *params))
+            _owned(
+                self.conn.execute(
+                    f"UPDATE tool_calls SET outputs = ? WHERE {where}", (_canonical(self.outputs), *params)
+                )
+            )
 
     def require(self) -> tokens.Principal:
         self.who = tokens.require(
@@ -262,11 +292,40 @@ class _Call:
             task_id=self.task_id,
             allow_stopped=not self.spec.refuse_when_stopped,
         )
+        self.actor = self.actor or self.who.actor  # locks and cap slots record who holds them
         return self.who
 
-    # -- 2. claim
+    # -- 1b. replay, 2. claim
+    def _check_same(self, row: sqlite3.Row) -> None:
+        stored_args, _, stored_files = str(row["args_hash"]).partition(":")
+        if stored_args != self.args_digest or row["task_id"] != self.task_id:
+            raise errors.CpError("CONFLICT", f"key {self.key!r} was used with other arguments")
+        if self.files_digest is not None and stored_files not in ("-", self.files_digest):
+            raise errors.CpError("CONFLICT", f"key {self.key!r} was used with other argument file content")
+
+    def _finished(self, row: sqlite3.Row) -> dict[str, Any]:
+        """The recorded outcome of a finished call: its response, or its ``TOOL_FAILED``."""
+        if row["state"] == "succeeded":
+            return self.response(json.loads(row["result"] or "{}"), replayed=True)
+        raise errors.CpError(
+            "TOOL_FAILED",
+            "this key already failed; retry with a new key",
+            result=json.loads(row["result"] or "{}"),
+            replayed=True,
+        )
+
+    def replay(self) -> dict[str, Any] | None:
+        """Inside a transaction: a finished call under this key → its outcome; else ``None``."""
+        row = self.conn.execute(
+            "SELECT * FROM tool_calls WHERE tool = ? AND key = ?", (self.spec.name, self.key)
+        ).fetchone()
+        if row is None or row["state"] == "started":
+            return None
+        self._check_same(row)
+        return self._finished(row)
+
     def claim(self) -> dict[str, Any] | None:
-        args_hash = hashlib.sha256(_canonical(self.args).encode()).hexdigest()
+        args_hash = f"{self.args_digest}:{self.files_digest or '-'}"
         while True:
             row = self.conn.execute(
                 "SELECT * FROM tool_calls WHERE tool = ? AND key = ?", (self.spec.name, self.key)
@@ -304,17 +363,9 @@ class _Call:
                         ),
                     )
                     return None
-                if current["args_hash"] != args_hash or current["task_id"] != self.task_id:
-                    raise errors.CpError("CONFLICT", f"key {self.key!r} was used with other arguments")
-                if current["state"] == "succeeded":
-                    return self.response(json.loads(current["result"] or "{}"), replayed=True)
-                if current["state"] == "failed":
-                    raise errors.CpError(
-                        "TOOL_FAILED",
-                        "this key already failed; retry with a new key",
-                        result=json.loads(current["result"] or "{}"),
-                        replayed=True,
-                    )
+                self._check_same(current)
+                if current["state"] != "started":
+                    return self._finished(current)
                 if alive:
                     raise errors.CpError("BUSY", f"an in-flight call holds {self.spec.name}/{self.key}")
                 self.conn.execute(
@@ -385,9 +436,12 @@ class _Call:
             self.require()
             sctx = self.step_ctx(self.task())
             result = self.spec.on_success(self.conn, sctx) if self.spec.on_success is not None else {}
-            self.conn.execute(
-                f"UPDATE tool_calls SET state = 'succeeded', result = ?, exit_code = 0, finished_at = ? WHERE {where}",
-                (_canonical(result), db.now(self.ctx.clock), *params),
+            _owned(
+                self.conn.execute(
+                    f"UPDATE tool_calls SET state = 'succeeded', result = ?, exit_code = 0, finished_at = ?"
+                    f" WHERE {where}",
+                    (_canonical(result), db.now(self.ctx.clock), *params),
+                )
             )
         return self.response(result, replayed=False)
 
@@ -395,9 +449,11 @@ class _Call:
         result = {"error": error, "detail": detail, "output": output}
         where, params = self._where()
         with db.write(self.conn):
-            self.conn.execute(
-                f"UPDATE tool_calls SET state = 'failed', result = ?, exit_code = ?, finished_at = ? WHERE {where}",
-                (_canonical(result), exit_code, db.now(self.ctx.clock), *params),
+            _owned(
+                self.conn.execute(
+                    f"UPDATE tool_calls SET state = 'failed', result = ?, exit_code = ?, finished_at = ? WHERE {where}",
+                    (_canonical(result), exit_code, db.now(self.ctx.clock), *params),
+                )
             )
         return errors.CpError("TOOL_FAILED", f"{self.spec.name}: {detail}", result=result)
 
@@ -431,6 +487,9 @@ def run_recorded(
         with db.write(call.conn):
             call.require()
             task_row = call.task()
+            replay = call.replay()  # before the steps: a replay needs neither the files nor the task columns
+        if replay is not None:
+            return replay
         steps = list(spec.steps(task_row, call.args))
         lock_names = list(spec.locks(task_row, call.args))
         locks.assert_sorted(lock_names)
@@ -552,13 +611,18 @@ def _read_arg_file(args: Mapping[str, Any], name: str) -> str:
 
 
 def _gh_list_by_marker(ctx: StepCtx, argv: list[str], cwd: Path) -> dict[str, Any] | None:
+    """The listed item whose body holds this call's marker; ``BUSY`` when the listing failed (unknown)."""
     res = ctx.runner.run(argv, cwd=cwd, timeout=60)
     try:
-        items = json.loads(res.stdout) if res.ok else []
+        items = json.loads(res.stdout) if res.ok else None
     except ValueError:
-        items = []
+        items = None
+    if not isinstance(items, list):
+        raise errors.CpError(
+            "BUSY", f"{' '.join(argv[:3])} failed (exit {res.returncode}): probe unknown, replay the same key later"
+        )
     mark = marker(ctx)
-    for item in items if isinstance(items, list) else []:
+    for item in items:
         if isinstance(item, dict) and mark in str(item.get("body", "")):
             return item
     return None
@@ -612,6 +676,18 @@ def _registered_worktrees(ctx: StepCtx) -> set[Path] | None:
     }
 
 
+def _sharing_task(ctx: StepCtx, path: Path) -> str | None:
+    """Another non-terminal task registered on the same worktree path, if any."""
+    marks = ", ".join("?" for _ in tasks.TERMINAL)
+    with ctx.write() as conn:
+        rows = conn.execute(
+            f"SELECT id, worktree FROM tasks WHERE id != ? AND worktree IS NOT NULL AND state NOT IN ({marks})"
+            " ORDER BY rowid",
+            (ctx.task["id"], *sorted(tasks.TERMINAL)),
+        ).fetchall()
+    return next((str(r["id"]) for r in rows if Path(r["worktree"]).resolve() == path), None)
+
+
 def _worktree_cleanup_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
     issue = _need(task, "issue_number")
 
@@ -619,6 +695,14 @@ def _worktree_cleanup_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[
         wt = ctx.task["worktree"]
         if wt is None or not Path(wt).exists():
             return {"skipped": True}
+        path = Path(wt).resolve()
+        if path == ctx.main.resolve():
+            raise errors.CpError("POLICY_REFUSED", f"{wt} is the main checkout: never removed")
+        if not (path / ".git").is_file():
+            raise errors.CpError("POLICY_REFUSED", f"{wt} is not a linked worktree (its .git is not a file)")
+        shared = _sharing_task(ctx, path)
+        if shared is not None:
+            return {"skipped": True, "shared_with": shared}  # only this task's column is cleared
         res = ctx.runner.run(
             [
                 _python(ctx.main),
@@ -647,6 +731,8 @@ def _worktree_cleanup_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[
 
     def prune(ctx: StepCtx) -> dict[str, Any]:
         wt = ctx.task["worktree"]
+        if ctx.outputs["remove"].get("shared_with"):
+            return {"pruned": False}
         registered = _registered_worktrees(ctx)
         if wt is not None and (registered is None or Path(wt).resolve() in registered):
             res = ctx.runner.run(["git", "-C", str(ctx.main), "worktree", "prune"], cwd=ctx.main, timeout=60)
@@ -672,7 +758,8 @@ def _worktree_cleanup_probe(ctx: StepCtx) -> dict[str, Any | None]:
 
 def _worktree_cleanup_success(conn: sqlite3.Connection, ctx: StepCtx) -> dict[str, Any]:
     conn.execute("UPDATE tasks SET worktree = NULL, updated_at = ? WHERE id = ?", (db.now(ctx.clock), ctx.task["id"]))
-    return {"worktree": None}
+    shared = ctx.outputs["remove"].get("shared_with")
+    return {"worktree": None} if shared is None else {"worktree": None, "shared_with": shared}
 
 
 def _main_checkout(task: TaskRow, args: Mapping[str, Any]) -> Sequence[str]:
@@ -716,18 +803,32 @@ def _own_node(ctx: StepCtx) -> sqlite3.Row | None:
         return row
 
 
+def _reap_own(ctx: StepCtx, own: sqlite3.Row) -> sqlite3.Row:
+    with ctx.write() as conn:
+        conn.execute(
+            "UPDATE nodes SET state = 'reaped', updated_at = ? WHERE id = ? AND state = 'spawning'",
+            (db.now(ctx.clock), own["id"]),
+        )
+        row: sqlite3.Row = conn.execute("SELECT * FROM nodes WHERE id = ?", (own["id"],)).fetchone()
+        return row
+
+
 def _launch_probe(ctx: StepCtx, own: sqlite3.Row, *, resume: bool) -> dict[str, Any | None]:
     out: dict[str, Any | None] = {}
-    if own["state"] == "spawning":
-        out["reserve"] = {"node_id": own["id"], "name": own["name"]}
-    else:
-        out["reserve"] = None
     listing = ctx.claude.try_agents()
     agent = None
     if listing is not None and own["state"] == "spawning":
         found = liveness.find(listing, name=own["name"])
         if found is not None and (not resume or found.started_after(own["launch_at"])):
             agent = found
+        elif found is None and own["launch_at"] is not None and not nodes.recently_launched(own, ctx.clock):
+            # Launched, never listed within LAUNCH_SETTLE_S, by a process proven dead (claim() took this key
+            # over only because its holder was dead): reap our own row so the replay relaunches.
+            own = _reap_own(ctx, own)
+    if own["state"] == "spawning":
+        out["reserve"] = {"node_id": own["id"], "name": own["name"]}
+    else:
+        out["reserve"] = None
     if agent is not None:
         out["launch"] = {"launched": True, "probed": True}
         out["identify"] = {"session_id": agent.session_id, "short_id": agent.id}
@@ -812,9 +913,9 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
                 raise errors.CpError(
                     "CONFLICT", f"task {ctx.task['id']} has a live node {live['id']}: resume it, or --replace"
                 )
-            locks.admit_node(conn, ctx.clock, listing=listing, holders_alive=alive, limit=limit)
-            if live is not None:
+            if live is not None:  # first, so the replaced node frees its place; a BUSY below rolls this back
                 nodes.move(conn, ctx.clock, live["id"], "superseded")
+            locks.admit_node(conn, ctx.clock, listing=listing, holders_alive=alive, limit=limit)
             generation = (
                 int(
                     conn.execute(
@@ -1007,8 +1108,9 @@ def _issue_create_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step
 
 
 def _issue_create_probe(ctx: StepCtx) -> dict[str, Any | None]:
+    search = f'"qs-cp-key: {ctx.tool}/{ctx.key}" in:body'
     found = _gh_list_by_marker(
-        ctx, ["gh", "issue", "list", "--state", "all", "--limit", "50", "--json", "number,url,body"], ctx.main
+        ctx, ["gh", "issue", "list", "--state", "all", "--search", search, "--json", "number,url,body"], ctx.main
     )
     return {} if found is None else {"create": {"issue_number": found["number"], "url": found["url"]}}
 
@@ -1161,10 +1263,14 @@ def _merge_guard(ctx: StepCtx) -> None:
 
 
 def _merge_success(conn: sqlite3.Connection, ctx: StepCtx) -> dict[str, Any]:
+    """The PR is merged: always record it; move the task only if it is still ``ready_to_merge``."""
     sha = ctx.outputs["merge"]["merge_sha"]
+    tasks.update_fields(conn, ctx.clock, ctx.task["id"], {"merge_sha": sha})
+    state = tasks.get(conn, ctx.task["id"])["state"]
+    if state != "ready_to_merge":  # changed mid-merge: the orchestrator or the maintainer reconciles it
+        return {"merge_sha": sha, "state_conflict": {"expected": "ready_to_merge", "actual": state}}
     actor = ctx._call.who.actor if ctx._call is not None and ctx._call.who is not None else "tool"
     tasks.apply_transition(conn, ctx.clock, ctx.task["id"], "merged", actor=actor, node=False, expect="ready_to_merge")
-    tasks.update_fields(conn, ctx.clock, ctx.task["id"], {"merge_sha": sha})
     return {"merge_sha": sha}
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ def w(migrated, tmp_path, fake_runner, fake_claude, fake_main, fake_probe, fake_
     run_id, token = open_run()
     wt = tmp_path / "wt1"
     wt.mkdir()
+    (wt / ".git").write_text("gitdir: /main/.git/worktrees/wt1\n")  # a linked worktree
     insert_task(
         migrated, "T1", run_id, issue_number=11, worktree=str(wt), branch="QS_11", is_deliverable=1, pr_number=5
     )
@@ -90,7 +92,9 @@ class T:
 
 
 TABLE: dict[str, T] = {
-    "worktree-create": T(lambda w: {"phase": "/create-plan"}, lambda w: w.sim.created, lambda w: w.sim.wt.rmdir(), 1),
+    "worktree-create": T(
+        lambda w: {"phase": "/create-plan"}, lambda w: w.sim.created, lambda w: shutil.rmtree(w.sim.wt), 1
+    ),
     "worktree-cleanup": T(lambda w: {}, lambda w: w.sim.effects("cleanup_worktree.py")),
     "spawn": T(
         lambda w: {"agent": "qs-node", "permission_mode": "auto", "prompt_file": w.files["prompt"]},
@@ -403,7 +407,8 @@ class TestSpawn:
         code, out = spawn(w, "s1")
         assert code == 6 and "replay the same key" in out["detail"]  # identify timed out: retryable
         assert call_row(w, "spawn", "s1")["state"] == "started"
-        assert spawn(w, "s1")[0] == 6  # done-pending: identify polls again, no relaunch
+        sql(w.db, "UPDATE nodes SET launch_at = ?", [__import__("control_plane").clock.stamp(w.clock)])
+        assert spawn(w, "s1")[0] == 6  # done-pending within LAUNCH_SETTLE_S: identify polls again, no relaunch
         assert w.sim.effects("claude", "--bg") == 1
         sql(w.db, "UPDATE nodes SET launch_at = ?", [__import__("control_plane").clock.stamp(w.clock)])
         reap(w)
@@ -531,7 +536,7 @@ class TestWorktreeTools:
             return original(call)
 
         w.runner.on(["setup_task.py"], setup)
-        w.sim.wt.rmdir()
+        shutil.rmtree(w.sim.wt)
         sql(w.db, "UPDATE tasks SET worktree = NULL, branch = NULL")
         code, out = tool(w, "worktree-create", "c1", phase="/diagnose-task")
         assert code == 0, out
@@ -596,7 +601,7 @@ class TestWorktreeTools:
         assert sql(w.db, "SELECT worktree FROM tasks")[0][0] is None
 
     def test_cleanup_prunes_a_stale_registration(self, w: W) -> None:
-        w.sim.wt.rmdir()  # gone, but still registered
+        shutil.rmtree(w.sim.wt)  # gone, but still registered
         code, out = tool(w, "worktree-cleanup", "p1")
         assert code == 0 and w.sim.effects("cleanup_worktree.py") == 0
         assert w.sim.effects("git", "-C", str(w.main), "worktree", "prune") == 1
@@ -605,7 +610,7 @@ class TestWorktreeTools:
     def test_cleanup_when_already_clean_or_unknown(self, w: W) -> None:
         from control_plane.runner import RunResult
 
-        w.sim.wt.rmdir()
+        shutil.rmtree(w.sim.wt)
         w.sim.registered.clear()
         assert tool(w, "worktree-cleanup", "p1")[0] == 0  # a fresh key sees the effect in place
         assert w.sim.effects("cleanup_worktree.py") == 0 and w.sim.effects("worktree", "prune") == 0
@@ -668,13 +673,18 @@ class TestIssueAndPr:
         assert w.runner.matching("create_issue.py")[1].argv[-1] == "a"
         assert tool(w, "issue-create", "k3", body_file=w.files["body"])[1]["error"] == "USAGE"
 
-    def test_probe_tolerates_a_failing_gh(self, w: W) -> None:
+    @pytest.mark.parametrize("answer", [(0, "not json"), (0, json.dumps({"a": 1})), (1, "")])
+    def test_a_failing_gh_listing_is_busy_and_creates_nothing(self, w: W, answer: tuple[int, str]) -> None:
+        """F11: a failed probe is "unknown, replay later", never "not created"."""
         from control_plane.runner import RunResult
 
-        w.runner.on(["gh", "issue", "list"], RunResult(0, "not json", ""))
-        assert tool(w, "issue-create", "k1", **TABLE["issue-create"].args(w))[0] == 0
-        w.runner.on(["gh", "issue", "list"], RunResult(0, json.dumps({"a": 1}), ""))
-        assert tool(w, "issue-create", "k2", **TABLE["issue-create"].args(w))[0] == 0
+        w.runner.on(["gh", "issue", "list"], RunResult(answer[0], answer[1], "boom"))
+        code, out = tool(w, "issue-create", "k1", **TABLE["issue-create"].args(w))
+        assert code == 6 and out["error"] == "BUSY"
+        assert w.sim.effects("create_issue.py") == 0 and call_row(w, "issue-create", "k1") is None
+        w.runner.on(["gh", "pr", "list"], RunResult(answer[0], answer[1], "boom"))
+        code, out = tool(w, "pr-create", "p1", **TABLE["pr-create"].args(w))
+        assert code == 6 and w.sim.effects("create_pr.py") == 0
 
     def test_pr_create_with_a_new_key_after_a_closed_pr(self, w: W) -> None:
         assert tool(w, "pr-create", "p1", **TABLE["pr-create"].args(w))[1]["result"]["pr_number"] == 200
@@ -770,13 +780,16 @@ class TestPushAndMerge:
         w.runner.on(["gh", "pr", "merge"], RunResult(1, "", "not mergeable"))
         assert tool(w, "merge", "m4")[0] == 1
 
-    def test_merged_pr_on_a_blocked_task_fails_at_on_success(self, w: W) -> None:
+    def test_merged_pr_on_a_blocked_task_reports_a_state_conflict(self, w: W) -> None:
         _prep_merge(w)
         w.sim.pr_state = "MERGED"
         sql(w.db, "UPDATE tasks SET state = 'blocked', blocked_from = 'ready_to_merge'")
         code, out = tool(w, "merge", "m1")
-        assert code == 1 and out["result"]["error"] == "INVALID_STATE"
-        assert sql(w.db, "SELECT state FROM tasks")[0][0] == "blocked"
+        assert code == 0 and out["result"] == {
+            "merge_sha": "m" * 40,
+            "state_conflict": {"expected": "ready_to_merge", "actual": "blocked"},
+        }
+        assert tuple(sql(w.db, "SELECT state, merge_sha FROM tasks")[0]) == ("blocked", "m" * 40)
 
 
 # --------------------------------------------------------------------------- the frozen API, the CLI, queue replay, races
@@ -983,3 +996,224 @@ def test_resume_probe_ignores_its_row_once_running(w: W) -> None:
     sql(w.db, "UPDATE nodes SET state = 'running'")  # still spawn_tool_key = resume/rA
     code, out = tool(w, "resume", "rA", message_file=w.files["msg"])
     assert code == 1 and out["result"]["error"] == "INVALID_STATE"
+
+
+# --------------------------------------------------------------------------- review fix #01
+
+
+class TestReviewFix01:
+    # F3
+    def test_replace_at_the_node_cap(self, w: W, monkeypatch) -> None:
+        monkeypatch.setenv("QS_CP_MAX_NODES", "1")
+        assert spawn(w, "s1")[0] == 0
+        code, out = spawn(w, "s2", replace=True)
+        assert code == 0, out
+        assert node_row(w, "N1")["state"] == "superseded" and out["result"]["generation"] == 2
+
+    def test_a_busy_replace_keeps_the_live_node(self, w: W, monkeypatch) -> None:
+        monkeypatch.setenv("QS_CP_MAX_NODES", "1")
+        insert_task(w.db, "T2", w.run, worktree=str(w.sim.wt))
+        insert_node(w.db, "N7", w.run, "T1", session_id="S-7", name="n7")
+        insert_node(w.db, "N9", w.run, "T2", session_id="S-9", name="n9")
+        w.claude.listing = [agent("S-7", "n7"), agent("S-9", "n9")]
+        code, out = spawn(w, "s1", replace=True)
+        assert code == 6 and out["error"] == "BUSY"
+        assert node_row(w, "N7")["state"] == "idle"  # refreshed from the listing; the supersede was rolled back
+        assert w.sim.effects("claude", "--bg") == 0
+
+    # F10
+    def test_replay_after_the_prompt_file_was_deleted(self, w: W) -> None:
+        code, first = spawn(w, "s1")
+        assert code == 0
+        Path(w.files["prompt"]).unlink()
+        code, again = spawn(w, "s1")
+        assert code == 0 and again["replayed"] is True and again["result"] == first["result"]
+
+    def test_replay_of_push_after_the_worktree_was_cleared(self, w: W) -> None:
+        code, first = tool(w, "push", "k1")
+        assert code == 0
+        sql(w.db, "UPDATE tasks SET worktree = NULL")  # worktree-cleanup ran meanwhile
+        code, again = tool(w, "push", "k1")
+        assert code == 0 and again["replayed"] is True and again["result"] == first["result"]
+
+    def test_a_replayed_failure_needs_no_steps_either(self, w: W) -> None:
+        from control_plane.runner import RunResult
+
+        w.runner.on(["git", "push"], RunResult(1, "", "rejected"))
+        assert tool(w, "push", "k1")[0] == 1
+        sql(w.db, "UPDATE tasks SET worktree = NULL")
+        code, out = tool(w, "push", "k1")
+        assert code == 1 and out["error"] == "TOOL_FAILED" and out["replayed"] is True
+
+    def test_an_edited_file_under_the_same_key_conflicts(self, w: W) -> None:
+        args = TABLE["issue-create"].args(w)
+        assert tool(w, "issue-create", "k1", **args)[0] == 0
+        Path(w.files["body"]).write_text("Another body")
+        code, out = tool(w, "issue-create", "k1", **args)
+        assert code == 8 and out["error"] == "CONFLICT"
+        Path(w.files["body"]).write_text("Issue body")
+        assert tool(w, "issue-create", "k1", **args)[1]["replayed"] is True
+
+    def test_an_edited_file_conflicts_on_a_started_call_too(self, w: W) -> None:
+        args = TABLE["issue-create"].args(w)
+        with faults.arm("issue-create.before_effect"), pytest.raises(faults.FaultInjected):
+            tool(w, "issue-create", "k1", **args)
+        Path(w.files["body"]).write_text("Another body")
+        assert tool(w, "issue-create", "k1", **args)[1]["error"] == "CONFLICT"
+
+    # F11
+    def test_the_issue_probe_searches_by_marker(self, w: W) -> None:
+        assert tool(w, "issue-create", "msg:7", **TABLE["issue-create"].args(w))[0] == 0
+        [listing] = w.runner.matching("gh", "issue", "list")
+        argv = listing.argv
+        assert argv[argv.index("--search") + 1] == '"qs-cp-key: issue-create/msg:7" in:body'
+        assert "--limit" not in argv or argv[argv.index("--limit") + 1] != "50"
+
+    # F12
+    def test_cleanup_refuses_the_main_checkout(self, w: W) -> None:
+        (w.main / ".git" / "config").write_text("")
+        sql(w.db, "UPDATE tasks SET worktree = ?", [str(w.main)])
+        code, out = tool(w, "worktree-cleanup", "c1")
+        assert code == 9 and out["error"] == "POLICY_REFUSED"
+        assert w.sim.effects("cleanup_worktree.py") == 0 and call_row(w, "worktree-cleanup", "c1") is None
+
+    def test_cleanup_refuses_a_directory_that_is_not_a_linked_worktree(self, w: W) -> None:
+        (w.sim.wt / ".git").unlink()
+        (w.sim.wt / ".git").mkdir()  # a full clone, not a linked worktree
+        code, out = tool(w, "worktree-cleanup", "c1")
+        assert code == 9 and out["error"] == "POLICY_REFUSED" and ".git" in out["detail"]
+        assert w.sim.effects("cleanup_worktree.py") == 0
+
+    def test_cleanup_of_a_shared_worktree_only_clears_this_task(self, w: W) -> None:
+        insert_task(w.db, "T2", w.run, worktree=str(w.sim.wt), branch="QS_11")
+        insert_task(w.db, "T3", w.run, state="dropped", worktree=str(w.sim.wt))  # terminal: does not count
+        code, out = tool(w, "worktree-cleanup", "c1")
+        assert code == 0 and out["result"] == {"worktree": None, "shared_with": "T2"}
+        assert w.sim.effects("cleanup_worktree.py") == 0 and w.sim.effects("worktree", "prune") == 0
+        assert w.sim.wt.exists()
+        assert {r[0]: r[1] for r in sql(w.db, "SELECT id, worktree FROM tasks")} == {
+            "T1": None,
+            "T2": str(w.sim.wt),
+            "T3": str(w.sim.wt),
+        }
+
+    # F14
+    def test_a_task_blocked_during_the_merge_still_records_the_merge(self, w: W) -> None:
+        _prep_merge(w)
+        original = w.sim._merge
+
+        def merge(call: Any) -> Any:
+            sql(w.db, "UPDATE tasks SET state = 'blocked', blocked_from = 'ready_to_merge'")
+            return original(call)
+
+        w.runner.on(["gh", "pr", "merge"], merge)
+        code, out = tool(w, "merge", "m1")
+        assert code == 0 and out["result"]["state_conflict"] == {"expected": "ready_to_merge", "actual": "blocked"}
+        assert tuple(sql(w.db, "SELECT state, merge_sha FROM tasks")[0]) == ("blocked", "m" * 40)
+        assert call_row(w, "merge", "m1")["state"] == "succeeded"
+
+    # F16
+    def test_cli_tool_locks_and_slots_carry_the_actor(self, w: W) -> None:
+        seen: dict[str, Any] = {}
+        original_setup, original_gate = w.sim._setup, w.sim._gate
+
+        def setup(call: Any) -> Any:
+            seen["lock"] = sql(w.db, "SELECT holder_actor FROM locks")[0][0]
+            return original_setup(call)
+
+        def gate(call: Any) -> Any:
+            seen["slot"] = sql(w.db, "SELECT holder_actor FROM cap_slots")[0][0]
+            return original_gate(call)
+
+        w.runner.on(["setup_task.py"], setup)
+        w.runner.on(["quality_gate.py"], gate)
+        assert tool(w, "worktree-create", "c1", phase="/create-plan")[0] == 0
+        assert tool(w, "gate", "g1", mode="impacted")[0] == 0
+        assert seen == {"lock": "orchestrator", "slot": "orchestrator"}
+
+    # F19
+    def test_a_pending_launch_that_never_appeared_is_relaunched(self, w: W) -> None:
+        w.sim.list_on_launch = False
+        assert spawn(w, "s1")[0] == 6  # identify timed out at the settle deadline; this process exited
+        w.sim.list_on_launch = True
+        code, out = spawn(w, "s1")
+        assert code == 0, out
+        assert node_row(w, "N1")["state"] == "running" and w.sim.effects("claude", "--bg") == 2
+
+    def test_a_pending_launch_is_kept_while_the_listing_fails(self, w: W) -> None:
+        w.sim.list_on_launch = False
+        assert spawn(w, "s1")[0] == 6
+        w.claude.listing = None
+        assert spawn(w, "s1")[0] == 6
+        assert node_row(w, "N1")["state"] == "spawning" and w.sim.effects("claude", "--bg") == 1
+
+    # F22
+    def test_a_claim_taken_over_mid_step_is_stale(self, w: W) -> None:
+        original = w.sim._push
+
+        def taken(call: Any) -> Any:
+            sql(w.db, "UPDATE tool_calls SET holder_pid = 999, holder_pgid = 999")
+            return original(call)
+
+        w.runner.on(["git", "push"], taken)
+        code, out = tool(w, "push", "k1")
+        assert code == 3 and out["error"] == "STALE_TOKEN"
+        assert call_row(w, "push", "k1")["holder_pid"] == 999
+
+    def test_a_claim_taken_over_before_record_output_is_stale(self, w: W) -> None:
+        def taken() -> None:
+            w.claude.before_list = None
+            sql(w.db, "UPDATE tool_calls SET holder_pid = 999, holder_pgid = 999")
+
+        w.claude.before_list = taken
+        code, out = spawn(w, "s1")
+        assert code == 3 and sql(w.db, "SELECT count(*) FROM nodes")[0][0] == 0
+
+    def test_a_claim_taken_over_before_succeed_or_fail_is_stale(self, w: W) -> None:
+        def take(ctx: tools.StepCtx) -> None:
+            sql(w.db, "UPDATE tool_calls SET holder_pid = 999, holder_pgid = 999")
+
+        def boom(ctx: tools.StepCtx) -> Any:
+            take(ctx)
+            raise tools.StepFailed("boom")
+
+        tools.register(tools.ToolSpec("t-succeed", lambda task, args: (), guard=take))
+        tools.register(tools.ToolSpec("t-fail", lambda task, args: (tools.Step("boom", boom),)))
+        assert tool(w, "t-succeed", "k1")[1]["error"] == "STALE_TOKEN"
+        assert tool(w, "t-fail", "k1")[1]["error"] == "STALE_TOKEN"
+        assert call_row(w, "t-fail", "k1")["state"] == "started"
+
+    # F24 (acceptance-auditor depth)
+    def test_worktree_create_with_a_fresh_key_on_an_existing_worktree(self, w: W) -> None:
+        assert tool(w, "worktree-create", "c1", phase="/create-plan")[0] == 0  # the fixture's worktree exists
+        assert tool(w, "worktree-create", "c2", phase="/create-plan")[0] == 0
+        assert w.sim.created == 0 and w.sim.effects("setup_task.py") == 2  # idempotent: nothing created twice
+        shutil.rmtree(w.sim.wt)
+        assert tool(w, "worktree-create", "c3", phase="/create-plan")[0] == 0
+        assert tool(w, "worktree-create", "c4", phase="/create-plan")[0] == 0
+        assert w.sim.created == 1
+
+    def test_an_over_cap_resume_is_refused_before_any_launch(self, w: W, monkeypatch) -> None:
+        monkeypatch.setenv("QS_CP_MAX_NODES", "1")
+        _prep_resume(w)
+        insert_task(w.db, "T2", w.run, worktree=str(w.sim.wt))
+        insert_node(w.db, "N9", w.run, "T2", session_id="S-9", name="n9")
+        w.claude.listing = [agent("S-9", "n9")]
+        code, out = tool(w, "resume", "r1", message_file=w.files["msg"])
+        assert code == 6 and out["error"] == "BUSY" and "node cap" in out["detail"]
+        assert w.sim.effects("claude", "--bg") == 0 and call_row(w, "resume", "r1") is None
+        assert node_row(w, "N1")["state"] == "reaped"
+
+    def test_a_call_finished_between_the_replay_check_and_the_claim(self, w: W) -> None:
+        ctx = tools.Ctx(w.runner, lambda: db.connect(w.db), w.clock, w.probe, w.claude, w.main)
+        nested = {"done": False}
+
+        def steps(task: Any, args: Any) -> tuple[tools.Step, ...]:
+            if not nested["done"]:  # another process runs the same key to completion right now
+                nested["done"] = True
+                tools.invoke("t-race", key="k1", task_id="T1", args={}, token=w.token, actor="other", ctx=ctx)
+            return ()
+
+        tools.register(tools.ToolSpec("t-race", steps))
+        out = tools.invoke("t-race", key="k1", task_id="T1", args={}, token=w.token, actor="me", ctx=ctx)
+        assert out["replayed"] is True and call_row(w, "t-race", "k1")["actor"] == "other"

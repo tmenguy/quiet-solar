@@ -64,8 +64,8 @@ class TestProcessProbe:
     def test_unparseable_ps_output(self) -> None:
         fake = FakeRunner()
         fake.on(["ps"], "not a date")
-        assert liveness.ProcessProbe(fake).start_of(1) is None
-        assert fake.calls[0].env_extra == {"LC_ALL": "C"}
+        with pytest.raises(liveness.ProbeUnknown):  # a failed probe is never evidence of absence (F4)
+            liveness.ProcessProbe(fake).start_of(1)
 
     def test_default_runner(self) -> None:
         assert isinstance(liveness.ProcessProbe().runner, runner.Runner)
@@ -146,3 +146,49 @@ class TestClaudeCli:
         assert not liveness.Agent("s", None, None, None, None, None, None, None, None).started_after(
             "2026-09-01T00:00:00.000000Z"
         )
+
+
+# --------------------------------------------------------------------------- review fix #01 (F4, F23)
+
+
+class TestTriState:
+    def test_ps_runs_in_utc_and_the_c_locale(self) -> None:
+        fake = FakeRunner()
+        fake.on(["ps"], "Sat Oct  3 12:00:00 2026\n")
+        assert liveness.ProcessProbe(fake).start_of(1) == "2026-10-03T12:00:00"
+        assert fake.calls[0].env_extra == {"LC_ALL": "C", "TZ": "UTC0"}
+
+    def test_no_such_process_is_none(self) -> None:
+        fake = FakeRunner()
+        fake.on(["ps"], runner.RunResult(1, "", ""))
+        assert liveness.ProcessProbe(fake).start_of(1) is None
+
+    @pytest.mark.parametrize(
+        "result",
+        [runner.RunResult(124, "", "timeout"), runner.RunResult(127, "", "no ps"), runner.RunResult(0, "", "")],
+    )
+    def test_a_failed_ps_is_unknown(self, result: runner.RunResult) -> None:
+        fake = FakeRunner()
+        fake.on(["ps"], result)
+        probe = liveness.ProcessProbe(fake)
+        with pytest.raises(liveness.ProbeUnknown):
+            probe.start_of(1)
+        assert probe.alive(os.getpid(), "2026-10-03T12:00:00") is None  # exists, start unknown
+        assert probe.holder_alive(os.getpid(), "2026-10-03T12:00:00", None) is True  # unknown keeps the holder
+        assert probe.me().pid_start is None
+
+    def test_unknown_never_reads_as_dead(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        probe = liveness.ProcessProbe()
+        monkeypatch.setattr(probe, "alive", lambda pid, start: None)
+        assert probe.holder_alive(7, "x", None) is True
+        monkeypatch.setattr(probe, "alive", lambda pid, start: False)
+        monkeypatch.setattr(probe, "group_alive", lambda pgid: False)
+        assert probe.holder_alive(7, "x", 7) is False
+
+    def test_non_positive_pids_from_the_listing_are_dropped(self) -> None:
+        fake = FakeRunner()
+        fake.on(
+            ["claude", "agents"],
+            json.dumps([{"sessionId": "a", "pid": 0}, {"sessionId": "b", "pid": -3}, {"sessionId": "c", "pid": 9}]),
+        )
+        assert [a.pid for a in liveness.ClaudeCli(fake).agents()] == [None, None, 9]

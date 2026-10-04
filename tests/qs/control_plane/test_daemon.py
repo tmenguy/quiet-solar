@@ -281,3 +281,150 @@ class TestConnection:
         assert isinstance(d.clock, clock.SystemClock) and isinstance(d.runner, runner.Runner)
         assert isinstance(d.probe, liveness.ProcessProbe) and isinstance(d.claude, liveness.ClaudeCli)
         assert d.popen is subprocess.Popen
+
+
+# --------------------------------------------------------------------------- review fix #01 (F6, F7, F8, F9)
+
+
+class TestReviewFix01:
+    def test_starts_on_a_feature_branch_when_no_migration_is_needed(
+        self, fake_main, fake_clock, fake_probe, monkeypatch
+    ) -> None:
+        """F6: a current live DB needs no authorisation; the daemon starts."""
+        live = fake_main / "harness_state.db"
+        migrations.migrate(live, role="daemon")
+        monkeypatch.setattr(paths, "main_head_branch", lambda m: None)
+        result = daemon.run(fake_clock, probe=fake_probe, db_path=live, max_ticks=1)
+        assert result["migrated"]["result"] == "noop" and result["ticks"] == 1
+        assert not paths.sidecar(live, ".migrate-error.json").exists()
+
+    def test_a_busy_migration_is_retried_without_the_sidecar(
+        self, migrated, fake_clock, fake_probe, monkeypatch, capsys
+    ) -> None:
+        """F7: contention never becomes a MIGRATE_BACKOFF_S outage."""
+        real = migrations.migrate
+        calls = {"n": 0}
+
+        def flaky(path: Path, *, role: str) -> dict[str, Any]:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise errors.CpError("BUSY", "database busy")
+            return real(path, role=role)
+
+        monkeypatch.setattr(migrations, "migrate", flaky)
+        result = daemon.run(fake_clock, probe=fake_probe, db_path=migrated, max_ticks=1)
+        assert result["ticks"] == 1 and calls["n"] == 2
+        assert not paths.sidecar(migrated, ".migrate-error.json").exists()
+        assert "busy" in capsys.readouterr().err
+
+    def test_a_persistently_busy_migration_exits_busy_without_the_sidecar(
+        self, migrated, fake_clock, fake_probe, monkeypatch
+    ) -> None:
+        def busy(path: Path, *, role: str) -> dict[str, Any]:
+            raise errors.CpError("BUSY", "database busy")
+
+        monkeypatch.setattr(migrations, "migrate", busy)
+        with pytest.raises(errors.CpError) as exc:
+            daemon.run(fake_clock, probe=fake_probe, db_path=migrated)
+        assert exc.value.code == "BUSY"
+        assert not paths.sidecar(migrated, ".migrate-error.json").exists()
+        assert fake_clock.sleeps == [daemon.TICK_S] * daemon.MIGRATE_BUSY_RETRIES
+
+    def test_an_auto_rolled_back_step_lands_in_the_sidecar(self, migrated, fake_clock, fake_probe, monkeypatch) -> None:
+        rb = migrations.Migration(
+            2, "rb", ("CREATE TABLE t (x UNIQUE)", "INSERT INTO t VALUES (1)", "INSERT OR ROLLBACK INTO t VALUES (1)")
+        )
+        monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, rb))
+        with pytest.raises(errors.CpError):
+            daemon.run(fake_clock, probe=fake_probe, db_path=migrated)
+        side = json.loads(paths.sidecar(migrated, ".migrate-error.json").read_text())
+        assert "IntegrityError" in side["error"]
+
+    def test_a_busy_heartbeat_does_not_kill_the_daemon(
+        self, migrated, fake_clock, fake_probe, monkeypatch, capsys
+    ) -> None:
+        """F8: log it and go on to the next tick."""
+        monkeypatch.setattr(db, "BUSY_TIMEOUT_MS", 20)
+        holder = sqlite3.connect(migrated, isolation_level=None)
+        ticks = {"n": 0}
+
+        def contend(c: sqlite3.Connection, k: Any) -> None:
+            ticks["n"] += 1
+            if ticks["n"] == 1:
+                holder.execute("BEGIN IMMEDIATE")  # the next heartbeat hits BUSY
+            elif ticks["n"] == 2:
+                holder.execute("ROLLBACK")
+
+        try:
+            result = daemon.run(fake_clock, probe=fake_probe, db_path=migrated, tick_hooks=[contend], max_ticks=3)
+        finally:
+            if holder.in_transaction:
+                holder.execute("ROLLBACK")
+            holder.close()
+        assert result["ticks"] == 3
+        assert "heartbeat" in capsys.readouterr().err
+
+    def test_a_stale_but_alive_older_daemon_is_terminated(
+        self, migrated, fake_clock, fake_probe, fake_kill, monkeypatch
+    ) -> None:
+        """F9: SIGTERM whenever the older daemon is alive, fresh or not."""
+        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        fake_clock.advance(120)  # stale: hung, but alive
+        monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, V2))
+
+        def stopped(pid: int, sig: int) -> None:
+            c = sqlite3.connect(migrated)
+            c.execute("UPDATE daemon_lease SET pid = NULL, heartbeat_at = NULL")
+            c.commit()
+            c.close()
+
+        fake_kill.on_call = stopped
+        popen = FakePopen()
+        res = daemon.ensure(popen=popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
+        assert res == {"status": "restarted"} and fake_kill.calls == [(7, signal.SIGTERM)]
+        assert len(popen.calls) == 1
+
+    def test_an_old_daemon_still_alive_after_the_deadline_is_restart_pending(
+        self, migrated, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
+    ) -> None:
+        """F9: never spawn a new daemon that would exit at once on the singleton lock."""
+        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, V2))
+        res = daemon.ensure(
+            popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill, restart_wait_s=2
+        )
+        assert res == {"status": "restart_pending", "pid": 7}
+        assert fake_kill.calls == [(7, signal.SIGTERM)] and fake_popen.calls == []
+
+    def test_unknown_liveness_sends_no_signal_and_waits(
+        self, migrated, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
+    ) -> None:
+        """F4 + F9: the pid exists but its start time is unknown — maybe reused: no SIGTERM, no spawn."""
+        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        fake_clock.advance(120)
+        monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, V2))
+        monkeypatch.setattr(fake_probe, "alive", lambda pid, start: None)
+        res = daemon.ensure(
+            popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill, restart_wait_s=2
+        )
+        assert res == {"status": "restart_pending", "pid": 7}
+        assert fake_kill.calls == [] and fake_popen.calls == []
+
+    def test_a_stale_dead_older_daemon_is_just_started_over(
+        self, migrated, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
+    ) -> None:
+        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        fake_clock.advance(120)
+        monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, V2))
+        fake_probe.kill(7)
+        res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
+        assert res == {"status": "started"} and fake_kill.calls == [] and fake_clock.sleeps == []
+        assert len(fake_popen.calls) == 1
+
+    def test_a_heartbeat_on_a_migrated_db_still_stops_the_daemon(self, migrated, fake_clock, fake_probe) -> None:
+        def migrate_away(c: sqlite3.Connection, k: Any) -> None:
+            sqlite3.connect(migrated).execute("PRAGMA user_version = 2").connection.close()
+
+        with pytest.raises(errors.CpError) as exc:
+            daemon.run(fake_clock, probe=fake_probe, db_path=migrated, tick_hooks=[migrate_away], max_ticks=3)
+        assert exc.value.code == "SCHEMA_TOO_NEW"

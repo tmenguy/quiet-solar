@@ -4,7 +4,8 @@ Seam: later children append ``Migration(n + 1, …)`` to ``MIGRATIONS``. Each
 step runs in its own ``BEGIN IMMEDIATE`` with single statements
 (``execute``, never ``executescript``, which commits implicitly), then
 ``PRAGMA user_version = n``, then ``COMMIT``. Only the daemon running the
-main checkout's code, with ``main`` checked out, migrates the live DB.
+main checkout's code, with ``main`` checked out, migrates the live DB; a DB
+already at the current schema is a noop for anyone (no authorisation needed).
 """
 
 from __future__ import annotations
@@ -81,24 +82,26 @@ def migrate(db_path: Path, *, role: str, lock_timeout: float = MIGRATE_LOCK_TIME
     from . import db  # db imports this module for the version check
 
     db_path = Path(db_path)
-    _authorise(db_path, role)
     with db.file_lock(paths.sidecar(db_path, ".migrate.lock"), exclusive=True, timeout=lock_timeout) as got:
         if not got:
             raise errors.CpError("BUSY", f"another migration of {db_path} holds the lock")
         existed = db_path.exists()
-        conn = db.connect(db_path, mode="rwc")
+        target = current_schema_version()
+        conn = db.connect(db_path, mode="rw") if existed else None
         try:
-            current = db.user_version(conn)
-            target = current_schema_version()
+            current = 0 if conn is None else db.user_version(conn)
             if current > target:
                 raise errors.CpError("SCHEMA_TOO_NEW", f"the DB is at schema v{current}, this code knows v{target}")
             if current == target:
                 return {"result": "noop", "from": current, "to": current, "backup": None}
+            _authorise(db_path, role)  # only an actual migration (or creation) needs it
+            if conn is None:
+                conn = db.connect(db_path, mode="rwc")
             backup = _backup(conn, current) if existed and current > 0 else None
             for step in MIGRATIONS:
                 if step.version <= current:
                     continue
-                conn.execute("BEGIN IMMEDIATE")
+                db.begin(conn, "BEGIN IMMEDIATE")
                 try:
                     for i, statement in enumerate(step.statements):
                         conn.execute(statement)
@@ -107,7 +110,8 @@ def migrate(db_path: Path, *, role: str, lock_timeout: float = MIGRATE_LOCK_TIME
                     conn.execute(f"PRAGMA user_version = {int(step.version)}")
                     conn.execute("COMMIT")
                 except BaseException:
-                    conn.execute("ROLLBACK")
+                    if conn.in_transaction:  # SQLite may have rolled back already (e.g. OR ROLLBACK)
+                        conn.execute("ROLLBACK")
                     raise
             return {
                 "result": "migrated",
@@ -116,4 +120,5 @@ def migrate(db_path: Path, *, role: str, lock_timeout: float = MIGRATE_LOCK_TIME
                 "backup": None if backup is None else str(backup),
             }
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()

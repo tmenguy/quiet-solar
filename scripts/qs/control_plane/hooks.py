@@ -2,6 +2,10 @@
 
 * ``Stop`` and ``PreToolUse`` **fail open**: on an error or a schema mismatch
   they allow, record the event if the DB is usable, and write one stderr line.
+  The exception is ``PreToolUse``'s static DB-access rule, which needs no DB:
+  it denies even while the DB is missing, migrating or contended.
+* The shims never exec a ``python3`` older than 3.14 (the package's syntax):
+  without the main venv and a recent enough ``python3`` they warn and allow.
 * ``pre-push`` refuses work-item refs (``QS_<N>_<k>``) everywhere, without the
   DB; otherwise it fails closed only for a worktree it can prove registered.
 * The hooks never wait for a migration and never start the daemon.
@@ -22,10 +26,12 @@ from pathlib import Path
 from typing import Any
 
 from . import clock as clock_mod
-from . import db, errors, liveness, messages, paths, runner, runs, tokens, wait
+from . import db, errors, liveness, messages, paths, runner, runs, tasks, tokens, wait
 
 SHIM_MARKER_PREFIX = "# qs-control-plane pre-push shim v"
-SHIM_VERSION = 1
+SHIM_VERSION = 2
+PY_GUARD = "import sys; sys.exit(sys.version_info < (3, 14))"
+NO_PYTHON = "qs-control-plane: no venv and no python3 >= 3.14; skipping the Control Plane hook"
 SHIM = f"""#!/bin/sh
 {SHIM_MARKER_PREFIX}{SHIM_VERSION}
 # Installed by `cp.py tool worktree-create` (QS-399): routes every push from
@@ -36,7 +42,11 @@ CP="$MAIN/scripts/qs/cp.py"
 if [ -x "$MAIN/venv/bin/python" ]; then
     exec "$MAIN/venv/bin/python" "$CP" hook pre-push "$@"
 fi
-exec python3 "$CP" hook pre-push "$@"
+if python3 -c '{PY_GUARD}' 2>/dev/null; then
+    exec python3 "$CP" hook pre-push "$@"
+fi
+echo "{NO_PYTHON}" >&2
+exit 0
 """
 ITEM_REF = re.compile(r"^refs/heads/QS_\d+_\d+$")
 PRE_TOOL_MATCHER = "Bash|Edit|Write|SendMessage"
@@ -197,13 +207,17 @@ def db_access_denial(tool_name: str, tool_input: dict[str, Any]) -> str | None:
     if tool_name != "Bash":
         return None
     for seg in _segments(str(tool_input.get("command", ""))):
-        if "harness_state.db" not in seg or "scripts/qs/cp.py" in seg:
+        if "harness_state.db" not in seg:
+            continue
+        refused = f"direct access to the Control Plane DB is refused ({seg!r}); use cp.py"
+        if _REDIRECT_ONTO_DB.search(seg):
+            return refused  # checked before the cp.py exemption: `cp.py … > harness_state.db` is a write
+        if "scripts/qs/cp.py" in seg:
             continue
         words = seg.split()
         first = words[0]
-        read_only = first in READ_ONLY_PROGRAMS and (first != "sed" or "-n" in words)
-        if not read_only or _REDIRECT_ONTO_DB.search(seg):
-            return f"direct access to the Control Plane DB is refused ({seg!r}); use cp.py"
+        if not (first in READ_ONLY_PROGRAMS and (first != "sed" or "-n" in words)):
+            return refused
     return None
 
 
@@ -241,19 +255,24 @@ def hook_pre_tool_use(stdin_text: str, clock: clock_mod.Clock) -> str:
         session_id = payload.get("session_id")
         tool_name = str(payload.get("tool_name", ""))
         tool_input = payload.get("tool_input") or {}
-        reason = db_access_denial(tool_name, tool_input)
-        with _db_if_current(clock) as conn:
-            if reason is None and session_id:
-                reason = registered_denial(conn, str(session_id), tool_name, tool_input)
-            if reason is None:
-                return ""
-            if conn is not None:
-                _record(conn, clock, "pre-tool-use", session_id, "deny", {"tool": tool_name, "reason": reason})
-        return _deny(reason)
+        static = db_access_denial(tool_name, tool_input)  # needs no DB: decided before touching it
     except Exception as exc:  # noqa: BLE001 — PreToolUse fails open
         _log(f"pre-tool-use hook failed open: {exc!r}")
         _try_record(clock, "pre-tool-use", session_id, {"kind": "error", "error": repr(exc)})
         return ""
+    reason = static
+    try:
+        with _db_if_current(clock) as conn:
+            if reason is None and session_id:
+                reason = registered_denial(conn, str(session_id), tool_name, tool_input)
+            if reason is not None and conn is not None:
+                _record(conn, clock, "pre-tool-use", session_id, "deny", {"tool": tool_name, "reason": reason})
+    except Exception as exc:  # noqa: BLE001 — the DB-backed part fails open; a decided deny still stands
+        _log(f"pre-tool-use hook: DB part failed{' (deny kept)' if reason else ' open'}: {exc!r}")
+        if reason is None:
+            _try_record(clock, "pre-tool-use", session_id, {"kind": "error", "error": repr(exc)})
+            return ""
+    return "" if reason is None else _deny(reason)
 
 
 # --------------------------------------------------------------------------- pre-push (§10.3)
@@ -269,7 +288,13 @@ def _push_lines(stdin_text: str) -> list[tuple[str, str, str, str]]:
 
 
 def _registered_task(conn: sqlite3.Connection, toplevel: Path) -> sqlite3.Row | None:
-    for row in conn.execute("SELECT * FROM tasks WHERE worktree IS NOT NULL").fetchall():
+    """The task registered on ``toplevel``: a non-terminal one first, the newest first."""
+    marks = ", ".join("?" for _ in tasks.TERMINAL)
+    rows = conn.execute(
+        f"SELECT * FROM tasks WHERE worktree IS NOT NULL ORDER BY (state IN ({marks})), rowid DESC",
+        tuple(sorted(tasks.TERMINAL)),
+    ).fetchall()
+    for row in rows:
         if Path(row["worktree"]).resolve() == toplevel:
             return row
     return None
@@ -376,7 +401,10 @@ def install_pre_push(common_dir: Path, run: runner.Runner) -> dict[str, Any]:
 def _hook_command(main_dir: Path, hook: str) -> str:
     python = shlex.quote(str(main_dir / "venv" / "bin" / "python"))
     cp = shlex.quote(str(main_dir / "scripts" / "qs" / "cp.py"))
-    return f'PY={python}; [ -x "$PY" ] || PY=python3; exec "$PY" {cp} hook {hook}'
+    return (
+        f'PY={python}; if [ ! -x "$PY" ]; then PY=python3; "$PY" -c \'{PY_GUARD}\' 2>/dev/null'
+        f' || {{ echo "{NO_PYTHON}" >&2; exit 0; }}; fi; exec "$PY" {cp} hook {hook}'
+    )
 
 
 def hooks_settings(role: str, main_dir: Path | None = None) -> dict[str, Any]:

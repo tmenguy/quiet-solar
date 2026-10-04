@@ -125,9 +125,10 @@ class TestProcessLocks:
         with hold(world, ["main-merge"], world["tok"], H(2)):
             assert lock_row(world, "main-merge")["holder_pid"] == 2
 
-    def test_stale_token_takes_nothing(self, world) -> None:
+    @pytest.mark.parametrize("name", ["main-checkout", "integration:QS_5", "main-merge"])
+    def test_stale_token_takes_nothing(self, world, name: str) -> None:
         run_cli("run", "claim", world["run"], "--session-id", ORCH)
-        with pytest.raises(errors.CpError) as exc, hold(world, ["main-checkout"], world["tok"], H(1)):
+        with pytest.raises(errors.CpError) as exc, hold(world, [name], world["tok"], H(1)):
             pass
         assert exc.value.code == "STALE_TOKEN"
         assert sql(world["db"], "SELECT count(*) FROM locks")[0][0] == 0
@@ -445,3 +446,78 @@ def test_a_node_launched_after_the_listing_counts_and_is_not_refreshed_away(migr
         assert locks.admit_node(c, fake_clock, listing=[], holders_alive={}, limit=5) == 0
     assert nodes.refresh(c, fake_clock, [])["changes"] == [("N1", "running", "reaped")]
     c.close()
+
+
+# --------------------------------------------------------------------------- review fix #01 (F1, F4, F5, F15, F21)
+
+
+class TestReviewFix01:
+    def test_a_dropped_older_deliverable_on_the_branch_does_not_free_the_lock(self, world) -> None:
+        """F1: T9 (dropped) and T10 (building) share QS_42; text ids sort "T9" > "T10"."""
+        insert_task(world["db"], "T10", world["run"], is_deliverable=1, branch="QS_42")
+        insert_task(world["db"], "T9", world["run"], state="dropped", is_deliverable=1, branch="QS_42")
+        assert acquire(world, world["tok"], ORCH, "integration:QS_42")[1]["status"] == "acquired"
+        with pytest.raises(errors.CpError) as exc, hold(world, ["integration:QS_42"], world["n1"], H(5), timeout=1):
+            pass
+        assert exc.value.code == "BUSY"
+        sql(world["db"], "UPDATE tasks SET state = 'merged' WHERE id = 'T10'")
+        with hold(world, ["integration:QS_42"], world["n1"], H(5)):
+            assert lock_row(world, "integration:QS_42")["holder_kind"] == "process"
+
+    def test_failed_listing_and_unknown_pid_keep_the_session_lock(self, world, monkeypatch) -> None:
+        """F5: the listing failed and the pid's liveness is unknown: never taken over."""
+        acquire(world, world["n1"], "S-n1")
+        world["claude"].listing = None
+        monkeypatch.setattr(world["probe"], "alive", lambda pid, start: None)
+        with pytest.raises(errors.CpError) as exc, hold(world, ["integration:QS_5", "main-merge"], world["tok"], H(5)):
+            pass
+        assert exc.value.code == "BUSY" and lock_row(world)["holder_kind"] == "session"
+
+    def test_unknown_start_time_skips_the_restamp(self, world, monkeypatch) -> None:
+        acquire(world, world["n1"], "S-n1")
+        world["claude"].listing = [agent("S-n1", pid=555)]
+
+        def unknown(pid: int) -> str | None:
+            raise liveness.ProbeUnknown("ps timed out")
+
+        monkeypatch.setattr(world["probe"], "start_of", unknown)
+        with hold(world, ["integration:QS_5"], world["n1"], H(11)):
+            assert lock_row(world)["holder_pid"] == 201  # kept, not restamped with an unknown start
+
+    def test_unknown_start_time_on_acquire_is_busy(self, world, monkeypatch) -> None:
+        def unknown(pid: int) -> str | None:
+            raise liveness.ProbeUnknown("ps timed out")
+
+        monkeypatch.setattr(world["probe"], "start_of", unknown)
+        code, out = acquire(world, world["n1"], "S-n1")
+        assert code == 6 and out["error"] == "BUSY" and lock_row(world) is None
+
+    def test_the_gate_cap_counts_live_rows(self, world, monkeypatch) -> None:
+        """F15: a slot taken under a larger limit still counts against a smaller one."""
+        sql(
+            world["db"],
+            "INSERT INTO cap_slots (cap, slot, holder_pid, holder_pid_start, holder_pgid, holder_actor, acquired_at)"
+            " VALUES ('gates', 3, 7, 'start-7', 7, 'big', 'x'), ('gates', 0, 8, 'start-8', 8, 'big', 'x')",
+        )
+        monkeypatch.setenv("QS_CP_MAX_GATES", "2")
+        with pytest.raises(errors.CpError) as exc, hold(world, [], world["tok"], H(1), cap="gates"):
+            pass
+        assert exc.value.code == "BUSY"
+        world["probe"].kill(7)
+        with hold(world, [], world["tok"], H(1), cap="gates") as held:
+            assert held.slots == [("gates", 1)]  # the lowest index not held by a live row
+        world["probe"].kill(8)
+        with hold(world, [], world["tok"], H(2), cap="gates") as held:
+            assert held.slots == [("gates", 0)]  # a dead row's slot is reused
+
+    def test_a_failed_release_does_not_mask_the_result(self, world, monkeypatch, capsys) -> None:
+        """F21: liveness recovers the rows later; the tool's own outcome stands."""
+        import sqlite3
+
+        def busy(conn: Any, held: Any) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr(locks, "release", busy)
+        with hold(world, ["main-checkout"], world["tok"], H(1)) as held:
+            assert held.locks == ["main-checkout"]
+        assert "release failed" in capsys.readouterr().err

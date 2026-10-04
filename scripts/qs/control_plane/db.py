@@ -46,17 +46,23 @@ def user_version(conn: sqlite3.Connection) -> int:
     return int(conn.execute("PRAGMA user_version").fetchone()[0])
 
 
-def _begin(conn: sqlite3.Connection, statement: str) -> None:
+_BUSY_CODES = frozenset({sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED})
+
+
+def begin(conn: sqlite3.Connection, statement: str) -> None:
+    """Start a transaction: contention is ``BUSY``, any other SQLite failure ``INTERNAL``."""
     try:
         conn.execute(statement)
     except sqlite3.OperationalError as exc:
-        raise errors.CpError("BUSY", f"database busy: {exc}") from exc
+        if (exc.sqlite_errorcode & 0xFF) in _BUSY_CODES:
+            raise errors.CpError("BUSY", f"database busy: {exc}") from exc
+        raise errors.CpError("INTERNAL", f"cannot start a transaction: {exc}") from exc
 
 
 @contextmanager
 def write(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
-    """``BEGIN IMMEDIATE`` → schema re-check → body → ``COMMIT`` (``ROLLBACK`` on any exception)."""
-    _begin(conn, "BEGIN IMMEDIATE")
+    """``BEGIN IMMEDIATE`` → schema re-check → body → ``COMMIT`` (``ROLLBACK`` on any exception, a failed COMMIT included)."""
+    begin(conn, "BEGIN IMMEDIATE")
     try:
         found = user_version(conn)
         expected = migrations.current_schema_version()
@@ -72,13 +78,18 @@ def write(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
         raise
-    conn.execute("COMMIT")
+    try:
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:  # e.g. a deferred constraint: the transaction is still open
+            conn.execute("ROLLBACK")
+        raise
 
 
 @contextmanager
 def read(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     """A consistent read snapshot."""
-    _begin(conn, "BEGIN")
+    begin(conn, "BEGIN")
     try:
         yield conn
     finally:
@@ -163,6 +174,8 @@ def check_schema(
     if not wait:
         if found is None:
             return "missing"
+        if found == _MIGRATING:
+            raise errors.CpError("SCHEMA_PENDING", f"a migration is in progress, waiting for v{target}")
         raise errors.CpError("SCHEMA_PENDING", f"the DB is at schema v{found}, waiting for v{target}")
     status = ensure() if ensure is not None else {}
     if status.get("status") == "migrate_failed":
