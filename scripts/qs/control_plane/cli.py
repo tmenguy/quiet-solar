@@ -25,6 +25,7 @@ from . import (
     db,
     decisions,
     errors,
+    export,
     hooks,
     liveness,
     locks,
@@ -37,6 +38,7 @@ from . import (
     reports,
     runner,
     runs,
+    snapshot,
     tasks,
     tools,
     wait,
@@ -656,6 +658,39 @@ def _hooks_settings(args: argparse.Namespace, io: Io) -> Raw:
     return Raw(json.dumps(hooks.hooks_settings(args.role), sort_keys=True))
 
 
+def _conf_snapshot(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--run")
+
+
+def _snapshot(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    with connection(io, "read") as conn:
+        run_id = None
+        if args.run is not None and conn is not None:
+            run_id = runs.resolve(conn, args.run)["id"]
+        return snapshot.snapshot(conn, io.deps.clock, run_id)
+
+
+def _conf_task_show(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--task", required=True)
+
+
+def _task_show(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    with connection(io, "read") as conn:
+        return snapshot.task_show(conn, args.task)
+
+
+def _conf_export(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--task", required=True)
+    p.add_argument("--out-worktree", required=True)
+
+
+def _export_summary(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    with connection(io, "read") as conn:
+        if conn is None:
+            raise errors.CpError("NOT_FOUND", f"unknown task {args.task} (no DB yet)")
+        return {"path": str(export.write_summary(conn, args.task, args.out_worktree))}
+
+
 COMMANDS: dict[str, Command] = {
     c.name: c
     for c in (
@@ -677,6 +712,9 @@ COMMANDS: dict[str, Command] = {
         Command("run set-plan", "write", _run_set_plan, _conf_run_set_plan, help="replace the run's global plan"),
         Command("run close", "write", _run_close, _token, help="close the run"),
         Command("session status", "read", _session_status, _sid, help="this session's role and state"),
+        Command("snapshot", "read", _snapshot, _conf_snapshot, help="the board-complete read-only view"),
+        Command("task show", "read", _task_show, _conf_task_show, help="one task in full, digest included"),
+        Command("export-summary", "read", _export_summary, _conf_export, help="write the task summary into a worktree"),
         Command("msg post", "write", _msg_post, _conf_msg_post, help="post a message to a queue"),
         Command("msg pop", "write", _msg_pop, _conf_msg_pop, help="pop the next visible message (with a receipt)"),
         Command("msg ack", "write", _msg_ack, _conf_msg_ack, help="acknowledge a popped message"),

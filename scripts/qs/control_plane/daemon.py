@@ -138,6 +138,11 @@ def read_lease(db_path: Path) -> dict[str, Any] | None:
         conn.close()
 
 
+def read_lease_conn(conn: Any) -> dict[str, Any] | None:
+    """The ``daemon_lease`` row through an open connection."""
+    return db.as_dict(conn.execute("SELECT * FROM daemon_lease WHERE id = 1").fetchone())
+
+
 def _fresh(lease: dict[str, Any] | None, clock: clock_mod.Clock, stale_after_s: float) -> bool:
     if lease is None or lease["pid"] is None:
         return False

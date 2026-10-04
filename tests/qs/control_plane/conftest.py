@@ -54,6 +54,8 @@ MODULES = (
     "hooks",
     "merge_policy",
     "tools",
+    "export",
+    "snapshot",
     "cli",
 )
 for _name in MODULES:
@@ -63,6 +65,7 @@ from control_plane import (  # noqa: E402
     cli,
     clock,
     db,
+    export,
     faults,
     liveness,
     merge_policy,
@@ -340,6 +343,7 @@ def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deps: cli.Dep
         faults.reset()
         merge_policy.reset()
         tools.reset()
+        export.LEDGER_SECTIONS.clear()
 
 
 @pytest.fixture
