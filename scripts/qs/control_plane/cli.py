@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, NoReturn, TextIO
 
 from . import clock as clock_mod
-from . import daemon, db, errors, liveness, migrations, paths, procsetup, runner, runs
+from . import daemon, db, errors, liveness, messages, migrations, paths, procsetup, runner, runs, wait
 
 
 @dataclass(frozen=True)
@@ -245,6 +245,89 @@ def _session_status(args: argparse.Namespace, io: Io) -> dict[str, Any]:
         return {"session_id": sid, **runs.session_status(conn, sid)}
 
 
+def _conf_msg_post(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--run", required=True)
+    p.add_argument("--to", required=True)
+    p.add_argument("--kind", required=True)
+    p.add_argument("--payload-file", required=True)
+    p.add_argument("--dedupe-key")
+    _token(p)
+
+
+def _msg_post(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    payload = messages.parse_payload(read_file(args.payload_file))
+    with connection(io, "write") as conn:
+        assert conn is not None
+        return messages.post(
+            conn,
+            io.deps.clock,
+            token=args.token,
+            run_ref=args.run,
+            to=args.to,
+            kind=args.kind,
+            payload=payload,
+            dedupe_key=args.dedupe_key,
+        )
+
+
+def _conf_msg_pop(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--run", required=True)
+    p.add_argument("--as", dest="recipient", required=True)
+    p.add_argument("--visibility", type=float, default=None)
+    _token(p)
+
+
+def _msg_pop(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    visibility = messages.VISIBILITY_S if args.visibility is None else args.visibility
+    with connection(io, "write") as conn:
+        assert conn is not None
+        return messages.pop(
+            conn,
+            io.deps.clock,
+            token=args.token,
+            run_ref=args.run,
+            recipient=args.recipient,
+            visibility=visibility,
+            max_attempts=messages.MAX_ATTEMPTS,
+        )
+
+
+def _conf_msg_ack(p: argparse.ArgumentParser) -> None:
+    p.add_argument("id", type=int)
+    p.add_argument("--receipt", required=True)
+    _token(p)
+
+
+def _msg_ack(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    with connection(io, "write") as conn:
+        assert conn is not None
+        return messages.ack(conn, io.deps.clock, token=args.token, msg_id=args.id, receipt=args.receipt)
+
+
+def _conf_wait(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--run", required=True)
+    _token(p)
+    p.add_argument("--timeout", type=float, default=None)
+    p.add_argument("--poll", type=float, default=None)
+
+
+def _wait(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    path = paths.select_db()
+    with connection(io, "write") as conn:
+        assert conn is not None
+        return wait.wait(
+            conn,
+            io.deps.clock,
+            io.deps.probe,
+            lambda: ensure_daemon(io, path),
+            token=args.token,
+            run_ref=args.run,
+            db_path=path,
+            timeout=wait.WAIT_TIMEOUT_S if args.timeout is None else args.timeout,
+            poll=wait.POLL_S if args.poll is None else args.poll,
+        )
+
+
 COMMANDS: dict[str, Command] = {
     c.name: c
     for c in (
@@ -260,6 +343,10 @@ COMMANDS: dict[str, Command] = {
         Command("run set-plan", "write", _run_set_plan, _conf_run_set_plan, help="replace the run's global plan"),
         Command("run close", "write", _run_close, _token, help="close the run"),
         Command("session status", "read", _session_status, _sid, help="this session's role and state"),
+        Command("msg post", "write", _msg_post, _conf_msg_post, help="post a message to a queue"),
+        Command("msg pop", "write", _msg_pop, _conf_msg_pop, help="pop the next visible message (with a receipt)"),
+        Command("msg ack", "write", _msg_ack, _conf_msg_ack, help="acknowledge a popped message"),
+        Command("wait", "write", _wait, _conf_wait, help="block until the orchestrator's queue is not empty"),
     )
 }
 
