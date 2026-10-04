@@ -9,7 +9,8 @@ world already holds, then each missing step runs under the tool's locks /
 cap, with the token and lock ownership re-checked before every step. The
 ``args_hash`` covers the arguments and the content of every ``*_file``
 argument: the same key with an edited file is a ``CONFLICT``. Every
-``*_file`` is read once, when the call starts; a step reads the cached bytes
+``*_file`` is read once, when the call starts, and must be a UTF-8 regular file
+(``USAGE`` before the claim otherwise); a step reads the cached bytes
 only when it runs, so a takeover whose effect is already recorded never needs
 the file again. Keys are ``[A-Za-z0-9._:/-]{1,200}``.
 
@@ -38,6 +39,7 @@ TaskRow = sqlite3.Row
 TOKEN_ENV = "QS_CP_TOKEN"
 TAIL_LINES = 60
 IDENTIFY_POLL_S = 2.0
+MERGE_SHA_RETRY_S = 2.0
 PHASES = ("/create-plan", "/diagnose-task", "/decompose-epic")
 RELEASED_BEFORE_EFFECT = frozenset({"BUSY", "POLICY_REFUSED", "STALE_TOKEN", "STOPPED", "USAGE"})
 KEY_RE = re.compile(r"[A-Za-z0-9._:/-]{1,200}")
@@ -212,22 +214,32 @@ def _file_args(args: Mapping[str, Any]) -> dict[str, str]:
 
 
 def _read_files(args: Mapping[str, Any]) -> tuple[dict[str, bytes], list[str]]:
-    """Every ``*_file`` argument read once → ``(cache, non-regular names)``; an unreadable file has no entry."""
+    """Every ``*_file`` argument read once → ``(cache, problems)``; an unreadable file has no entry.
+
+    A problem is a file that is there but unusable: not a regular file, or not UTF-8 — refused before the claim
+    and before any effect, so a bad file never leaves a half-done call behind.
+    """
     cache: dict[str, bytes] = {}
-    irregular: list[str] = []
+    problems: list[str] = []
     for name, value in sorted(_file_args(args).items()):
         try:
             mode = Path(value).stat().st_mode
         except OSError:
             continue
         if not stat.S_ISREG(mode):
-            irregular.append(name)  # a FIFO or /dev/stdin would be emptied (or block) by a read
+            problems.append(f"args.{name} is not a regular file")  # a FIFO or /dev/stdin would be emptied by a read
             continue
         try:
-            cache[name] = Path(value).read_bytes()
+            data = Path(value).read_bytes()
         except OSError:
             continue
-    return cache, irregular
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            problems.append(f"args.{name} is not UTF-8: {exc}")
+            continue
+        cache[name] = data
+    return cache, problems
 
 
 def _files_digest(args: Mapping[str, Any], cache: Mapping[str, bytes]) -> str | None:
@@ -265,7 +277,7 @@ class _Call:
         self.recorded: set[str] = set()
         self.who: tokens.Principal | None = None
         self.args_digest = hashlib.sha256(_canonical(self.args).encode()).hexdigest()
-        self.files, self.irregular = _read_files(self.args)
+        self.files, self.file_problems = _read_files(self.args)
         self.files_digest = _files_digest(self.args, self.files)
 
     # -- helpers
@@ -361,10 +373,13 @@ class _Call:
         self._check_same(row)
         return self._finished(row)
 
+    def missing_files(self) -> list[str]:
+        return [name for name in _file_args(self.args) if name not in self.files]
+
     def check_files(self) -> None:
-        if self.irregular:
-            raise errors.CpError("USAGE", f"args.{self.irregular[0]} is not a regular file")
-        missing = [name for name in _file_args(self.args) if name not in self.files]
+        if self.file_problems:
+            raise errors.CpError("USAGE", self.file_problems[0])
+        missing = self.missing_files()
         if missing and not self.in_flight:
             raise errors.CpError("USAGE", f"cannot read args.{missing[0]}")
 
@@ -388,6 +403,9 @@ class _Call:
                     continue
                 now = db.now(self.ctx.clock)
                 if current is None:
+                    missing = self.missing_files()
+                    if missing:  # the in-flight holder released the key since replay(): this is a fresh call now
+                        raise errors.CpError("USAGE", f"cannot read args.{missing[0]}")
                     self.conn.execute(
                         "INSERT INTO tool_calls (tool, key, args_hash, run_id, task_id, actor, args, state, holder_pid,"
                         " holder_pid_start, holder_pgid, outputs, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'started',"
@@ -659,10 +677,7 @@ def arg_file_text(ctx: StepCtx, name: str) -> str:
     data = ctx._call.files.get(name)
     if data is None:
         raise errors.CpError("USAGE", f"cannot read args.{name}")
-    try:
-        text: str = data.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise errors.CpError("USAGE", f"args.{name} is not UTF-8: {exc}") from exc
+    text: str = data.decode("utf-8")  # every cached file was checked to be UTF-8 when the call started
     return text
 
 
@@ -876,6 +891,22 @@ def _relaunch_name(name: str) -> str:
     return f"{match['base']}-r{int(match['n'] or 0) + 1}"
 
 
+def _superseded_names(name: str) -> list[str]:
+    """The names earlier launches of this row used: ``<base>``, ``<base>-r1`` … up to the one before ``name``."""
+    match = _RELAUNCH_RE.fullmatch(name)
+    assert match is not None
+    n = int(match["n"] or 0)
+    return [match["base"], *(f"{match['base']}-r{i}" for i in range(1, n))] if n else []
+
+
+def _stop_superseded(ctx: StepCtx, listing: Sequence[liveness.Agent], name: str) -> None:
+    """Best-effort ``claude stop`` of a late earlier launch still listed (its token is void; this ends it sooner)."""
+    for old in _superseded_names(name):
+        found = liveness.find(listing, name=old)
+        if found is not None:
+            ctx.claude.stop(found.id or found.session_id)  # a failure is ignored: STALE_TOKEN ends it anyway
+
+
 def _launch_probe(ctx: StepCtx, own: sqlite3.Row, *, resume: bool) -> dict[str, Any | None]:
     out: dict[str, Any | None] = {}
     listing = ctx.claude.try_agents()
@@ -893,6 +924,8 @@ def _launch_probe(ctx: StepCtx, own: sqlite3.Row, *, resume: bool) -> dict[str, 
     else:
         out["reserve"] = None
     if agent is not None:
+        assert listing is not None
+        _stop_superseded(ctx, listing, own["name"])
         out["launch"] = {"launched": True, "probed": True}
         out["identify"] = {"session_id": agent.session_id, "short_id": agent.id}
     elif own["state"] == "reaped" or own["launch_at"] is None:
@@ -934,6 +967,8 @@ def _identify(ctx: StepCtx, *, resume: bool) -> dict[str, Any]:
         listing = ctx.claude.try_agents()
         found = None if listing is None else liveness.find(listing, name=row["name"])
         if found is not None and (not resume or found.started_after(row["launch_at"])):
+            assert listing is not None
+            _stop_superseded(ctx, listing, row["name"])
             return {"session_id": found.session_id, "short_id": found.id}
         if ctx.clock.now().timestamp() >= deadline:
             raise errors.CpError("BUSY", f"session {row['name']} is not listed yet; replay the same key")
@@ -962,6 +997,15 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
             # A `spawning` row of this key is marked done by the probe; only absent or reaped reach here.
             own = conn.execute("SELECT * FROM nodes WHERE spawn_tool_key = ?", (skey,)).fetchone()
             limit = locks.max_nodes()
+            late = None if own is None or listing is None else liveness.find(listing, name=own["name"])
+            if own is not None and late is not None:
+                # Our reaped row's launch came up late: adopt it (same name, same nonce — its token stays valid)
+                # rather than relaunch a second copy. No admission: the session already exists.
+                nodes.move(conn, ctx.clock, own["id"], "spawning", expect="reaped")
+                ctx._call.outputs["launch"] = {"launched": True, "probed": True}
+                ctx._call.outputs["identify"] = {"session_id": late.session_id, "short_id": late.id}
+                ctx.record_output({"node_id": own["id"], "name": own["name"]})
+                return
             if own is not None:  # our own row, reaped meanwhile: re-take it (the guard allows only this)
                 locks.admit_node(conn, ctx.clock, listing=listing, holders_alive=alive, limit=limit)
                 # A new nonce voids the first launch's token, a new name keeps a late first launch from being
@@ -1022,8 +1066,9 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
             ctx.record_output({"node_id": node_id, "name": name})
 
     def launch(ctx: StepCtx) -> dict[str, Any]:
+        prompt = arg_file_text(ctx, "prompt_file")  # before `_launch` writes launch_at: a bad file launches nothing
+
         def start(row: sqlite3.Row) -> runner.RunResult:
-            prompt = arg_file_text(ctx, "prompt_file")
             with ctx.write() as conn:
                 token = _node_token(conn, row["id"])
             settings = json.dumps(hooks.hooks_settings("node", ctx.main), sort_keys=True)
@@ -1112,9 +1157,8 @@ def _resume_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
             ctx.record_output({"node_id": node["id"], "name": node["name"]})
 
     def launch(ctx: StepCtx) -> dict[str, Any]:
-        return _launch(
-            ctx, lambda row: ctx.claude.resume_bg(row["session_id"], arg_file_text(ctx, "message_file"), cwd=wt)
-        )
+        message = arg_file_text(ctx, "message_file")  # before `_launch` writes launch_at
+        return _launch(ctx, lambda row: ctx.claude.resume_bg(row["session_id"], message, cwd=wt))
 
     return (
         Step("reserve", reserve),
@@ -1306,8 +1350,12 @@ def _commit_oid(data: Mapping[str, Any] | None) -> str | None:
 
 
 def _merge_sha(ctx: StepCtx, pr: str, data: Mapping[str, Any] | None) -> str | None:
-    """The merge commit from ``data``, else read once more (GitHub may fill it in a moment later)."""
-    return _commit_oid(data) or _commit_oid(_gh_json(ctx, ["gh", "pr", "view", pr, "--json", "mergeCommit"]))
+    """The merge commit from ``data``, else read once more after a pause (GitHub may fill it in a moment later)."""
+    sha = _commit_oid(data)
+    if sha is None:
+        ctx.clock.sleep(MERGE_SHA_RETRY_S)
+        sha = _commit_oid(_gh_json(ctx, ["gh", "pr", "view", pr, "--json", "mergeCommit"]))
+    return sha
 
 
 def _merge_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:

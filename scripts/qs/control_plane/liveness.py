@@ -189,6 +189,10 @@ class ClaudeCli:
             timeout=120,
         )
 
+    def stop(self, agent_id: str) -> runner.RunResult:
+        """``claude stop <id>`` — stops a background session (its conversation is kept)."""
+        return self.runner.run([self.exe, "stop", agent_id], timeout=30)
+
 
 def find(listing: Sequence[Agent], *, session_id: str | None = None, name: str | None = None) -> Agent | None:
     for agent in listing:

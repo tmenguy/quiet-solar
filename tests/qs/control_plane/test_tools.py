@@ -1499,3 +1499,133 @@ class TestReviewFix02:
         }
         code, snap = run_cli("snapshot")
         assert code == 0 and snap["alerts"][0]["hook"] == "tool:merge"
+
+
+# --------------------------------------------------------------------------- review fix #03 (H1, H6, H8)
+
+
+class TestReviewFix03:
+    # H1
+    @pytest.mark.parametrize("name", ["spawn", "resume"])
+    def test_a_fresh_launch_with_a_non_utf8_file_has_no_effect(self, w: W, name: str) -> None:
+        t = TABLE[name]
+        t.prep(w)
+        nodes_before = [dict(r) for r in sql(w.db, "SELECT * FROM nodes")]
+        args = t.args(w)
+        [file_arg] = [k for k in args if k.endswith("_file")]
+        Path(args[file_arg]).write_bytes(b"\xff\xfe\x00bad")
+        code, out = tool(w, name, "u1", **args)
+        assert code == 2 and out["error"] == "USAGE" and "UTF-8" in out["detail"], out
+        assert call_row(w, name, "u1") is None and w.sim.effects("claude", "--bg") == 0
+        assert [dict(r) for r in sql(w.db, "SELECT * FROM nodes")] == nodes_before  # no row, no launch_at
+
+    @pytest.mark.parametrize("name", ["spawn", "resume"])
+    def test_a_takeover_after_reserve_with_the_file_gone_writes_no_launch_at(self, w: W, name: str) -> None:
+        t = TABLE[name]
+        t.prep(w)
+        args = t.args(w)
+        [file_arg] = [k for k in args if k.endswith("_file")]
+        text = Path(args[file_arg]).read_text()
+        with faults.arm(f"{name}.after_effect"), pytest.raises(faults.FaultInjected):
+            tool(w, name, "k1", **args)  # reserve done, the launch not yet
+        Path(args[file_arg]).unlink()
+        code, out = tool(w, name, "k1", **args)
+        assert code == 2 and out["error"] == "USAGE", out
+        assert node_row(w, "N1")["launch_at"] is None and w.sim.effects("claude", "--bg") == 0
+        assert call_row(w, name, "k1")["state"] == "started"
+        Path(args[file_arg]).write_text(text)
+        code, out = tool(w, name, "k1", **args)
+        assert code == 0, out
+        assert w.sim.effects("claude", "--bg") == 1
+
+    def test_a_fresh_insert_after_the_holder_released_needs_every_file(self, w: W) -> None:
+        ctx = tools.Ctx(w.runner, lambda: db.connect(w.db), w.clock, w.probe, w.claude, w.main)
+        sql(
+            w.db,
+            "INSERT INTO tool_calls (tool, key, args_hash, task_id, actor, args, state, holder_pid, holder_pid_start,"
+            " outputs, started_at) VALUES ('t-gone', 'k1', 'x:-', 'T1', 'a', '{}', 'started', 7, 'start-7', '{}', 'x')",
+        )
+
+        def steps(task: Any, args: Any) -> tuple[tools.Step, ...]:
+            sql(w.db, "DELETE FROM tool_calls WHERE tool = 't-gone'")  # the in-flight holder released its claim
+            return ()
+
+        tools.register(tools.ToolSpec("t-gone", steps))
+        args = {"body_file": str(w.tmp / "missing.md")}
+        with pytest.raises(tools.errors.CpError) as exc:
+            tools.invoke("t-gone", key="k1", task_id="T1", args=args, token=w.token, actor="me", ctx=ctx)
+        assert exc.value.code == "USAGE" and call_row(w, "t-gone", "k1") is None
+
+    # H6
+    def test_a_late_first_launch_listed_at_the_retake_is_adopted(self, w: W) -> None:
+        import re
+
+        w.sim.list_on_launch = False
+        assert spawn(w, "s1")[0] == 6
+        [first] = w.runner.matching("claude", "--bg")
+        old_token = re.search(r"token (node:\S+)", first.argv[-1])[1]  # type: ignore[index]
+        w.clock.advance(61)
+        reap(w)
+        assert node_row(w, "N1")["state"] == "reaped"
+        w.claude.listing = [agent("S-first", "r1-T1-g1", id="first")]  # the first launch came up late
+        code, out = spawn(w, "s1")
+        assert code == 0, out
+        assert w.sim.effects("claude", "--bg") == 1  # adopted: no relaunch
+        assert out["token"] == old_token and out["result"]["name"] == "r1-T1-g1"
+        node = node_row(w, "N1")
+        assert (node["state"], node["session_id"], node["short_id"]) == ("running", "S-first", "first")
+        assert w.runner.matching("claude", "stop") == []
+
+    def test_a_late_first_launch_seen_after_the_relaunch_is_stopped(self, w: W) -> None:
+        w.sim.list_on_launch = False
+        assert spawn(w, "s1")[0] == 6
+        for _ in range(2):  # two relaunches: r1-T1-g1-r1, then r1-T1-g1-r2
+            w.clock.advance(61)
+            reap(w)
+            assert spawn(w, "s1")[0] == 6
+        from control_plane import clock as clock_mod
+
+        sql(w.db, "UPDATE nodes SET launch_at = ?", [clock_mod.stamp(w.clock)])
+        w.claude.listing = [
+            agent("S-first", "r1-T1-g1", id="first"),
+            agent("S-mid", "r1-T1-g1-r1"),  # no short id: stopped by its session id
+            agent("S-new", "r1-T1-g1-r2", id="new"),
+            agent("S-other", "r1-T2-g1", id="other"),
+        ]
+        code, out = spawn(w, "s1")
+        assert code == 0 and out["result"]["session_id"] == "S-new"
+        stops = [c.argv[-1] for c in w.runner.matching("claude", "stop")]
+        assert stops == ["first", "S-mid"]
+
+    def test_a_failed_stop_of_a_late_first_launch_is_ignored(self, w: W) -> None:
+        from control_plane.runner import RunResult
+
+        w.sim.list_on_launch = False
+        assert spawn(w, "s1")[0] == 6
+        w.clock.advance(61)
+        reap(w)
+        w.runner.on(["claude", "stop"], RunResult(1, "", "no such session"))
+        w.sim.list_on_launch = True
+        w.claude.listing = []
+        real = w.sim._claude_bg
+
+        def late_first(call: Any) -> Any:
+            res = real(call)
+            w.claude.listing = [*(w.claude.listing or []), agent("S-first", "r1-T1-g1", id="first")]
+            return res
+
+        w.runner.on(["claude", "--bg"], late_first)
+        code, out = spawn(w, "s1")
+        assert code == 0 and out["result"]["name"] == "r1-T1-g1-r1"
+        assert len(w.runner.matching("claude", "stop")) == 1
+
+    # H8
+    def test_the_merge_sha_is_read_again_after_a_pause(self, w: W) -> None:
+        from control_plane.runner import RunResult
+
+        _prep_merge(w)
+        answers = iter([json.dumps({"mergeCommit": None}), json.dumps({"mergeCommit": {"oid": "n" * 40}})])
+        w.runner.on(["--json", "mergeCommit"], lambda c: RunResult(0, next(answers), ""))
+        sleeps_before = list(w.clock.sleeps)
+        assert tool(w, "merge", "m1")[0] == 0
+        assert w.clock.sleeps[len(sleeps_before) :] == [tools.MERGE_SHA_RETRY_S]

@@ -54,7 +54,8 @@ HOOK_TIMEOUT_S = 10
 DB_BASENAMES = frozenset({"harness_state.db", "harness_state.db-wal", "harness_state.db-shm"})
 READ_ONLY_PROGRAMS = frozenset({"grep", "rg", "git", "ls", "sed", "cat", "head", "tail", "wc", "find", "echo"})
 _SEGMENT_SPLIT = re.compile(r"&&|\|\||;|\||\n")
-_REDIRECT_ONTO_DB = re.compile(r">\s*\S*harness_state\.db(?:-wal|-shm)?(?![\w.])")  # not .db.json / .db.bak
+# Not .db.json / .db.bak / .db-wal.bak / .db-backup.sql: the name must end right after .db, -wal or -shm.
+_REDIRECT_ONTO_DB = re.compile(r">\s*\S*harness_state\.db(?:-wal|-shm)?(?![\w.-])")
 _FIND_ACTIONS = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"})
 STOP_QUEUE = "queue"
 STOP_WAIT = "wait"
@@ -199,6 +200,14 @@ def _segments(command: str) -> list[str]:
     return [s.strip() for s in _SEGMENT_SPLIT.split(command) if s.strip()]
 
 
+def _unquoted_words(segment: str) -> list[str]:
+    """The segment's words with their shell quotes removed (``'-delete'`` is ``-delete``)."""
+    try:
+        return shlex.split(segment)
+    except ValueError:  # an unbalanced quote: strip the quotes word by word
+        return [word.strip("'\"") for word in segment.split()]
+
+
 def db_access_denial(tool_name: str, tool_input: dict[str, Any]) -> str | None:
     """The DB-access rule, for every session: a reason to deny, or ``None``."""
     if tool_name in ("Edit", "Write"):
@@ -219,7 +228,7 @@ def db_access_denial(tool_name: str, tool_input: dict[str, Any]) -> str | None:
         first = words[0]
         if not (first in READ_ONLY_PROGRAMS and (first != "sed" or "-n" in words)):
             return refused
-        if first == "find" and _FIND_ACTIONS.intersection(words):
+        if first == "find" and _FIND_ACTIONS.intersection(_unquoted_words(seg)):
             return refused  # find deletes, runs commands or writes files with these actions
     return None
 

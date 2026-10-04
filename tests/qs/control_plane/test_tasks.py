@@ -298,3 +298,34 @@ class TestReviewFix02:
         assert sql(migrated, "SELECT count(*) FROM tasks")[0][0] == 2
         assert add(token_b, "--parent", "T2")["task_id"] == "T3"
         assert add(token_a, "--run", run_a, "--item-of", "T1")["item_k"] == 1
+
+
+# --------------------------------------------------------------------------- review fix #03 (H3)
+
+
+class TestReviewFix03:
+    def test_a_dep_on_another_runs_task_is_refused(self, migrated, run) -> None:
+        run_a, token_a = run
+        add(token_a, "--run", run_a)  # T1, run A
+        run_b, token_b = open_run("r2", session="S-other")
+        add(token_b, "--run", run_b)  # T2, run B
+        add(token_b)  # T3, no run
+        code, out = run_cli("task", "dep", "add", "--task", "T2", "--on", "T1", "--token", token_b)
+        assert code == 8 and out["error"] == "CONFLICT" and run_a in out["detail"]
+        code, out = run_cli("task", "dep", "remove", "--task", "T2", "--on", "T1", "--token", token_b)
+        assert code == 8 and out["error"] == "CONFLICT"
+        assert sql(migrated, "SELECT count(*) FROM task_deps")[0][0] == 0
+        # the `tokens.require` rule: a task of no run, or of the caller's own run, may be depended on
+        assert run_cli("task", "dep", "add", "--task", "T2", "--on", "T3", "--token", token_b)[0] == 0
+        assert run_cli("task", "dep", "add", "--task", "T3", "--on", "T2", "--token", token_b)[0] == 0
+
+    def test_a_task_of_no_run_may_reference_only_the_callers_run(self, migrated, run) -> None:
+        """A NULL-run task follows the `tokens.require` rule: no run, or the token's own run."""
+        run_a, token_a = run
+        add(token_a, "--run", run_a, "--deliverable")  # T1, run A
+        run_b, token_b = open_run("r2", session="S-other")
+        code, out = run_cli("task", "add", "--title", "x", "--kind", "feature", "--parent", "T1", "--token", token_b)
+        assert code == 8 and out["error"] == "CONFLICT"
+        out = add(token_a, "--parent", "T1")  # no run, parent in the token's own run: allowed
+        assert out["run_id"] is None
+        assert add(token_a, "--item-of", "T1")["item_k"] == 1

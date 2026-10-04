@@ -2,11 +2,17 @@
 
 ``run``: a singleton ``flock``, its own start time (retried; never a NULL
 ``pid_start``), ``migrate(role="daemon")`` (retried on ``BUSY``, which never
-writes the backoff sidecar), a ``daemon_lease`` row, a heartbeat (a ``BUSY``
-beat is logged and skipped), the tick hooks, and an idle exit. ``ensure``:
-start the daemon when its lease is stale; stop an older-schema daemon, or a
-stale same-schema one proven alive, with SIGTERM, then SIGKILL when it is
-proven alive, the same process and its heartbeat frozen past the wait;
+writes the backoff sidecar), a ``daemon_lease`` row, a heartbeat before and
+after every tick hook (a ``BUSY`` beat is logged and skipped), and an idle
+exit. A tick hook must return within ``STALE_AFTER_S`` or call ``beat``
+itself.
+
+``ensure`` starts the daemon when its lease is stale. It stops only an
+older-schema daemon, or a stale same-schema one proven alive — never a newer
+one. The singleton ``flock`` is the authority on "gone": free means no daemon
+holds it (exited, crashed, or a zombie its parent has not reaped). Stopping:
+SIGTERM, a wait that ends as soon as it is gone, then SIGKILL only when it is
+proven alive, the same process and its heartbeat frozen since the SIGTERM;
 ``restart_pending`` / ``stale_alive`` while it cannot be proven gone.
 """
 
@@ -70,6 +76,17 @@ def _migrate(db_path: Path, clock: clock_mod.Clock, tick_s: float) -> dict[str, 
             clock.sleep(tick_s)
 
 
+def beat(conn: Any, clock: clock_mod.Clock) -> None:
+    """Write the heartbeat; a ``BUSY`` beat is logged and skipped. A long tick hook may call it too."""
+    try:
+        with db.write(conn):
+            conn.execute("UPDATE daemon_lease SET heartbeat_at = ? WHERE id = 1", (db.now(clock),))
+    except errors.CpError as exc:
+        if exc.code != "BUSY":
+            raise
+        _log(f"heartbeat skipped (busy): {exc.detail}")
+
+
 def _any_open_run(conn: Any) -> bool:
     return conn.execute("SELECT 1 FROM runs WHERE state = 'open' LIMIT 1").fetchone() is not None
 
@@ -121,18 +138,13 @@ def run(
             last_open = clock.now()
             reason = "max_ticks"
             while True:
-                try:
-                    with db.write(conn):
-                        conn.execute("UPDATE daemon_lease SET heartbeat_at = ? WHERE id = 1", (db.now(clock),))
-                except errors.CpError as exc:
-                    if exc.code != "BUSY":
-                        raise
-                    _log(f"heartbeat skipped (busy): {exc.detail}")
+                beat(conn, clock)
                 for hook in tick_hooks:
                     try:
                         hook(conn, clock)
                     except Exception as exc:  # noqa: BLE001 — a broken hook must not kill the loop
                         _log(f"tick hook {getattr(hook, '__name__', hook)!r} failed: {exc!r}")
+                    beat(conn, clock)  # around every hook: a slow tick never looks like a hung daemon
                 ticks += 1
                 if _any_open_run(conn):
                     last_open = clock.now()
@@ -206,6 +218,36 @@ def _signal(kill: Callable[[int, int], None], pid: int, sig: int) -> bool:
     return True
 
 
+def _singleton_free(db_path: Path) -> bool:
+    """Nobody holds the daemon's ``flock`` (taken and released at once): no daemon is running.
+
+    The kernel drops an ``flock`` when its process exits, before any reaping, so a zombie, a crash and an
+    unknown ``ps`` all read as gone here.
+    """
+    with db.file_lock(paths.sidecar(db_path, ".daemon.lock"), exclusive=True, timeout=0) as got:
+        return got
+
+
+def _wait_gone(
+    lease: dict[str, Any], wait_s: float, *, db_path: Path, clock: clock_mod.Clock, probe: liveness.ProcessProbe
+) -> dict[str, Any] | None:
+    """Poll until the daemon of ``lease`` is gone → ``None``; else its lease row once ``wait_s`` passed.
+
+    Gone: its lease row is cleared or taken by another daemon, the singleton ``flock`` is free, or its pid is
+    proven dead.
+    """
+    deadline = clock.now().timestamp() + wait_s
+    while True:
+        current = read_lease(db_path)
+        if current is None or current["pid"] != lease["pid"] or _singleton_free(db_path):
+            return None
+        if probe.alive(lease["pid"], lease["pid_start"]) is False:
+            return None
+        if clock.now().timestamp() >= deadline:
+            return current
+        clock.sleep(db.POLL_S)
+
+
 def _stop_old(
     lease: dict[str, Any],
     *,
@@ -220,35 +262,32 @@ def _stop_old(
 ) -> dict[str, Any] | None:
     """Stop the daemon of ``lease`` → ``None`` once it is gone, else ``{"status": pending, "pid": …}``.
 
-    SIGTERM only when it is proven alive and its identity is checkable (a recorded start time, or a fresh
-    lease); SIGKILL once the wait passes only when it is still proven alive, the same process (its start
-    time matches) and its heartbeat has not moved since the SIGTERM — a hung daemon. Unknown liveness
-    never gets a signal: ``pending``.
+    1. The singleton ``flock`` is free: already gone, no signal.
+    2. SIGTERM only when it is proven alive and its identity is checkable (a recorded start time, or a fresh
+       lease); unknown liveness never gets a signal. Then wait for it to be gone.
+    3. SIGKILL once the wait passed, only when it was signalled, has a recorded start time, is still proven
+       alive and its heartbeat has not moved since — a hung daemon. Then a short wait for it to be gone.
     """
+    if _singleton_free(db_path):
+        return None
     old_pid, start = lease["pid"], lease["pid_start"]
     signalled = alive is True and (start is not None or fresh)
     if signalled and not _signal(kill, old_pid, signal.SIGTERM):
         return None
-    deadline = clock.now().timestamp() + restart_wait_s
-    while True:
-        current = read_lease(db_path)
-        if current is None or current["pid"] != old_pid:
-            return None  # gone, or replaced by another daemon
-        if clock.now().timestamp() >= deadline:
-            break
-        clock.sleep(db.POLL_S)
-    now_alive = probe.alive(old_pid, start)
-    if now_alive is False:
+    current = _wait_gone(lease, restart_wait_s, db_path=db_path, clock=clock, probe=probe)
+    if current is None:
         return None
-    hung = signalled and now_alive is True and start is not None and current["heartbeat_at"] == lease["heartbeat_at"]
-    if hung:
-        if not _signal(kill, old_pid, signal.SIGKILL):
-            return None
-        kill_deadline = clock.now().timestamp() + KILL_WAIT_S
-        while probe.alive(old_pid, start) is not False:
-            if clock.now().timestamp() >= kill_deadline:
-                return {"status": pending, "pid": old_pid}
-            clock.sleep(db.POLL_S)
+    hung = (
+        signalled
+        and start is not None
+        and current["heartbeat_at"] == lease["heartbeat_at"]
+        and probe.alive(old_pid, start) is True
+    )
+    if not hung:
+        return {"status": pending, "pid": old_pid}
+    if not _signal(kill, old_pid, signal.SIGKILL):
+        return None
+    if _wait_gone(lease, KILL_WAIT_S, db_path=db_path, clock=clock, probe=probe) is None:
         return None
     return {"status": pending, "pid": old_pid}
 
@@ -288,7 +327,9 @@ def ensure(
         # waited on — a new daemon that finds the singleton held simply exits.
         checkable = lease["pid_start"] is not None or fresh
         alive = probe.alive(lease["pid"], lease["pid_start"]) if checkable else False
-        stuck = not older and alive is True and lease["pid_start"] is not None  # stale, same schema, alive
+        # Stale, this very schema, proven alive. A newer-schema daemon is never ours to stop: the new one
+        # exits on the held singleton, and commands get SCHEMA_TOO_NEW.
+        stuck = lease["schema_version"] == target and alive is True and lease["pid_start"] is not None
         if (older and alive is not False) or stuck:
             outcome = _stop_old(
                 lease,

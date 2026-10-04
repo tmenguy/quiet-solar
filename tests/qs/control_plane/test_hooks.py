@@ -530,3 +530,34 @@ class TestReviewFix02:
     )
     def test_read_only_find_and_sibling_redirects_are_allowed(self, command: str, db_path) -> None:
         assert not denied(pre_tool("S-x", "Bash", command=command))
+
+
+# --------------------------------------------------------------------------- review fix #03 (H5, H7)
+
+
+class TestReviewFix03:
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cat harness_state.db > harness_state.db-wal.bak",
+            "cat harness_state.db > harness_state.db-backup.sql",
+        ],
+    )
+    def test_dash_named_siblings_are_allowed(self, command: str, db_path) -> None:
+        """H5: `-` after the name is a sibling file, never the DB or its -wal / -shm."""
+        assert not denied(pre_tool("S-x", "Bash", command=command))
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "echo x > harness_state.db",
+            "echo x > harness_state.db-wal",
+            "echo x > harness_state.db-shm",
+            "find . -name harness_state.db '-delete'",
+            'find . -name harness_state.db "-exec" rm {} +',
+            "find . -name harness_state.db '-delete",  # unbalanced quote: the plain split still sees it
+        ],
+    )
+    def test_db_redirects_and_quoted_find_actions_are_denied(self, command: str, db_path) -> None:
+        """H5 + H7: the DB itself is still protected; a quoted find action is still an action."""
+        assert denied(pre_tool("S-x", "Bash", command=command))

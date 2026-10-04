@@ -118,7 +118,11 @@ def _run_scope(conn: sqlite3.Connection, who: tokens.Principal, run_ref: str | N
 
 
 def _same_run(row: sqlite3.Row, who: tokens.Principal) -> sqlite3.Row:
-    """A referenced task of another run is refused (the ``tokens.require`` rule: NULL or the caller's run)."""
+    """A referenced task of another run is refused (the ``tokens.require`` rule: NULL or the caller's run).
+
+    The rule is the token's run, not the new task's: a task created with no run may reference a task of no
+    run or of the token's own run (``parent``, ``item_of``, a ``task dep``), never one of another run.
+    """
     if row["run_id"] not in (None, who.run_id):
         raise errors.CpError("CONFLICT", f"task {row['id']} belongs to run {row['run_id']}, not {who.run_id}")
     return row
@@ -200,8 +204,8 @@ def set_fields(
 
 def edit_dep(conn: sqlite3.Connection, *, token: str, action: str, task_id: str, on: str) -> dict[str, Any]:
     with db.write(conn):
-        tokens.require(conn, token, kinds={"run"}, task_id=task_id)
-        get(conn, on)
+        who = tokens.require(conn, token, kinds={"run"}, task_id=task_id)
+        _same_run(get(conn, on), who)  # both ends of the edge: never a task of another run
         if action == "add":
             if task_id == on:
                 raise errors.CpError("USAGE", "a task cannot depend on itself")
