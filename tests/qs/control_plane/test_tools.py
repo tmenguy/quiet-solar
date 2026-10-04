@@ -1586,16 +1586,40 @@ class TestReviewFix03:
         from control_plane import clock as clock_mod
 
         sql(w.db, "UPDATE nodes SET launch_at = ?", [clock_mod.stamp(w.clock)])
+        wt = str(w.sim.wt)
         w.claude.listing = [
-            agent("S-first", "r1-T1-g1", id="first"),
-            agent("S-mid", "r1-T1-g1-r1"),  # no short id: stopped by its session id
-            agent("S-new", "r1-T1-g1-r2", id="new"),
-            agent("S-other", "r1-T2-g1", id="other"),
+            agent("S-elsewhere", "r1-T1-g1", id="elsewhere", cwd="/another/checkout"),  # J2: not ours
+            agent("S-nocwd", "r1-T1-g1", id="nocwd"),  # J2: no cwd, not proven ours
+            agent("S-first", "r1-T1-g1", id="first", cwd=wt),
+            agent("S-mid", "r1-T1-g1-r1", cwd=wt),  # no short id: stopped by its session id
+            agent("S-new", "r1-T1-g1-r2", id="new", cwd=wt),
+            agent("S-other", "r1-T2-g1", id="other", cwd=wt),
         ]
         code, out = spawn(w, "s1")
         assert code == 0 and out["result"]["session_id"] == "S-new"
         stops = [c.argv[-1] for c in w.runner.matching("claude", "stop")]
         assert stops == ["first", "S-mid"]
+
+    # J3
+    def test_an_adopted_late_relaunch_stops_the_earlier_launch(self, w: W) -> None:
+        w.sim.list_on_launch = False
+        assert spawn(w, "s1")[0] == 6
+        for _ in range(2):  # relaunched as r1-T1-g1-r1, then reaped again
+            w.clock.advance(61)
+            reap(w)
+            if node_row(w, "N1")["name"] == "r1-T1-g1":
+                assert spawn(w, "s1")[0] == 6
+        assert (node_row(w, "N1")["state"], node_row(w, "N1")["name"]) == ("reaped", "r1-T1-g1-r1")
+        wt = str(w.sim.wt)
+        w.claude.listing = [
+            agent("S-first", "r1-T1-g1", id="first", cwd=wt),
+            agent("S-alien", "r1-T1-g1", id="alien", cwd="/another/checkout"),
+            agent("S-mid", "r1-T1-g1-r1", id="mid", cwd=wt),  # the relaunch came up late
+        ]
+        code, out = spawn(w, "s1")
+        assert code == 0 and out["result"]["session_id"] == "S-mid"
+        assert w.sim.effects("claude", "--bg") == 2  # adopted: no third launch
+        assert [c.argv[-1] for c in w.runner.matching("claude", "stop")] == ["first"]
 
     def test_a_failed_stop_of_a_late_first_launch_is_ignored(self, w: W) -> None:
         from control_plane.runner import RunResult
@@ -1611,7 +1635,7 @@ class TestReviewFix03:
 
         def late_first(call: Any) -> Any:
             res = real(call)
-            w.claude.listing = [*(w.claude.listing or []), agent("S-first", "r1-T1-g1", id="first")]
+            w.claude.listing = [*(w.claude.listing or []), agent("S-first", "r1-T1-g1", id="first", cwd=str(w.sim.wt))]
             return res
 
         w.runner.on(["claude", "--bg"], late_first)

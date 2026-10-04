@@ -900,10 +900,15 @@ def _superseded_names(name: str) -> list[str]:
 
 
 def _stop_superseded(ctx: StepCtx, listing: Sequence[liveness.Agent], name: str) -> None:
-    """Best-effort ``claude stop`` of a late earlier launch still listed (its token is void; this ends it sooner)."""
-    for old in _superseded_names(name):
-        found = liveness.find(listing, name=old)
-        if found is not None:
+    """Best-effort ``claude stop`` of a late earlier launch still listed (its token is void; this ends it sooner).
+
+    Only a session whose ``cwd`` resolves to this task's worktree is ours: a same-named session of another
+    checkout or DB, or one listed without a ``cwd``, is left alone.
+    """
+    old_names = set(_superseded_names(name))
+    worktree = Path(_need(ctx.task, "worktree")).resolve()
+    for found in listing:
+        if found.name in old_names and found.cwd is not None and Path(found.cwd).resolve() == worktree:
             ctx.claude.stop(found.id or found.session_id)  # a failure is ignored: STALE_TOKEN ends it anyway
 
 
@@ -992,6 +997,13 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
 
     def reserve(ctx: StepCtx) -> None:
         listing, alive = _reserve_prelude(ctx)
+        adopted = reserve_tx(ctx, listing, alive)
+        if adopted is not None:  # after the write transaction: best-effort, never raises
+            assert listing is not None
+            _stop_superseded(ctx, listing, adopted)
+
+    def reserve_tx(ctx: StepCtx, listing: list[liveness.Agent] | None, alive: dict[str, bool]) -> str | None:
+        """The reservation transaction; returns the adopted launch's name, else ``None``."""
         skey = f"{ctx.tool}/{ctx.key}"
         with ctx.write() as conn:
             # A `spawning` row of this key is marked done by the probe; only absent or reaped reach here.
@@ -1005,7 +1017,7 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
                 ctx._call.outputs["launch"] = {"launched": True, "probed": True}
                 ctx._call.outputs["identify"] = {"session_id": late.session_id, "short_id": late.id}
                 ctx.record_output({"node_id": own["id"], "name": own["name"]})
-                return
+                return str(own["name"])
             if own is not None:  # our own row, reaped meanwhile: re-take it (the guard allows only this)
                 locks.admit_node(conn, ctx.clock, listing=listing, holders_alive=alive, limit=limit)
                 # A new nonce voids the first launch's token, a new name keeps a late first launch from being
@@ -1022,7 +1034,7 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
                     name=name,
                 )
                 ctx.record_output({"node_id": own["id"], "name": name})
-                return
+                return None
             live = conn.execute(
                 "SELECT * FROM nodes WHERE task_id = ? AND state NOT IN ('stopped', 'superseded')"
                 " ORDER BY generation DESC LIMIT 1",
@@ -1064,6 +1076,7 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
                 ),
             )
             ctx.record_output({"node_id": node_id, "name": name})
+            return None
 
     def launch(ctx: StepCtx) -> dict[str, Any]:
         prompt = arg_file_text(ctx, "prompt_file")  # before `_launch` writes launch_at: a bad file launches nothing

@@ -413,6 +413,7 @@ class TestReviewFix01:
     ) -> None:
         """F9: never spawn a new daemon that would exit at once on the singleton lock."""
         _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        fake_clock.advance(daemon.STALE_AFTER_S)  # J4: a beat that will be stale at the deadline
         monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, V2))
         res = daemon.ensure(
             popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill, restart_wait_s=2
@@ -556,6 +557,7 @@ class TestReviewFix02:
         self, held, migrated, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
         _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        fake_clock.advance(daemon.STALE_AFTER_S)  # J4: a beat that will be stale at the deadline
 
         def on_kill(pid: int, sig: int) -> None:
             if sig == signal.SIGKILL:
@@ -572,6 +574,7 @@ class TestReviewFix02:
         self, held, migrated, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
         _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        fake_clock.advance(daemon.STALE_AFTER_S)  # J4: a beat that will be stale at the deadline
         res = daemon.ensure(
             popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill, restart_wait_s=2
         )
@@ -582,6 +585,7 @@ class TestReviewFix02:
         self, held, migrated, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
         _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        fake_clock.advance(daemon.STALE_AFTER_S)  # J4: a beat that will be stale at the deadline
 
         def on_kill(pid: int, sig: int) -> None:
             if sig == signal.SIGKILL:
@@ -690,8 +694,8 @@ class TestReviewFix03:
         _set_lease(migrated, pid=7, version=2, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(120)  # stale and alive: newer code, never ours to stop
         res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
-        assert res == {"status": "started"} and fake_kill.calls == [] and fake_clock.sleeps == []
-        assert not paths.sidecar(migrated, ".migrate-error.json").exists()
+        assert res == {"status": "newer_running", "pid": 7} and fake_kill.calls == [] and fake_clock.sleeps == []
+        assert fake_popen.calls == [] and not paths.sidecar(migrated, ".migrate-error.json").exists()  # J5
 
     # (b)
     def test_the_lease_is_beaten_around_every_tick_hook(self, migrated, fake_clock, fake_probe) -> None:
@@ -779,6 +783,7 @@ class TestReviewFix03:
         self, migrated, held, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
         _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        fake_clock.advance(daemon.STALE_AFTER_S)  # J4: a beat that will be stale at the deadline
 
         def on_kill(pid: int, sig: int) -> None:
             if sig == signal.SIGKILL:
@@ -802,3 +807,51 @@ class TestReviewFix03:
             popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill, restart_wait_s=2
         )
         assert res == {"status": "restart_pending", "pid": 7} and fake_kill.calls == [(7, signal.SIGTERM)]
+
+
+class TestReviewFix04:
+    @pytest.fixture
+    def v2(self, monkeypatch) -> None:
+        monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, V2))
+
+    # J4
+    def test_an_older_daemon_with_a_young_beat_at_the_deadline_is_not_killed(
+        self, migrated, held, fake_clock, fake_probe, fake_kill, fake_popen, v2
+    ) -> None:
+        """Inside a tick hook (within STALE_AFTER_S): healthy, so SIGTERM only, never SIGKILL."""
+        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        res = daemon.ensure(
+            popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill, restart_wait_s=2
+        )
+        assert res == {"status": "restart_pending", "pid": 7} and fake_kill.calls == [(7, signal.SIGTERM)]
+        assert fake_popen.calls == []
+
+    def test_an_older_daemon_with_a_beat_stale_at_the_deadline_is_killed(
+        self, migrated, held, fake_clock, fake_probe, fake_kill, fake_popen, v2
+    ) -> None:
+        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        fake_clock.advance(daemon.STALE_AFTER_S - 2)  # the beat turns STALE_AFTER_S old exactly at the deadline
+        res = daemon.ensure(
+            popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill, restart_wait_s=2
+        )
+        assert res == {"status": "restart_pending", "pid": 7}
+        assert fake_kill.calls == [(7, signal.SIGTERM), (7, signal.SIGKILL)]
+
+    # J5
+    def test_a_stale_live_newer_daemon_is_newer_running_without_a_spawn(
+        self, migrated, held, fake_clock, fake_probe, fake_kill, fake_popen
+    ) -> None:
+        _set_lease(migrated, pid=7, version=2, heartbeat=clock.stamp(fake_clock))
+        fake_clock.advance(120)
+        res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
+        assert res == {"status": "newer_running", "pid": 7}
+        assert fake_kill.calls == [] and fake_popen.calls == [] and fake_clock.sleeps == []
+
+    def test_a_stale_dead_newer_daemon_is_started_over(
+        self, migrated, fake_clock, fake_probe, fake_kill, fake_popen
+    ) -> None:
+        _set_lease(migrated, pid=7, version=2, heartbeat=clock.stamp(fake_clock))
+        fake_clock.advance(120)
+        fake_probe.kill(7)
+        res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
+        assert res == {"status": "started"} and fake_kill.calls == [] and len(fake_popen.calls) == 1

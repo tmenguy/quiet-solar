@@ -5,15 +5,18 @@
 writes the backoff sidecar), a ``daemon_lease`` row, a heartbeat before and
 after every tick hook (a ``BUSY`` beat is logged and skipped), and an idle
 exit. A tick hook must return within ``STALE_AFTER_S`` or call ``beat``
-itself.
+itself: ``ensure`` SIGKILLs only a daemon whose heartbeat is at least
+``STALE_AFTER_S`` old, so that contract keeps a healthy daemon alive.
 
 ``ensure`` starts the daemon when its lease is stale. It stops only an
 older-schema daemon, or a stale same-schema one proven alive — never a newer
-one. The singleton ``flock`` is the authority on "gone": free means no daemon
-holds it (exited, crashed, or a zombie its parent has not reaped). Stopping:
-SIGTERM, a wait that ends as soon as it is gone, then SIGKILL only when it is
-proven alive, the same process and its heartbeat frozen since the SIGTERM;
-``restart_pending`` / ``stale_alive`` while it cannot be proven gone.
+one (a stale newer lease not proven dead is ``newer_running``: no spawn). The
+singleton ``flock`` is the authority on "gone": free means no daemon holds it
+(exited, crashed, or a zombie its parent has not reaped). Stopping: SIGTERM, a
+wait that ends as soon as it is gone, then SIGKILL only when it is proven
+alive, the same process and its heartbeat frozen since the SIGTERM and at
+least ``STALE_AFTER_S`` old; ``restart_pending`` / ``stale_alive`` while it
+cannot be proven gone.
 """
 
 from __future__ import annotations
@@ -222,7 +225,8 @@ def _singleton_free(db_path: Path) -> bool:
     """Nobody holds the daemon's ``flock`` (taken and released at once): no daemon is running.
 
     The kernel drops an ``flock`` when its process exits, before any reaping, so a zombie, a crash and an
-    unknown ``ps`` all read as gone here.
+    unknown ``ps`` all read as gone here. The probe briefly takes the real lock: a daemon that starts in that
+    instant exits with ``held_elsewhere``, and the next ``ensure`` heals it.
     """
     with db.file_lock(paths.sidecar(db_path, ".daemon.lock"), exclusive=True, timeout=0) as got:
         return got
@@ -259,6 +263,7 @@ def _stop_old(
     probe: liveness.ProcessProbe,
     kill: Callable[[int, int], None],
     restart_wait_s: float,
+    stale_after_s: float,
 ) -> dict[str, Any] | None:
     """Stop the daemon of ``lease`` → ``None`` once it is gone, else ``{"status": pending, "pid": …}``.
 
@@ -266,7 +271,9 @@ def _stop_old(
     2. SIGTERM only when it is proven alive and its identity is checkable (a recorded start time, or a fresh
        lease); unknown liveness never gets a signal. Then wait for it to be gone.
     3. SIGKILL once the wait passed, only when it was signalled, has a recorded start time, is still proven
-       alive and its heartbeat has not moved since — a hung daemon. Then a short wait for it to be gone.
+       alive, its heartbeat has not moved since and is at least ``stale_after_s`` old — a hung daemon (a tick
+       hook returns within ``STALE_AFTER_S`` or beats, so a healthy one is never killed). Then a short wait
+       for it to be gone.
     """
     if _singleton_free(db_path):
         return None
@@ -281,6 +288,7 @@ def _stop_old(
         signalled
         and start is not None
         and current["heartbeat_at"] == lease["heartbeat_at"]
+        and (clock_mod.age(clock, current["heartbeat_at"]) or 0.0) >= stale_after_s
         and probe.alive(old_pid, start) is True
     )
     if not hung:
@@ -327,9 +335,12 @@ def ensure(
         # waited on — a new daemon that finds the singleton held simply exits.
         checkable = lease["pid_start"] is not None or fresh
         alive = probe.alive(lease["pid"], lease["pid_start"]) if checkable else False
-        # Stale, this very schema, proven alive. A newer-schema daemon is never ours to stop: the new one
-        # exits on the held singleton, and commands get SCHEMA_TOO_NEW.
+        # Stale, this very schema, proven alive. A newer-schema daemon is never ours to stop: commands get
+        # SCHEMA_TOO_NEW.
         stuck = lease["schema_version"] == target and alive is True and lease["pid_start"] is not None
+        if lease["schema_version"] > target and alive is not False:
+            # Stale but not proven dead: a spawn would only exit on its held singleton (J5).
+            return {"status": "newer_running", "pid": lease["pid"]}
         if (older and alive is not False) or stuck:
             outcome = _stop_old(
                 lease,
@@ -341,6 +352,7 @@ def ensure(
                 probe=probe,
                 kill=kill,
                 restart_wait_s=restart_wait_s,
+                stale_after_s=stale_after_s,
             )
             if outcome is not None:
                 return outcome
