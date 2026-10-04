@@ -8,7 +8,10 @@ break a replay), else the call is claimed in ``tool_calls`` under PK
 world already holds, then each missing step runs under the tool's locks /
 cap, with the token and lock ownership re-checked before every step. The
 ``args_hash`` covers the arguments and the content of every ``*_file``
-argument: the same key with an edited file is a ``CONFLICT``.
+argument: the same key with an edited file is a ``CONFLICT``. Every
+``*_file`` is read once, when the call starts; a step reads the cached bytes
+only when it runs, so a takeover whose effect is already recorded never needs
+the file again. Keys are ``[A-Za-z0-9._:/-]{1,200}``.
 
 The frozen API for #400 and later children: ``StepCtx``, ``Step``,
 ``ToolSpec``, ``register`` and ``invoke``. ``argv_step`` is a helper and may
@@ -19,7 +22,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
+import stat
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
@@ -34,7 +39,10 @@ TOKEN_ENV = "QS_CP_TOKEN"
 TAIL_LINES = 60
 IDENTIFY_POLL_S = 2.0
 PHASES = ("/create-plan", "/diagnose-task", "/decompose-epic")
-RELEASED_BEFORE_EFFECT = frozenset({"BUSY", "POLICY_REFUSED", "STALE_TOKEN", "STOPPED"})
+RELEASED_BEFORE_EFFECT = frozenset({"BUSY", "POLICY_REFUSED", "STALE_TOKEN", "STOPPED", "USAGE"})
+KEY_RE = re.compile(r"[A-Za-z0-9._:/-]{1,200}")
+GH_LIST_LIMIT = "100"
+_RELAUNCH_RE = re.compile(r"(?P<base>.*?)(?:-r(?P<n>\d+))?")  # spawn names end in -g<generation>
 NON_TERMINAL_STATES = frozenset(set(tasks.TRANSITIONS) - tasks.TERMINAL)
 
 
@@ -199,22 +207,45 @@ def _ident(row: sqlite3.Row | None) -> tuple[Any, ...] | None:
     return None if row is None else tuple(row[k] for k in _CALL_IDENT)
 
 
-def _files_digest(args: Mapping[str, Any]) -> str | None:
-    """sha256 over the content of every ``*_file`` argument; ``None`` when one cannot be read now."""
-    digests: dict[str, str] = {}
-    for name, value in args.items():
-        if name.endswith("_file") and isinstance(value, str):
-            try:
-                digests[name] = hashlib.sha256(Path(value).read_bytes()).hexdigest()
-            except OSError:
-                return None
+def _file_args(args: Mapping[str, Any]) -> dict[str, str]:
+    return {name: value for name, value in args.items() if name.endswith("_file") and isinstance(value, str)}
+
+
+def _read_files(args: Mapping[str, Any]) -> tuple[dict[str, bytes], list[str]]:
+    """Every ``*_file`` argument read once → ``(cache, non-regular names)``; an unreadable file has no entry."""
+    cache: dict[str, bytes] = {}
+    irregular: list[str] = []
+    for name, value in sorted(_file_args(args).items()):
+        try:
+            mode = Path(value).stat().st_mode
+        except OSError:
+            continue
+        if not stat.S_ISREG(mode):
+            irregular.append(name)  # a FIFO or /dev/stdin would be emptied (or block) by a read
+            continue
+        try:
+            cache[name] = Path(value).read_bytes()
+        except OSError:
+            continue
+    return cache, irregular
+
+
+def _files_digest(args: Mapping[str, Any], cache: Mapping[str, bytes]) -> str | None:
+    """sha256 over the cached content of every ``*_file`` argument; ``None`` when one could not be read."""
+    names = _file_args(args)
+    if any(name not in cache for name in names):
+        return None
+    digests = {name: hashlib.sha256(cache[name]).hexdigest() for name in names}
     return hashlib.sha256(_canonical(digests).encode()).hexdigest()
 
 
 def _owned(cur: sqlite3.Cursor) -> None:
-    """A compare-and-set on this call's claim matched nothing: another process took the key over."""
+    """A compare-and-set on this call's claim matched nothing: another process took the key over.
+
+    ``CONFLICT`` with ``claim_taken_over`` — never ``STALE_TOKEN``, whose exit 3 tells a session to end.
+    """
     if cur.rowcount != 1:
-        raise errors.CpError("STALE_TOKEN", "this call's claim was taken over by another process")
+        raise errors.CpError("CONFLICT", "this call's claim was taken over by another process", claim_taken_over=True)
 
 
 class _Call:
@@ -234,7 +265,8 @@ class _Call:
         self.recorded: set[str] = set()
         self.who: tokens.Principal | None = None
         self.args_digest = hashlib.sha256(_canonical(self.args).encode()).hexdigest()
-        self.files_digest = _files_digest(self.args)
+        self.files, self.irregular = _read_files(self.args)
+        self.files_digest = _files_digest(self.args, self.files)
 
     # -- helpers
     def task(self) -> TaskRow:
@@ -315,14 +347,26 @@ class _Call:
         )
 
     def replay(self) -> dict[str, Any] | None:
-        """Inside a transaction: a finished call under this key → its outcome; else ``None``."""
+        """Inside a transaction: a finished call under this key → its outcome; else ``None``.
+
+        Also notes whether an in-flight call holds the key (``self.in_flight``): only a fresh call must find
+        every argument file now; a takeover reads one only if the step that needs it still has to run.
+        """
         row = self.conn.execute(
             "SELECT * FROM tool_calls WHERE tool = ? AND key = ?", (self.spec.name, self.key)
         ).fetchone()
+        self.in_flight = row is not None and row["state"] == "started"
         if row is None or row["state"] == "started":
             return None
         self._check_same(row)
         return self._finished(row)
+
+    def check_files(self) -> None:
+        if self.irregular:
+            raise errors.CpError("USAGE", f"args.{self.irregular[0]} is not a regular file")
+        missing = [name for name in _file_args(self.args) if name not in self.files]
+        if missing and not self.in_flight:
+            raise errors.CpError("USAGE", f"cannot read args.{missing[0]}")
 
     def claim(self) -> dict[str, Any] | None:
         args_hash = f"{self.args_digest}:{self.files_digest or '-'}"
@@ -480,8 +524,8 @@ def run_recorded(
     ctx: Ctx,
 ) -> dict[str, Any]:
     """Run ``spec`` for ``task`` under the idempotency ``key`` (§9.2)."""
-    if not key or len(key) > 200:
-        raise errors.CpError("USAGE", "--key must be 1 to 200 characters")
+    if not KEY_RE.fullmatch(key):
+        raise errors.CpError("USAGE", "--key must be 1 to 200 characters out of [A-Za-z0-9._:/-]")
     call = _Call(spec, ctx, key=key, task_id=task, args=args, token=token, actor=actor)
     try:
         with db.write(call.conn):
@@ -490,6 +534,7 @@ def run_recorded(
             replay = call.replay()  # before the steps: a replay needs neither the files nor the task columns
         if replay is not None:
             return replay
+        call.check_files()
         steps = list(spec.steps(task_row, call.args))
         lock_names = list(spec.locks(task_row, call.args))
         locks.assert_sorted(lock_names)
@@ -501,6 +546,8 @@ def run_recorded(
         except StepFailed as exc:
             raise call.fail("TOOL_FAILED", exc.detail, exc.output, exc.exit_code) from exc
         except errors.CpError as exc:
+            if exc.extra.get("claim_taken_over"):
+                raise  # not ours any more: nothing to release, nothing to record
             if exc.code in RELEASED_BEFORE_EFFECT:
                 if not call.outputs:
                     call.release_claim()
@@ -600,18 +647,27 @@ def marker(ctx: StepCtx) -> str:
     return f"<!-- qs-cp-key: {ctx.tool}/{ctx.key} -->"
 
 
-def _read_arg_file(args: Mapping[str, Any], name: str) -> str:
+def _require_file_arg(args: Mapping[str, Any], name: str) -> None:
+    """At step-building time: the argument is given (its content is read only by the step that uses it)."""
     path = args.get(name)
     if not isinstance(path, str) or not path:
         raise errors.CpError("USAGE", f"args.{name} is required")
+
+
+def arg_file_text(ctx: StepCtx, name: str) -> str:
+    """Inside a step: the ``*_file`` argument's text, from the bytes read once when the call started."""
+    data = ctx._call.files.get(name)
+    if data is None:
+        raise errors.CpError("USAGE", f"cannot read args.{name}")
     try:
-        return Path(path).read_text(encoding="utf-8")
-    except OSError as exc:
-        raise errors.CpError("USAGE", f"cannot read args.{name}: {exc}") from exc
+        text: str = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise errors.CpError("USAGE", f"args.{name} is not UTF-8: {exc}") from exc
+    return text
 
 
 def _gh_list_by_marker(ctx: StepCtx, argv: list[str], cwd: Path) -> dict[str, Any] | None:
-    """The listed item whose body holds this call's marker; ``BUSY`` when the listing failed (unknown)."""
+    """The listed item whose body holds this call's exact marker; ``BUSY`` when the listing failed (unknown)."""
     res = ctx.runner.run(argv, cwd=cwd, timeout=60)
     try:
         items = json.loads(res.stdout) if res.ok else None
@@ -804,13 +860,20 @@ def _own_node(ctx: StepCtx) -> sqlite3.Row | None:
 
 
 def _reap_own(ctx: StepCtx, own: sqlite3.Row) -> sqlite3.Row:
+    """``spawning`` → ``reaped`` through ``nodes.move``; a row that moved meanwhile is left as it is."""
     with ctx.write() as conn:
-        conn.execute(
-            "UPDATE nodes SET state = 'reaped', updated_at = ? WHERE id = ? AND state = 'spawning'",
-            (db.now(ctx.clock), own["id"]),
-        )
+        current = conn.execute("SELECT state FROM nodes WHERE id = ?", (own["id"],)).fetchone()
+        if current["state"] == "spawning":
+            nodes.move(conn, ctx.clock, own["id"], "reaped", expect="spawning")
         row: sqlite3.Row = conn.execute("SELECT * FROM nodes WHERE id = ?", (own["id"],)).fetchone()
         return row
+
+
+def _relaunch_name(name: str) -> str:
+    """The next launch name of a re-taken spawn row: ``<base>-r<n+1>`` (a late first launch keeps the old one)."""
+    match = _RELAUNCH_RE.fullmatch(name)
+    assert match is not None  # the pattern matches every string
+    return f"{match['base']}-r{int(match['n'] or 0) + 1}"
 
 
 def _launch_probe(ctx: StepCtx, own: sqlite3.Row, *, resume: bool) -> dict[str, Any | None]:
@@ -888,7 +951,7 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
     for name in ("agent", "permission_mode"):
         if not isinstance(args.get(name), str) or not args[name]:
             raise errors.CpError("USAGE", f"args.{name} is required")
-    prompt = _read_arg_file(args, "prompt_file")
+    _require_file_arg(args, "prompt_file")
     model = args.get("model")
     replace = bool(args.get("replace", False))
 
@@ -901,8 +964,20 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
             limit = locks.max_nodes()
             if own is not None:  # our own row, reaped meanwhile: re-take it (the guard allows only this)
                 locks.admit_node(conn, ctx.clock, listing=listing, holders_alive=alive, limit=limit)
-                nodes.move(conn, ctx.clock, own["id"], "spawning", expect="reaped", launch_at=None)
-                ctx.record_output({"node_id": own["id"], "name": own["name"]})
+                # A new nonce voids the first launch's token, a new name keeps a late first launch from being
+                # adopted: two sessions never share one valid node token.
+                name = _relaunch_name(own["name"])
+                nodes.move(
+                    conn,
+                    ctx.clock,
+                    own["id"],
+                    "spawning",
+                    expect="reaped",
+                    launch_at=None,
+                    nonce=tokens.new_nonce(),
+                    name=name,
+                )
+                ctx.record_output({"node_id": own["id"], "name": name})
                 return
             live = conn.execute(
                 "SELECT * FROM nodes WHERE task_id = ? AND state NOT IN ('stopped', 'superseded')"
@@ -948,6 +1023,7 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
 
     def launch(ctx: StepCtx) -> dict[str, Any]:
         def start(row: sqlite3.Row) -> runner.RunResult:
+            prompt = arg_file_text(ctx, "prompt_file")
             with ctx.write() as conn:
                 token = _node_token(conn, row["id"])
             settings = json.dumps(hooks.hooks_settings("node", ctx.main), sort_keys=True)
@@ -1015,7 +1091,7 @@ def _start_success(conn: sqlite3.Connection, ctx: StepCtx) -> dict[str, Any]:
 
 def _resume_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
     wt = Path(_need(task, "worktree"))
-    message = _read_arg_file(args, "message_file")
+    _require_file_arg(args, "message_file")
 
     def reserve(ctx: StepCtx) -> None:
         listing, alive = _reserve_prelude(ctx)
@@ -1036,7 +1112,9 @@ def _resume_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
             ctx.record_output({"node_id": node["id"], "name": node["name"]})
 
     def launch(ctx: StepCtx) -> dict[str, Any]:
-        return _launch(ctx, lambda row: ctx.claude.resume_bg(row["session_id"], message, cwd=wt))
+        return _launch(
+            ctx, lambda row: ctx.claude.resume_bg(row["session_id"], arg_file_text(ctx, "message_file"), cwd=wt)
+        )
 
     return (
         Step("reserve", reserve),
@@ -1085,7 +1163,7 @@ def _issue_create_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step
     title = args.get("title")
     if not isinstance(title, str) or not title:
         raise errors.CpError("USAGE", "args.title is required")
-    body = _read_arg_file(args, "body_file")
+    _require_file_arg(args, "body_file")
     labels = _labels(args)
     return (
         argv_step(
@@ -1096,7 +1174,7 @@ def _issue_create_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step
                 "--title",
                 title,
                 "--body",
-                f"{body}\n\n{marker(ctx)}",
+                f"{arg_file_text(ctx, 'body_file')}\n\n{marker(ctx)}",
                 "--labels",
                 labels,
             ],
@@ -1108,10 +1186,13 @@ def _issue_create_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step
 
 
 def _issue_create_probe(ctx: StepCtx) -> dict[str, Any | None]:
-    search = f'"qs-cp-key: {ctx.tool}/{ctx.key}" in:body'
-    found = _gh_list_by_marker(
-        ctx, ["gh", "issue", "list", "--state", "all", "--search", search, "--json", "number,url,body"], ctx.main
-    )
+    """A consistent listing of the newest issues first (the search index lags), then the marker search."""
+    listing = ["gh", "issue", "list", "--state", "all", "--limit", GH_LIST_LIMIT, "--json", "number,url,body"]
+    found = _gh_list_by_marker(ctx, listing, ctx.main)
+    if found is None:
+        search = f'"qs-cp-key: {ctx.tool}/{ctx.key}" in:body'  # KEY_RE: no quote can break the query
+        argv = ["gh", "issue", "list", "--state", "all", "--search", search, "--limit", GH_LIST_LIMIT]
+        found = _gh_list_by_marker(ctx, [*argv, "--json", "number,url,body"], ctx.main)
     return {} if found is None else {"create": {"issue_number": found["number"], "url": found["url"]}}
 
 
@@ -1127,7 +1208,7 @@ def _pr_create_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
     title = args.get("title")
     if not isinstance(title, str) or not title:
         raise errors.CpError("USAGE", "args.title is required")
-    summary = _read_arg_file(args, "summary_file")
+    _require_file_arg(args, "summary_file")
     return (
         argv_step(
             "create",
@@ -1137,7 +1218,7 @@ def _pr_create_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
                 "--title",
                 title,
                 "--summary",
-                f"{summary}\n\n{marker(ctx)}",
+                f"{arg_file_text(ctx, 'summary_file')}\n\n{marker(ctx)}",
                 "--issue",
                 str(issue),
             ],
@@ -1218,6 +1299,17 @@ def _gh_json(ctx: StepCtx, argv: list[str]) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def _commit_oid(data: Mapping[str, Any] | None) -> str | None:
+    commit = (data or {}).get("mergeCommit") or {}
+    oid = commit.get("oid") if isinstance(commit, dict) else None
+    return str(oid) if oid else None
+
+
+def _merge_sha(ctx: StepCtx, pr: str, data: Mapping[str, Any] | None) -> str | None:
+    """The merge commit from ``data``, else read once more (GitHub may fill it in a moment later)."""
+    return _commit_oid(data) or _commit_oid(_gh_json(ctx, ["gh", "pr", "view", pr, "--json", "mergeCommit"]))
+
+
 def _merge_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
     pr = str(_need(task, "pr_number"))
 
@@ -1240,18 +1332,18 @@ def _merge_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
         )
         if not res.ok:
             raise StepFailed("gh pr merge failed", {"exit_code": res.returncode, "tail": tail(res)}, res.returncode)
-        data = _gh_json(ctx, ["gh", "pr", "view", pr, "--json", "mergeCommit"]) or {}
-        commit = data.get("mergeCommit") or {}
-        return {"merge_sha": commit.get("oid") if isinstance(commit, dict) else None}
+        return {"merge_sha": _merge_sha(ctx, pr, _gh_json(ctx, ["gh", "pr", "view", pr, "--json", "mergeCommit"]))}
 
     return (Step("policy", policy), Step("head", head), Step("merge", merge))
 
 
 def _merge_probe(ctx: StepCtx) -> dict[str, Any | None]:
-    data = _gh_json(ctx, ["gh", "pr", "view", str(_need(ctx.task, "pr_number")), "--json", "state,mergeCommit"])
-    if data is not None and data.get("state") == "MERGED":
-        commit = data.get("mergeCommit") or {}
-        sha = commit.get("oid") if isinstance(commit, dict) else None
+    pr = str(_need(ctx.task, "pr_number"))
+    data = _gh_json(ctx, ["gh", "pr", "view", pr, "--json", "state,mergeCommit"])
+    if data is None:
+        raise errors.CpError("BUSY", f"gh pr view {pr} failed: probe unknown, replay the same key later")
+    if data.get("state") == "MERGED":
+        sha = _merge_sha(ctx, pr, data)
         return {"policy": {"ok": True, "reason": "already merged"}, "head": {"oid": None}, "merge": {"merge_sha": sha}}
     return {"policy": None, "head": None}
 
@@ -1263,13 +1355,27 @@ def _merge_guard(ctx: StepCtx) -> None:
 
 
 def _merge_success(conn: sqlite3.Connection, ctx: StepCtx) -> dict[str, Any]:
-    """The PR is merged: always record it; move the task only if it is still ``ready_to_merge``."""
+    """The PR is merged: always record it; move the task only if it is still ``ready_to_merge``.
+
+    A task already ``merged`` is a noop success; any other state is a ``state_conflict``, also recorded as a
+    ``hook_events`` alert so ``snapshot`` shows it.
+    """
     sha = ctx.outputs["merge"]["merge_sha"]
-    tasks.update_fields(conn, ctx.clock, ctx.task["id"], {"merge_sha": sha})
+    if sha:  # never overwrite a recorded sha with an unknown one
+        tasks.update_fields(conn, ctx.clock, ctx.task["id"], {"merge_sha": sha})
     state = tasks.get(conn, ctx.task["id"])["state"]
+    if state == "merged":
+        return {"merge_sha": sha, "noop": True}
+    who = ctx._call.who
     if state != "ready_to_merge":  # changed mid-merge: the orchestrator or the maintainer reconciles it
-        return {"merge_sha": sha, "state_conflict": {"expected": "ready_to_merge", "actual": state}}
-    actor = ctx._call.who.actor if ctx._call is not None and ctx._call.who is not None else "tool"
+        conflict = {"expected": "ready_to_merge", "actual": state}
+        detail = {"kind": "merge_state_conflict", "task_id": ctx.task["id"], "key": ctx.key, "merge_sha": sha}
+        conn.execute(
+            "INSERT INTO hook_events (hook, session_id, decision, detail, at) VALUES (?, ?, 'alert', ?, ?)",
+            (f"tool:{ctx.tool}", who.session_id, _canonical({**detail, **conflict}), db.now(ctx.clock)),
+        )
+        return {"merge_sha": sha, "state_conflict": conflict}
+    actor = who.actor
     tasks.apply_transition(conn, ctx.clock, ctx.task["id"], "merged", actor=actor, node=False, expect="ready_to_merge")
     return {"merge_sha": sha}
 

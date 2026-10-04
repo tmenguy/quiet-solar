@@ -52,7 +52,7 @@ def w(migrated, tmp_path, fake_runner, fake_claude, fake_main, fake_probe, fake_
 
 
 def tool(w: W, name: str, key: str, token: str | None = None, task: str = "T1", **args: Any) -> tuple[int, Any]:
-    f = w.tmp / f"args-{name}-{key}.json".replace(":", "_")
+    f = w.tmp / f"args-{name}-{key}.json".replace(":", "_").replace("/", "_").replace("\\", "_")
     f.write_text(json.dumps(args))
     return run_cli("tool", name, "--task", task, "--key", key, "--args-file", str(f), "--token", token or w.token)
 
@@ -1061,13 +1061,7 @@ class TestReviewFix01:
         Path(w.files["body"]).write_text("Another body")
         assert tool(w, "issue-create", "k1", **args)[1]["error"] == "CONFLICT"
 
-    # F11
-    def test_the_issue_probe_searches_by_marker(self, w: W) -> None:
-        assert tool(w, "issue-create", "msg:7", **TABLE["issue-create"].args(w))[0] == 0
-        [listing] = w.runner.matching("gh", "issue", "list")
-        argv = listing.argv
-        assert argv[argv.index("--search") + 1] == '"qs-cp-key: issue-create/msg:7" in:body'
-        assert "--limit" not in argv or argv[argv.index("--limit") + 1] != "50"
+    # F11: see TestReviewFix02 (G1) — a consistent listing first, then the marker search
 
     # F12
     def test_cleanup_refuses_the_main_checkout(self, w: W) -> None:
@@ -1082,7 +1076,7 @@ class TestReviewFix01:
         (w.sim.wt / ".git").mkdir()  # a full clone, not a linked worktree
         code, out = tool(w, "worktree-cleanup", "c1")
         assert code == 9 and out["error"] == "POLICY_REFUSED" and ".git" in out["detail"]
-        assert w.sim.effects("cleanup_worktree.py") == 0
+        assert w.sim.effects("cleanup_worktree.py") == 0 and call_row(w, "worktree-cleanup", "c1") is None  # G20
 
     def test_cleanup_of_a_shared_worktree_only_clears_this_task(self, w: W) -> None:
         insert_task(w.db, "T2", w.run, worktree=str(w.sim.wt), branch="QS_11")
@@ -1157,7 +1151,7 @@ class TestReviewFix01:
 
         w.runner.on(["git", "push"], taken)
         code, out = tool(w, "push", "k1")
-        assert code == 3 and out["error"] == "STALE_TOKEN"
+        assert code == 8 and out["error"] == "CONFLICT" and out["claim_taken_over"] is True  # G12
         assert call_row(w, "push", "k1")["holder_pid"] == 999
 
     def test_a_claim_taken_over_before_record_output_is_stale(self, w: W) -> None:
@@ -1167,7 +1161,7 @@ class TestReviewFix01:
 
         w.claude.before_list = taken
         code, out = spawn(w, "s1")
-        assert code == 3 and sql(w.db, "SELECT count(*) FROM nodes")[0][0] == 0
+        assert code == 8 and out["claim_taken_over"] is True and sql(w.db, "SELECT count(*) FROM nodes")[0][0] == 0
 
     def test_a_claim_taken_over_before_succeed_or_fail_is_stale(self, w: W) -> None:
         def take(ctx: tools.StepCtx) -> None:
@@ -1179,8 +1173,8 @@ class TestReviewFix01:
 
         tools.register(tools.ToolSpec("t-succeed", lambda task, args: (), guard=take))
         tools.register(tools.ToolSpec("t-fail", lambda task, args: (tools.Step("boom", boom),)))
-        assert tool(w, "t-succeed", "k1")[1]["error"] == "STALE_TOKEN"
-        assert tool(w, "t-fail", "k1")[1]["error"] == "STALE_TOKEN"
+        assert tool(w, "t-succeed", "k1")[1]["claim_taken_over"] is True
+        assert tool(w, "t-fail", "k1")[1]["claim_taken_over"] is True
         assert call_row(w, "t-fail", "k1")["state"] == "started"
 
     # F24 (acceptance-auditor depth)
@@ -1217,3 +1211,291 @@ class TestReviewFix01:
         tools.register(tools.ToolSpec("t-race", steps))
         out = tools.invoke("t-race", key="k1", task_id="T1", args={}, token=w.token, actor="me", ctx=ctx)
         assert out["replayed"] is True and call_row(w, "t-race", "k1")["actor"] == "other"
+
+
+# --------------------------------------------------------------------------- review fix #02
+
+
+def _issue_lists(w: W) -> tuple[list[Any], list[Any]]:
+    calls = w.runner.matching("gh", "issue", "list")
+    return [c for c in calls if "--search" not in c.argv], [c for c in calls if "--search" in c.argv]
+
+
+class TestReviewFix02:
+    # G1
+    def test_the_issue_probe_lists_first_then_searches(self, w: W) -> None:
+        assert tool(w, "issue-create", "msg:7", **TABLE["issue-create"].args(w))[0] == 0
+        [listing], [search] = _issue_lists(w)
+        assert "--search" not in listing.argv
+        assert listing.argv[listing.argv.index("--limit") + 1] == "100"
+        assert search.argv[search.argv.index("--search") + 1] == '"qs-cp-key: issue-create/msg:7" in:body'
+        assert search.argv[search.argv.index("--limit") + 1] == "100"
+
+    def test_a_marker_in_the_listing_makes_no_search(self, w: W) -> None:
+        args = TABLE["issue-create"].args(w)
+        with faults.arm("issue-create.after_effect"), pytest.raises(faults.FaultInjected):
+            tool(w, "issue-create", "k1", **args)
+        w.runner.calls.clear()
+        code, out = tool(w, "issue-create", "k1", **args)
+        assert code == 0 and out["result"]["issue_number"] == 100
+        listings, searches = _issue_lists(w)
+        assert len(listings) == 1 and searches == []
+        assert w.sim.effects("create_issue.py") == 0 and len(w.sim.issues) == 1  # no second issue
+
+    def test_a_listing_miss_then_a_search_hit_is_done(self, w: W) -> None:
+        from control_plane.runner import RunResult
+
+        args = TABLE["issue-create"].args(w)
+        with faults.arm("issue-create.after_effect"), pytest.raises(faults.FaultInjected):
+            tool(w, "issue-create", "k1", **args)
+        w.runner.on(["issue", "list", "--state", "all", "--limit"], RunResult(0, "[]", ""))  # lagging listing
+        code, out = tool(w, "issue-create", "k1", **args)
+        assert code == 0 and out["result"]["issue_number"] == 100
+        assert w.sim.effects("create_issue.py") == 1
+
+    def test_a_search_hit_must_hold_the_exact_marker(self, w: W) -> None:
+        from control_plane.runner import RunResult
+
+        other = [{"number": 9, "url": "u", "body": "<!-- qs-cp-key: issue-create/k10 -->"}]
+        w.runner.on(["--search"], RunResult(0, json.dumps(other), ""))
+        assert tool(w, "issue-create", "k1", **TABLE["issue-create"].args(w))[0] == 0
+        assert w.sim.effects("create_issue.py") == 1
+
+    @pytest.mark.parametrize("which", ["listing", "search"])
+    def test_a_failed_listing_or_search_is_busy(self, w: W, which: str) -> None:
+        from control_plane.runner import RunResult
+
+        pattern = ["--search"] if which == "search" else ["issue", "list", "--state", "all", "--limit"]
+        w.runner.on(pattern, RunResult(1, "", "boom"))
+        code, out = tool(w, "issue-create", "k1", **TABLE["issue-create"].args(w))
+        assert code == 6 and out["error"] == "BUSY" and w.sim.effects("create_issue.py") == 0
+        w.runner.on(pattern, RunResult(0, "{}", ""))
+        assert tool(w, "issue-create", "k1", **TABLE["issue-create"].args(w))[0] == 6
+
+    @pytest.mark.parametrize("key", ['a"b', "a b", "a\\b", "é"])
+    def test_keys_are_restricted(self, w: W, key: str) -> None:
+        code, out = tool(w, "push", key)
+        assert code == 2 and out["error"] == "USAGE" and w.sim.effects("git", "push") == 0
+
+    def test_documented_key_forms_are_accepted(self, w: W) -> None:
+        for key in ("msg:12", "task:T3:gate", "a.b_c-d/e"):
+            assert tool(w, "push", key)[0] == 0
+
+    # G2
+    def test_a_relaunch_rotates_the_token_and_the_name(self, w: W) -> None:
+        import re
+
+        w.sim.list_on_launch = False
+        assert spawn(w, "s1")[0] == 6
+        [first] = w.runner.matching("claude", "--bg")
+        old_name = first.argv[first.argv.index("-n") + 1]
+        old_token = re.search(r"token (node:\S+)", first.argv[-1])[1]  # type: ignore[index]
+        w.clock.advance(61)
+        reap(w)
+        w.sim.list_on_launch = True
+        code, out = spawn(w, "s1")
+        assert code == 0, out
+        second = w.runner.matching("claude", "--bg")[-1]
+        new_name = second.argv[second.argv.index("-n") + 1]
+        assert (old_name, new_name) == ("r1-T1-g1", "r1-T1-g1-r1")
+        assert out["token"] != old_token and out["token"] in second.argv[-1]
+        assert node_row(w, "N1")["name"] == new_name and out["result"]["name"] == new_name
+        code, res = tool(w, "gate", "g1", token=old_token, mode="impacted")
+        assert code == 3 and res["error"] == "STALE_TOKEN"
+        assert tool(w, "gate", "g2", token=out["token"], mode="impacted")[0] == 0
+
+    def test_a_second_relaunch_counts_up(self, w: W) -> None:
+        w.sim.list_on_launch = False
+        assert spawn(w, "s1")[0] == 6
+        for _ in range(2):
+            w.clock.advance(61)
+            reap(w)
+            assert spawn(w, "s1")[0] == 6
+        names = [c.argv[c.argv.index("-n") + 1] for c in w.runner.matching("claude", "--bg")]
+        assert names == ["r1-T1-g1", "r1-T1-g1-r1", "r1-T1-g1-r2"]
+
+    def test_a_late_listing_of_the_old_name_is_not_adopted(self, w: W) -> None:
+        from control_plane import clock as clock_mod
+
+        w.sim.list_on_launch = False
+        assert spawn(w, "s1")[0] == 6
+        w.clock.advance(61)
+        reap(w)
+        assert spawn(w, "s1")[0] == 6  # relaunched as r1-T1-g1-r1, never listed yet
+        sql(w.db, "UPDATE nodes SET launch_at = ?", [clock_mod.stamp(w.clock)])
+        w.claude.listing = [agent("S-first", "r1-T1-g1", id="first")]  # the first launch shows up late
+        assert spawn(w, "s1")[0] == 6
+        assert node_row(w, "N1")["session_id"] is None and w.sim.effects("claude", "--bg") == 2
+        sql(w.db, "UPDATE nodes SET launch_at = ?", [clock_mod.stamp(w.clock)])
+        w.claude.listing = [agent("S-first", "r1-T1-g1"), agent("S-second", "r1-T1-g1-r1", id="second")]
+        code, out = spawn(w, "s1")
+        assert code == 0 and out["result"]["session_id"] == "S-second"
+
+    def test_the_reap_of_an_own_row_that_moved_meanwhile_is_a_noop(self, w: W) -> None:
+        w.sim.list_on_launch = False
+        assert spawn(w, "s1")[0] == 6
+        w.clock.advance(61)
+        real = w.claude.try_agents
+
+        def moved() -> Any:
+            sql(
+                w.db, "UPDATE nodes SET state = 'superseded'"
+            )  # another process changed the row after the probe read it
+            w.claude.try_agents = real  # type: ignore[method-assign]
+            return real()
+
+        w.claude.try_agents = moved  # type: ignore[method-assign]
+        code, out = spawn(w, "s1")
+        assert code == 1 and out["result"]["error"] == "INVALID_STATE"
+        assert node_row(w, "N1")["state"] == "superseded"
+
+    # G5
+    def test_a_takeover_after_the_effect_needs_no_file(self, w: W) -> None:
+        args = TABLE["issue-create"].args(w)
+        with faults.arm("issue-create.after_effect"), pytest.raises(faults.FaultInjected):
+            tool(w, "issue-create", "k1", **args)
+        Path(w.files["body"]).unlink()
+        code, out = tool(w, "issue-create", "k1", **args)
+        assert code == 0, out
+        assert w.sim.effects("create_issue.py") == 1
+
+    def test_a_spawn_takeover_after_the_launch_needs_no_prompt(self, w: W) -> None:
+        with faults.arm("spawn.after_effect", skip=1), pytest.raises(faults.FaultInjected):
+            spawn(w, "s1")
+        Path(w.files["prompt"]).unlink()
+        code, out = spawn(w, "s1")
+        assert code == 0, out
+        assert w.sim.effects("claude", "--bg") == 1
+
+    def test_a_takeover_before_the_effect_with_the_file_gone_is_usage_and_retryable(self, w: W) -> None:
+        args = TABLE["issue-create"].args(w)
+        with faults.arm("issue-create.before_effect"), pytest.raises(faults.FaultInjected):
+            tool(w, "issue-create", "k1", **args)
+        Path(w.files["body"]).unlink()
+        code, out = tool(w, "issue-create", "k1", **args)
+        assert code == 2 and out["error"] == "USAGE" and w.sim.effects("create_issue.py") == 0
+        assert call_row(w, "issue-create", "k1") is None  # released: no effect happened
+        Path(w.files["body"]).write_text("Issue body")
+        assert tool(w, "issue-create", "k1", **args)[0] == 0
+
+    def test_a_fresh_call_with_a_missing_file_has_no_effect(self, w: W) -> None:
+        for name in ("spawn", "resume", "issue-create", "pr-create"):
+            t = TABLE[name]
+            t.prep(w)
+            args = {k: (str(w.tmp / "missing.md") if k.endswith("_file") else v) for k, v in t.args(w).items()}
+            code, out = tool(w, name, f"m-{name}", **args)
+            assert code == 2 and out["error"] == "USAGE", (name, out)
+            assert call_row(w, name, f"m-{name}") is None
+        assert sql(w.db, "SELECT count(*) FROM nodes WHERE state = 'spawning'")[0][0] == 0
+        assert w.sim.effects("claude", "--bg") == 0 and w.sim.effects("create_issue.py") == 0
+
+    def test_a_non_regular_file_is_usage(self, w: W) -> None:
+        import os
+
+        fifo = w.tmp / "fifo"
+        os.mkfifo(fifo)
+        code, out = tool(w, "spawn", "f1", prompt_file=str(fifo), **SPAWN)
+        assert code == 2 and out["error"] == "USAGE" and "regular" in out["detail"]
+        code, out = tool(w, "spawn", "f2", prompt_file=str(w.tmp), **SPAWN)
+        assert code == 2 and out["error"] == "USAGE"
+
+    def test_a_file_is_read_once(self, w: W, monkeypatch) -> None:
+        reads: list[str] = []
+        real = Path.read_bytes
+
+        def counting(self: Path) -> bytes:
+            reads.append(str(self))
+            return real(self)
+
+        monkeypatch.setattr(Path, "read_bytes", counting)
+        assert tool(w, "issue-create", "k1", **TABLE["issue-create"].args(w))[0] == 0
+        assert reads.count(w.files["body"]) == 1
+
+    def test_a_file_that_is_not_utf8_is_usage(self, w: W) -> None:
+        Path(w.files["body"]).write_bytes(b"\xff\xfe\x00bad")
+        code, out = tool(w, "issue-create", "k1", **TABLE["issue-create"].args(w))
+        assert code == 2 and out["error"] == "USAGE" and call_row(w, "issue-create", "k1") is None
+
+    def test_an_unreadable_file_counts_as_missing(self, w: W, monkeypatch) -> None:
+        real = Path.read_bytes
+
+        def refused(self: Path) -> bytes:
+            if str(self) == w.files["body"]:
+                raise PermissionError("denied")
+            return real(self)
+
+        monkeypatch.setattr(Path, "read_bytes", refused)
+        code, out = tool(w, "issue-create", "k1", **TABLE["issue-create"].args(w))
+        assert code == 2 and out["error"] == "USAGE"
+
+    # G10
+    @pytest.mark.parametrize("answer", [(1, ""), (0, "nope"), (0, "[]")])
+    def test_an_unknown_merge_probe_is_busy(self, w: W, answer: tuple[int, str]) -> None:
+        from control_plane.runner import RunResult
+
+        _prep_merge(w)
+        w.runner.on(["--json", "state,mergeCommit"], RunResult(answer[0], answer[1], "x"))
+        code, out = tool(w, "merge", "m1")
+        assert code == 6 and out["error"] == "BUSY"
+        assert w.sim.effects("gh", "pr", "merge") == 0 and call_row(w, "merge", "m1") is None
+
+    # G11
+    def test_a_missing_merge_commit_is_read_again_once(self, w: W) -> None:
+        from control_plane.runner import RunResult
+
+        _prep_merge(w)
+        answers = iter([json.dumps({"mergeCommit": None}), json.dumps({"mergeCommit": {"oid": "n" * 40}})])
+        w.runner.on(["--json", "mergeCommit"], lambda c: RunResult(0, next(answers), ""))
+        code, out = tool(w, "merge", "m1")
+        assert code == 0 and out["result"]["merge_sha"] == "n" * 40
+        assert len(w.runner.matching("--json", "mergeCommit")) == 2
+
+    def test_a_merge_sha_never_overwrites_with_null(self, w: W) -> None:
+        from control_plane.runner import RunResult
+
+        _prep_merge(w)
+        sql(w.db, "UPDATE tasks SET merge_sha = ?", ["o" * 40])
+        w.runner.on(["--json", "mergeCommit"], RunResult(0, json.dumps({"mergeCommit": None}), ""))
+        code, out = tool(w, "merge", "m1")
+        assert code == 0 and out["result"]["merge_sha"] is None
+        assert tuple(sql(w.db, "SELECT state, merge_sha FROM tasks")[0]) == ("merged", "o" * 40)
+
+    def test_an_already_merged_pr_with_no_commit_is_read_again(self, w: W) -> None:
+        from control_plane.runner import RunResult
+
+        _prep_merge(w)
+        answers = iter(
+            [json.dumps({"state": "MERGED", "mergeCommit": None}), json.dumps({"mergeCommit": {"oid": "p" * 40}})]
+        )
+        w.runner.on(["gh", "pr", "view"], lambda c: RunResult(0, next(answers), ""))
+        code, out = tool(w, "merge", "m1")
+        assert code == 0 and out["result"]["merge_sha"] == "p" * 40 and w.sim.effects("gh", "pr", "merge") == 0
+
+    def test_a_task_already_merged_is_a_noop_success(self, w: W) -> None:
+        _prep_merge(w)
+        w.sim.pr_state = "MERGED"
+        sql(w.db, "UPDATE tasks SET state = 'merged'")
+        code, out = tool(w, "merge", "m1")
+        assert code == 0 and out["result"] == {"merge_sha": "m" * 40, "noop": True}
+        assert sql(w.db, "SELECT count(*) FROM hook_events")[0][0] == 0
+
+    # G12: the F22 tests above now expect CONFLICT with claim_taken_over
+
+    # G21
+    def test_a_state_conflict_is_also_an_alert(self, w: W) -> None:
+        _prep_merge(w)
+        w.sim.pr_state = "MERGED"
+        sql(w.db, "UPDATE tasks SET state = 'blocked', blocked_from = 'ready_to_merge'")
+        assert tool(w, "merge", "m1")[0] == 0
+        [row] = [dict(r) for r in sql(w.db, "SELECT * FROM hook_events")]
+        assert row["decision"] == "alert" and row["hook"] == "tool:merge" and row["session_id"] == ORCH
+        assert json.loads(row["detail"]) == {
+            "kind": "merge_state_conflict",
+            "task_id": "T1",
+            "key": "m1",
+            "merge_sha": "m" * 40,
+            "expected": "ready_to_merge",
+            "actual": "blocked",
+        }
+        code, snap = run_cli("snapshot")
+        assert code == 0 and snap["alerts"][0]["hook"] == "tool:merge"
