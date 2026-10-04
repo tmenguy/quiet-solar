@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, NoReturn, TextIO
 
 from . import clock as clock_mod
-from . import daemon, db, errors, liveness, migrations, paths, procsetup, runner
+from . import daemon, db, errors, liveness, migrations, paths, procsetup, runner, runs
 
 
 @dataclass(frozen=True)
@@ -118,12 +118,148 @@ def _ensure(args: argparse.Namespace, io: Io) -> dict[str, Any]:
     return ensure_daemon(io)
 
 
+def session_id(args: argparse.Namespace) -> str:
+    """``--session-id``, defaulting to ``$CLAUDE_CODE_SESSION_ID``; ``USAGE`` when neither is set."""
+    value = getattr(args, "session_id", None) or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if not value:
+        raise errors.CpError("USAGE", "no session id: pass --session-id or set CLAUDE_CODE_SESSION_ID")
+    return str(value)
+
+
+def read_file(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+    except OSError as exc:
+        raise errors.CpError("USAGE", f"cannot read {path}: {exc}") from exc
+
+
+def _token(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--token", required=True)
+
+
+def _sid(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--session-id")
+
+
+def _conf_run_open(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--name", required=True)
+    p.add_argument("--title", required=True)
+    _sid(p)
+    p.add_argument("--session-name")
+    p.add_argument("--permission-mode")
+    p.add_argument("--full-grant", action="store_true")
+
+
+def _run_open(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    sid = session_id(args)
+    with connection(io, "write") as conn:
+        assert conn is not None
+        result = runs.open_run(
+            conn,
+            io.deps.clock,
+            name=args.name,
+            title=args.title,
+            session_id=sid,
+            session_name=args.session_name,
+            permission_mode=args.permission_mode,
+            full_grant=args.full_grant,
+        )
+    result["daemon"] = ensure_daemon(io)["status"]
+    return result
+
+
+def _conf_run_claim(p: argparse.ArgumentParser) -> None:
+    p.add_argument("run")
+    _sid(p)
+    p.add_argument("--session-name")
+    p.add_argument("--permission-mode")
+    p.add_argument("--full-grant", action="store_true")
+    p.add_argument("--takeover", action="store_true")
+
+
+def _run_claim(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    sid = session_id(args)
+    with connection(io, "write") as conn:
+        assert conn is not None
+        result = runs.claim(
+            conn,
+            io.deps.clock,
+            io.deps.claude,
+            run_ref=args.run,
+            session_id=sid,
+            takeover=args.takeover,
+            session_name=args.session_name,
+            permission_mode=args.permission_mode,
+            full_grant=args.full_grant,
+        )
+    result["daemon"] = ensure_daemon(io)["status"]
+    return result
+
+
+def _conf_run_bind(p: argparse.ArgumentParser) -> None:
+    p.add_argument("run")
+    _token(p)
+
+
+def _run_bind_name(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    with connection(io, "write") as conn:
+        assert conn is not None
+        return runs.bind_name(conn, io.deps.claude, token=args.token, run_ref=args.run)
+
+
+def _conf_run_set_mode(p: argparse.ArgumentParser) -> None:
+    _token(p)
+    p.add_argument("--permission-mode", required=True)
+    p.add_argument("--full-grant", action=argparse.BooleanOptionalAction, default=None)
+
+
+def _run_set_mode(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    with connection(io, "write") as conn:
+        assert conn is not None
+        return runs.set_mode(conn, token=args.token, permission_mode=args.permission_mode, full_grant=args.full_grant)
+
+
+def _conf_run_set_plan(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--run", required=True)
+    p.add_argument("--file", required=True)
+    _token(p)
+
+
+def _run_set_plan(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    plan = read_file(args.file)
+    with connection(io, "write") as conn:
+        assert conn is not None
+        return runs.set_plan(conn, token=args.token, run_ref=args.run, plan=plan)
+
+
+def _run_close(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    with connection(io, "write") as conn:
+        assert conn is not None
+        return runs.close(conn, io.deps.clock, token=args.token)
+
+
+def _session_status(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    sid = session_id(args)
+    with connection(io, "read") as conn:
+        return {"session_id": sid, **runs.session_status(conn, sid)}
+
+
 COMMANDS: dict[str, Command] = {
     c.name: c
     for c in (
         Command("version", "exempt", _version, help="print the package and schema version (no DB)"),
         Command("daemon", "exempt", _daemon, help="run the daemon (migrates the DB, heartbeats, ticks)"),
         Command("ensure", "exempt", _ensure, help="start or restart the daemon if needed"),
+        Command("run open", "write", _run_open, _conf_run_open, help="open a run; returns its run token"),
+        Command(
+            "run claim", "write", _run_claim, _conf_run_claim, help="claim a run's lease (re-claim, take, take over)"
+        ),
+        Command("run bind-name", "write", _run_bind_name, _conf_run_bind, help="bind the run name after a takeover"),
+        Command("run set-mode", "write", _run_set_mode, _conf_run_set_mode, help="record the permission mode"),
+        Command("run set-plan", "write", _run_set_plan, _conf_run_set_plan, help="replace the run's global plan"),
+        Command("run close", "write", _run_close, _token, help="close the run"),
+        Command("session status", "read", _session_status, _sid, help="this session's role and state"),
     )
 }
 

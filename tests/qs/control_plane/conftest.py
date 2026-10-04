@@ -202,9 +202,12 @@ class FakeClaude(liveness.ClaudeCli):
         super().__init__(run)
         self.listing: list[liveness.Agent] | None = []
         self.listings = 0
+        self.before_list: Callable[[], None] | None = None
 
     def agents(self) -> list[liveness.Agent]:
         self.listings += 1
+        if self.before_list is not None:
+            self.before_list()
         if self.listing is None:
             raise liveness.errors.CpError("INTERNAL", "fake listing failure")
         return list(self.listing)
@@ -330,3 +333,59 @@ def run_cli(*argv: str, stdin: str = "") -> tuple[int, Any]:
 @pytest.fixture
 def invoke() -> Callable[..., tuple[int, Any]]:
     return run_cli
+
+
+# --------------------------------------------------------------------------- shared helpers
+
+ORCH = "S-orch"
+
+
+def open_run(name: str = "r1", session: str = ORCH, **extra: str) -> tuple[str, str]:
+    """``run open`` through the CLI → ``(run_id, token)``."""
+    argv = ["run", "open", "--name", name, "--title", f"title {name}", "--session-id", session]
+    for key, value in extra.items():
+        argv += [f"--{key.replace('_', '-')}", value]
+    code, out = run_cli(*argv)
+    assert code == 0, out
+    return out["run_id"], out["token"]
+
+
+def sql(path: Path, statement: str, params: Sequence[Any] = ()) -> list[Any]:
+    """Run one statement on the test DB outside any domain code (fixtures, assertions)."""
+    c = db.connect(path)
+    try:
+        return c.execute(statement, tuple(params)).fetchall()
+    finally:
+        c.close()
+
+
+def insert_task(path: Path, task_id: str, run_id: str | None, state: str = "building", **cols: Any) -> None:
+    fields = {"id": task_id, "run_id": run_id, "title": task_id, "kind": "feature", "state": state}
+    fields.update({"created_at": "x", "updated_at": "x"})
+    fields.update(cols)
+    names = ", ".join(fields)
+    marks = ", ".join("?" for _ in fields)
+    sql(path, f"INSERT INTO tasks ({names}) VALUES ({marks})", list(fields.values()))
+
+
+def insert_node(
+    path: Path, node_id: str, run_id: str, task_id: str, *, generation: int = 1, state: str = "running", **cols: Any
+) -> str:
+    """A ``nodes`` row inserted directly → its token."""
+    nonce = cols.pop("nonce", f"{int(node_id[1:]):032x}")
+    fields = {
+        "id": node_id,
+        "run_id": run_id,
+        "task_id": task_id,
+        "generation": generation,
+        "name": f"{run_id}-{task_id}-g{generation}",
+        "nonce": nonce,
+        "state": state,
+        "spawned_at": "x",
+        "updated_at": "x",
+    }
+    fields.update(cols)
+    names = ", ".join(fields)
+    marks = ", ".join("?" for _ in fields)
+    sql(path, f"INSERT INTO nodes ({names}) VALUES ({marks})", list(fields.values()))
+    return f"node:{node_id}.{generation}.{nonce}"
