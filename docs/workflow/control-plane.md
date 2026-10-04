@@ -91,16 +91,20 @@ Kinds:
 | `report post` | `--task --phase --round --status --summary --fields-file` | run, or node (own task) | write |
 | `digest put` | `--task --file` | run, or node (own task) | write |
 | `msg post` | `--run R --to orchestrator\|node:T --kind K --payload-file F [--dedupe-key D]` | run (any recipient), node (`orchestrator` only) | write |
-| `msg pop` / `msg ack` | `--run R --as …` / `ID --receipt R` | the recipient's (a stopped node may still pop and ack) | write |
+| `msg pop` / `msg ack` | `--run R --as … [--visibility S]` / `ID --receipt R` | the recipient's (a stopped node may still pop and ack; the receipt of a dead-lettered message's last delivery still acks it) | write |
 | `wait` | `--run R [--timeout S] [--poll S]` | run | write |
-| `node stop` / `node take-over` | `--task T` | run | write |
+| `node stop` / `node take-over` | `--task T` (`stop` on a stopped node is a noop) | run | write |
 | `node hand-back` | `--task T --summary-file F` | run, or node (own task) | write |
 | `lock acquire` / `lock release` | `--name integration:<branch> [--purpose] [--session-id] [--timeout S]` | run, or node (own deliverable, own session) | write |
 | `tool <name>` | `--task T --key K [--args-file F]` | per tool | write |
 
+Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite and above 0; `lock acquire --timeout` may be 0 (try once). Anything else is `USAGE`.
+
+`run open` and `run claim` start the daemon after the run is opened or claimed. A daemon start error is reported as `"daemon": "error"` with `daemon_error`; the run token is still printed.
+
 ### Exempt commands
 
-- **The hooks.** On a schema mismatch or an internal error they fail open at once. The exception is `pre-push`'s DB-free refusal of work-item refs.
+- **The hooks.** On a schema mismatch or an internal error they fail open at once. The exceptions are DB-free: `pre-push`'s refusal of work-item refs, and `PreToolUse`'s DB-access rule, which denies even while the DB is missing, migrating or contended.
 - **`hooks-settings` and `version`.** No DB at all.
 - **`daemon`.** It migrates.
 - **`ensure`.** It reads the daemon lease defensively.
@@ -143,7 +147,9 @@ Only the daemon migrates the live DB, and only when **both** hold:
 - it runs the main checkout's code;
 - `main` is checked out there.
 
-A test DB, which is not a live-DB path, may be migrated by anyone.
+A DB already at the current schema needs no migration, so `migrate` is a noop without that check: the daemon also starts while the main checkout is on another branch or a detached HEAD. A test DB, which is not a live-DB path, may be migrated by anyone.
+
+Lock contention during a migration is `BUSY`. The daemon retries it (`MIGRATE_BUSY_RETRIES` times, one tick apart) and never records it in the backoff sidecar.
 
 Before migrating an existing DB, the daemon backs it up to `QS_CP_BACKUP_DIR`, which is never inside a checkout.
 
@@ -152,7 +158,7 @@ Before migrating an existing DB, the daemon backs it up to `QS_CP_BACKUP_DIR`, w
 1. **Append** `Migration(n + 1, "<name>", (<single statements>…))` to `MIGRATIONS` in `migrations.py`.
    - Use single statements only, never `executescript`.
    - A test pins the versions as `1..N`.
-2. **Land it on `main`.** The next `ensure` sees a lower-schema daemon lease, restarts the daemon, and the daemon backs up and migrates.
+2. **Land it on `main`.** The next `ensure` sees a lower-schema daemon lease, stops the old daemon (SIGTERM while it is alive, fresh or hung), and starts one that backs up and migrates. If the old daemon is still alive after `DAEMON_RESTART_WAIT_S`, `ensure` answers `restart_pending` and starts nothing; `wait` then exits 5 with `restart_wait`.
 3. **If the migration fails,** the daemon writes `<db>.migrate-error.json`. `ensure` does not respawn the daemon for `MIGRATE_BACKOFF_S`, and waiting commands get `SCHEMA_PENDING` with the error.
 
 ## Locks and caps
@@ -175,17 +181,18 @@ Before migrating an existing DB, the daemon backs it up to `QS_CP_BACKUP_DIR`, w
 ### When a holder is dead
 
 - **A process holder** is dead when its pid (checked with its start time) **and** its process group are gone.
+- **Liveness is tri-state.** The start time comes from `ps -o lstart=` run with `TZ=UTC0` and `LC_ALL=C`. When `ps` itself fails (a timeout, an exec failure, unparseable output) the answer is *unknown*, and unknown always keeps the holder: a failed probe is never evidence of absence.
 - **A session holder** is dead when any of these holds:
   - its token is superseded;
   - its session is absent from a successful `claude agents --json` listing;
-  - or, only if the listing failed, its recorded pid is dead;
+  - or, only if the listing failed, its recorded pid is proven dead;
   - its run is closed;
-  - its deliverable is terminal.
+  - every deliverable on its branch is terminal.
 - A session-held lock stays held while a **co-holder** (one of the holder's own tools) is alive.
 
 ### Caps
 
-- **Gate cap:** `QS_CP_MAX_GATES` slots (default 2), for `tool gate` and #400's integration finish.
+- **Gate cap:** `QS_CP_MAX_GATES` slots (default 2), for `tool gate` and #400's integration finish. The cap counts the live slot rows against the caller's own limit, so a process started with a smaller limit never exceeds it.
 - **Node cap:** `QS_CP_MAX_NODES` (default 4), counted across all runs. A node counts when it is:
   - `spawning`, while its spawn call's holder is alive or its launch has not settled;
   - `running`, `idle` or `taken_over`, when the listing shows it, or the listing failed, or it launched less than `LAUNCH_SETTLE_S` ago.
@@ -194,22 +201,24 @@ Before migrating an existing DB, the daemon backs it up to `QS_CP_BACKUP_DIR`, w
 
 Every tool runs through `run_recorded`:
 
-1. Verify the token.
+1. Verify the token. A call already finished under the key is replayed at once, before its steps are built: a deleted argument file or a task column cleared meanwhile cannot break the replay.
 2. Claim `tool_calls(tool, key)` before any effect.
 3. Probe: the probe is authoritative for each step it reports, done or not done.
 4. Run the missing steps under the locks or the cap, re-checking the token and lock ownership before each step.
 5. Record the call `succeeded` or `failed`.
 
-**Keys** are chosen by the caller: `msg:<id>` for a popped message, or `task:<id>:<purpose>` otherwise. Replaying the same key never repeats an effect.
+**Keys** are chosen by the caller: `msg:<id>` for a popped message, or `task:<id>:<purpose>` otherwise. Replaying the same key never repeats an effect. The key's `args_hash` covers the arguments and the content of every `*_file` argument: the same key with an edited file is a `CONFLICT`.
+
+A probe that cannot tell (a failed or unparseable `gh` listing) answers `BUSY`, "replay the same key later", never "not done".
 
 | tool | token | runs in | locks / cap | probe |
 |---|---|---|---|---|
 | `worktree-create` (`phase`) | run | `<MAIN>` | `main-checkout` | none; `setup_task.py` is idempotent |
-| `worktree-cleanup` | run | `<MAIN>` | `main-checkout` | directory absent and unregistered |
+| `worktree-cleanup` | run | `<MAIN>` | `main-checkout` | directory absent and unregistered. Refuses the main checkout and a directory whose `.git` is not a file (`POLICY_REFUSED`); a path another non-terminal task shares only clears this task's column (`shared_with`) |
 | `gate` (`mode`, `paths`) | run, or node (own task) | worktree | `gates` slot | none; safe to re-run |
-| `spawn` (`agent`, `model?`, `permission_mode`, `prompt_file`, `replace?`) | run | worktree | node cap | the reserved row through `spawn_tool_key`, and the listing by name |
+| `spawn` (`agent`, `model?`, `permission_mode`, `prompt_file`, `replace?`) | run | worktree | node cap (`--replace` frees the replaced node's place first) | the reserved row through `spawn_tool_key`, and the listing by name. A launch never listed within `LAUNCH_SETTLE_S` is reaped and relaunched |
 | `resume` (`message_file`) | run | worktree | node cap | the row through `spawn_tool_key`, and the listing by name and `startedAt` |
-| `issue-create` (`title`, `body_file`, `labels`) | run | `<MAIN>` | — | a `<!-- qs-cp-key: … -->` marker in the issue bodies |
+| `issue-create` (`title`, `body_file`, `labels`) | run | `<MAIN>` | — | a `<!-- qs-cp-key: … -->` marker in the issue bodies, found with `gh issue list --search` |
 | `pr-create` (`title`, `summary_file`) | run, or node (own task) | worktree | — | the marker in the PR bodies of the branch |
 | `push` | run, or node (own task) | worktree | — | `git ls-remote` equals `HEAD` |
 | `merge` | run | `<MAIN>` | `integration:<branch>`, `main-merge` | `gh pr view` shows `MERGED` |
@@ -217,7 +226,7 @@ Every tool runs through `run_recorded`:
 Notes:
 
 - Every built-in tool except `worktree-cleanup` refuses a terminal task with `INVALID_STATE`, recorded `failed`.
-- `merge` also requires the task to be `ready_to_merge`, unless the PR is already merged.
+- `merge` also requires the task to be `ready_to_merge`, unless the PR is already merged. Once the PR is merged, `merge_sha` is always recorded; if the task left `ready_to_merge` meanwhile, the call still succeeds, with `state_conflict: {"expected": "ready_to_merge", "actual": …}`, for the orchestrator or the maintainer to reconcile.
 - `merge` is refused by the default merge policy until child 7 installs one (`merge_policy.install`).
 
 **Outcomes.**
@@ -227,6 +236,7 @@ Notes:
 | a step failed, or the state drifted | recorded `failed`; the key is spent | `TOOL_FAILED` (exit 1), with `result.error` |
 | `BUSY`, `POLICY_REFUSED`, `STALE_TOKEN` or `STOPPED` before any effect | claim released, so the same key can be retried | that code |
 | the same codes after an effect | left `started`; a same-key replay takes it over once this process has exited | that code |
+| another process took the claim over mid-call | left to that process | `STALE_TOKEN` |
 
 ### The `ToolSpec` API (frozen for #400 and later children)
 
@@ -271,9 +281,11 @@ def invoke(name, *, key, task_id, args, token, actor, ctx=None) -> dict
 |---|---|---|---|
 | `Stop` (orchestrator) | child 9 writes `hooks-settings --role orchestrator` into main's pin; **6a must not ship before** | stdin `session_id` → `{"decision": "block", "reason": …}` when a message waits (pop it), or once when no `wait` runs; a loop guard allows and records a `hook_events` `alert` | fail open |
 | `PreToolUse` (every registered session; matcher `Bash\|Edit\|Write\|SendMessage`) | nodes: `claude --bg --settings '<hooks-settings --role node>'` at spawn | `tool_name`, `tool_input` → `hookSpecificOutput.permissionDecision: "deny"` for DB access outside `cp.py` (any session), `gh pr merge` (registered sessions), `SendMessage` from a superseded or stopped session | fail open |
-| `pre-push` (git) | a common-dir shim installed by `tool worktree-create` (marker `# qs-control-plane pre-push shim v1`) | git's ref lines → exit 1 refuses `QS_<N>_<k>` refs everywhere, and, in a registered worktree, a stopped node, a foreign ref, or a missing or stale `QS_CP_TOKEN` | fail closed only for a proven-registered worktree |
+| `pre-push` (git) | a common-dir shim installed by `tool worktree-create` (marker `# qs-control-plane pre-push shim v2`) | git's ref lines → exit 1 refuses `QS_<N>_<k>` refs everywhere, and, in a registered worktree, a stopped node, a foreign ref, or a missing or stale `QS_CP_TOKEN` | fail closed only for a proven-registered worktree |
 
 Whether `--settings` hooks survive a bare `claude --bg --resume` is unverified, an open point for 6b. `pre-push` is git-level, so it applies regardless.
+
+The shim and the settings commands run `<MAIN>/venv/bin/python`. Without it they fall back to `python3` only if it is 3.14 or newer (the package's syntax); otherwise they print one warning line and allow.
 
 ## Environment variables
 
@@ -299,6 +311,7 @@ Each is overridable by a function argument.
 | `DAEMON_RESTART_WAIT_S` | 15 | `daemon` |
 | `MIGRATE_WAIT_S` | 60 | `db` |
 | `MIGRATE_BACKOFF_S` | 300 | `daemon` |
+| `MIGRATE_BUSY_RETRIES` | 6 | `daemon` |
 | `LAUNCH_SETTLE_S` | 60 | `nodes` |
 | `GATE_WAIT_S` | 1800 | `locks` |
 | `LOCK_WAIT_S` | 600 | `locks` |
@@ -310,7 +323,7 @@ Each is overridable by a function argument.
 |---|---|---|
 | `Clock` | `SystemClock` | `FakeClock`: `sleep` advances time |
 | `Runner` | `subprocess.run` with an environment delta | `FakeRunner`: records argv, cwd, environment delta and `detach` |
-| `ProcessProbe` | `kill(pid, 0)` plus `ps -o lstart=`, and `killpg` | `FakeProbe`: a fresh pid per call, reaped when the CLI call returns |
+| `ProcessProbe` | `kill(pid, 0)` plus `ps -o lstart=` (UTC, C locale; a failed `ps` is unknown), and `killpg` | `FakeProbe`: a fresh pid per call, reaped when the CLI call returns |
 | `ClaudeCli` | `claude agents --json`, `claude --bg …` | `FakeClaude`: a scripted listing |
 | `ProcessSetup` | `setpgid`, `signal.signal` | a recorder: pytest's own process never changes group or gets a handler |
 | `Popen` | `subprocess.Popen`, for `ensure` | a recorder |
@@ -324,15 +337,17 @@ Each is overridable by a function argument.
 - `git push --no-verify` bypasses `pre-push`.
 - A superseded session claiming its run back with `--takeover`: takeover is the maintainer's act, and the self-end payload says so.
 - Passing another session's token.
+- **`run claim --session-id` trusts its caller.** The id names the session claiming the lease, and nothing checks that the caller is that session. The threat model covers agent mistakes, not adversarial sessions: forging another session's id is a deliberate act.
 - `gh` issue and PR edits made outside the tools.
 - `SendMessage` from an unregistered session.
-- DB access that slips past the Bash segment rule, for example through an allowlisted program, or code that reads the path from a variable.
+- DB access that slips past the Bash segment rule, for example through an allowlisted program, or code that reads the path from a variable. Known gaps: `find … -delete` and `sed -i` behind an allowlisted program name, `$(…)` command substitution, `git rm`. The hook guards against accidents; it is not a sandbox.
+- **`gh pr merge` through a wrapper.** The merge rule matches a segment that starts with `gh pr merge`; a wrapper (`env gh pr merge`, `command gh …`, an alias, a script, `gh api`) is not caught.
 - **The fencing window on external effects.** GitHub never sees the token. A superseded session's already-started step can still land; its next step is refused. `merge` narrows the window with `--match-head-commit`.
 - **The session-lock fallback limit.**
   - When the liveness listing fails, a session-held lock falls back to the pid stamped at the session's last use. After an app restart that pid can be stale, so the lock can be freed while the session is alive.
   - A node that is not listed again, such as a reaped `--bg` node not yet resumed, also loses its lock.
   - The branch move is a ref compare-and-swap, so the cost is redoing an integration step, never corruption.
-- **The launch-settle limit.** A `claude --bg` session that only appears in the listing more than `LAUNCH_SETTLE_S` after its launch may be launched twice by a replay after a crash.
+- **The launch-settle limit.** A `claude --bg` session that only appears in the listing more than `LAUNCH_SETTLE_S` after its launch may be launched twice: a same-key replay reaps the unlisted launch and relaunches it.
 - **The hook `session_id` assumption.** The hook's stdin `session_id`, `$CLAUDE_CODE_SESSION_ID` and the `sessionId` of `claude agents --json` are assumed to be the same identifier. The last two were verified equal on 2026-10-04; the hook field is unverified.
 - **`--settings` hooks after a bare resume:** unverified.
 - **The orchestrator's hooks are unwired until child 9.**
