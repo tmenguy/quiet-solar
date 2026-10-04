@@ -20,7 +20,23 @@ from dataclasses import dataclass, field
 from typing import Any, NoReturn, TextIO
 
 from . import clock as clock_mod
-from . import daemon, db, errors, liveness, messages, migrations, paths, procsetup, runner, runs, wait
+from . import (
+    daemon,
+    db,
+    decisions,
+    errors,
+    liveness,
+    messages,
+    migrations,
+    paths,
+    procsetup,
+    questions,
+    reports,
+    runner,
+    runs,
+    tasks,
+    wait,
+)
 
 
 @dataclass(frozen=True)
@@ -328,6 +344,237 @@ def _wait(args: argparse.Namespace, io: Io) -> dict[str, Any]:
         )
 
 
+def _write(io: Io, fn: Callable[..., dict[str, Any]], *args: Any, **kwargs: Any) -> dict[str, Any]:
+    with connection(io, "write") as conn:
+        assert conn is not None
+        return fn(conn, *args, **kwargs)
+
+
+def _conf_task_add(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--run")
+    p.add_argument("--title", required=True)
+    p.add_argument("--kind", required=True, choices=tasks.KINDS)
+    p.add_argument("--target")
+    p.add_argument("--parent")
+    p.add_argument("--issue", type=int)
+    p.add_argument("--lane")
+    p.add_argument("--deliverable", action="store_true")
+    p.add_argument("--item-of")
+    _token(p)
+
+
+def _task_add(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    return _write(
+        io,
+        tasks.add,
+        io.deps.clock,
+        token=args.token,
+        run_ref=args.run,
+        title=args.title,
+        kind=args.kind,
+        target=args.target,
+        parent=args.parent,
+        issue=args.issue,
+        lane=args.lane,
+        deliverable=args.deliverable,
+        item_of=args.item_of,
+    )
+
+
+def _conf_task_set(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--task", required=True)
+    p.add_argument("--issue", type=int, dest="issue_number")
+    p.add_argument("--worktree")
+    p.add_argument("--branch")
+    p.add_argument("--pr-number", type=int)
+    p.add_argument("--pr-url")
+    p.add_argument("--ci-state")
+    p.add_argument("--ci-sha")
+    _token(p)
+
+
+def _task_set(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    names = ("issue_number", "worktree", "branch", "pr_number", "pr_url", "ci_state", "ci_sha")
+    fields = {n: getattr(args, n) for n in names if getattr(args, n) is not None}
+    return _write(io, tasks.set_fields, io.deps.clock, token=args.token, task_id=args.task, fields=fields)
+
+
+def _conf_task_state(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--task", required=True)
+    p.add_argument("--to", required=True)
+    p.add_argument("--note")
+    _token(p)
+
+
+def _task_state(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    return _write(io, tasks.set_state, io.deps.clock, token=args.token, task_id=args.task, to=args.to, note=args.note)
+
+
+def _conf_task_dep(p: argparse.ArgumentParser) -> None:
+    p.add_argument("action", choices=("add", "remove"))
+    p.add_argument("--task", required=True)
+    p.add_argument("--on", required=True)
+    _token(p)
+
+
+def _task_dep(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    return _write(io, tasks.edit_dep, token=args.token, action=args.action, task_id=args.task, on=args.on)
+
+
+def _conf_membership(p: argparse.ArgumentParser) -> None:
+    p.add_argument("action", choices=("add", "remove"))
+    p.add_argument("--run", required=True)
+    p.add_argument("--task", required=True)
+    _token(p)
+
+
+def _membership(table: str) -> Callable[[argparse.Namespace, Io], dict[str, Any]]:
+    def handler(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+        return _write(
+            io,
+            tasks.edit_membership,
+            token=args.token,
+            table=table,
+            action=args.action,
+            run_ref=args.run,
+            task_id=args.task,
+        )
+
+    return handler
+
+
+def _conf_task_token(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--task", required=True)
+    _token(p)
+
+
+def _conf_criteria_set(p: argparse.ArgumentParser) -> None:
+    _conf_task_token(p)
+    p.add_argument("--file", required=True)
+
+
+def _criteria_set(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    lines = read_file(args.file).splitlines()
+    return _write(io, tasks.criteria_set, token=args.token, task_id=args.task, lines=lines)
+
+
+def _criteria_validate(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    return _write(io, tasks.criteria_validate, io.deps.clock, token=args.token, task_id=args.task)
+
+
+def _conf_criteria_state(p: argparse.ArgumentParser) -> None:
+    _conf_task_token(p)
+    p.add_argument("--idx", type=int, required=True)
+    p.add_argument("--to", required=True)
+
+
+def _criteria_state(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    return _write(io, tasks.criteria_state, token=args.token, task_id=args.task, idx=args.idx, to=args.to)
+
+
+def _conf_question_open(p: argparse.ArgumentParser) -> None:
+    _conf_task_token(p)
+    p.add_argument("--text-file", required=True)
+    p.add_argument("--blocking", action="store_true")
+
+
+def _question_open(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    text = read_file(args.text_file)
+    return _write(
+        io,
+        questions.open_question,
+        io.deps.clock,
+        token=args.token,
+        task_id=args.task,
+        text=text,
+        blocking=args.blocking,
+    )
+
+
+def _conf_question_ask(p: argparse.ArgumentParser) -> None:
+    p.add_argument("question")
+    _token(p)
+
+
+def _question_ask(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    return _write(io, questions.ask, token=args.token, question_id=args.question)
+
+
+def _conf_question_answer(p: argparse.ArgumentParser) -> None:
+    _conf_question_ask(p)
+    p.add_argument("--answer-file", required=True)
+    p.add_argument("--reason", required=True)
+
+
+def _question_answer(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    text = read_file(args.answer_file)
+    return _write(
+        io,
+        questions.answer,
+        io.deps.clock,
+        token=args.token,
+        question_id=args.question,
+        answer_text=text,
+        reason=args.reason,
+    )
+
+
+def _conf_decision_add(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--text", required=True)
+    p.add_argument("--reason", required=True)
+    p.add_argument("--source", required=True)
+    p.add_argument("--task")
+    _token(p)
+
+
+def _decision_add(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    return _write(
+        io,
+        decisions.add,
+        io.deps.clock,
+        token=args.token,
+        text=args.text,
+        reason=args.reason,
+        source=args.source,
+        task_id=args.task,
+    )
+
+
+def _conf_report_post(p: argparse.ArgumentParser) -> None:
+    _conf_task_token(p)
+    p.add_argument("--phase", required=True)
+    p.add_argument("--round", type=int, required=True)
+    p.add_argument("--status", required=True)
+    p.add_argument("--summary", required=True)
+    p.add_argument("--fields-file", required=True)
+
+
+def _report_post(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    fields = messages.parse_payload(read_file(args.fields_file))
+    return _write(
+        io,
+        reports.post_report,
+        io.deps.clock,
+        token=args.token,
+        task_id=args.task,
+        phase=args.phase,
+        round_=args.round,
+        status=args.status,
+        summary=args.summary,
+        fields=fields,
+    )
+
+
+def _conf_digest_put(p: argparse.ArgumentParser) -> None:
+    _conf_task_token(p)
+    p.add_argument("--file", required=True)
+
+
+def _digest_put(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    body = read_file(args.file)
+    return _write(io, reports.put_digest, io.deps.clock, token=args.token, task_id=args.task, body=body)
+
+
 COMMANDS: dict[str, Command] = {
     c.name: c
     for c in (
@@ -347,6 +594,21 @@ COMMANDS: dict[str, Command] = {
         Command("msg pop", "write", _msg_pop, _conf_msg_pop, help="pop the next visible message (with a receipt)"),
         Command("msg ack", "write", _msg_ack, _conf_msg_ack, help="acknowledge a popped message"),
         Command("wait", "write", _wait, _conf_wait, help="block until the orchestrator's queue is not empty"),
+        Command("task add", "write", _task_add, _conf_task_add, help="add a task (state `proposed`)"),
+        Command("task set", "write", _task_set, _conf_task_set, help="update a task's fields"),
+        Command("task state", "write", _task_state, _conf_task_state, help="apply a state transition"),
+        Command("task dep", "write", _task_dep, _conf_task_dep, help="add or remove a dependency"),
+        Command("task root", "write", _membership("run_roots"), _conf_membership, help="edit the run's roots"),
+        Command("task work-list", "write", _membership("work_list"), _conf_membership, help="edit the work list"),
+        Command("criteria set", "write", _criteria_set, _conf_criteria_set, help="replace the acceptance criteria"),
+        Command("criteria validate", "write", _criteria_validate, _conf_task_token, help="the maintainer's sign-off"),
+        Command("criteria state", "write", _criteria_state, _conf_criteria_state, help="update one criterion"),
+        Command("question open", "write", _question_open, _conf_question_open, help="open a question"),
+        Command("question ask", "write", _question_ask, _conf_question_ask, help="mark a question asked"),
+        Command("question answer", "write", _question_answer, _conf_question_answer, help="answer a question"),
+        Command("decision add", "write", _decision_add, _conf_decision_add, help="record a decision"),
+        Command("report post", "write", _report_post, _conf_report_post, help="post a node report"),
+        Command("digest put", "write", _digest_put, _conf_digest_put, help="replace a task's digest"),
     )
 }
 
