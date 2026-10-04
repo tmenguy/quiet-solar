@@ -89,7 +89,7 @@ def select_db() -> Path:
         if is_live_db_path(resolved):
             if _under_pytest():
                 raise errors.CpError("PATH_GUARD", f"{resolved} is a live DB; refused under pytest")
-            if not (is_main_checkout(root) and resolved == live_db(root)):
+            if not (is_main_checkout(root) and resolved == live_db(root).resolve()):
                 raise errors.CpError(
                     "PATH_GUARD",
                     f"{resolved} is a live DB that this copy of the code ({root}) may not open",

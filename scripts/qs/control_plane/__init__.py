@@ -5,4 +5,8 @@ Python, no LLM, one for all runs. Every session calls
 ``docs/workflow/control-plane.md``.
 """
 
+from .migrations import SCHEMA_VERSION
+
 PACKAGE = "control_plane"
+
+__all__ = ["PACKAGE", "SCHEMA_VERSION"]

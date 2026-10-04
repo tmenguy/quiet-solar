@@ -10,12 +10,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sqlite3
+import subprocess
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, NoReturn, TextIO
 
-from . import errors, procsetup
+from . import clock as clock_mod
+from . import daemon, db, errors, liveness, migrations, paths, procsetup, runner
 
 
 @dataclass(frozen=True)
@@ -27,9 +32,59 @@ class Raw:
 
 
 @dataclass
+class Deps:
+    """Every seam a command uses; the tests replace ``make_deps``."""
+
+    clock: clock_mod.Clock
+    runner: runner.Runner
+    probe: liveness.ProcessProbe
+    claude: liveness.ClaudeCli
+    popen: Callable[..., Any]
+    kill: Callable[[int, int], None]
+
+
+def make_deps() -> Deps:
+    run = runner.Runner()
+    return Deps(
+        clock=clock_mod.SystemClock(),
+        runner=run,
+        probe=liveness.ProcessProbe(run),
+        claude=liveness.ClaudeCli(run),
+        popen=subprocess.Popen,
+        kill=os.kill,
+    )
+
+
+@dataclass
 class Io:
     stdin: TextIO
     stdout: TextIO
+    deps: Deps
+
+
+def ensure_daemon(io: Io, path: Any = None) -> dict[str, Any]:
+    d = io.deps
+    return daemon.ensure(popen=d.popen, clock=d.clock, probe=d.probe, db_path=path, kill=d.kill)
+
+
+@contextmanager
+def connection(io: Io, kind: str) -> Iterator[sqlite3.Connection | None]:
+    """Open the selected DB after the entry schema check of ``kind`` (§3).
+
+    ``write`` waits for the self-migration (starting the daemon); ``read``
+    never waits and yields ``None`` for a missing DB.
+    """
+    path = paths.select_db()
+    if kind == "write":
+        db.check_schema(path, wait=True, clock=io.deps.clock, ensure=lambda: ensure_daemon(io, path))
+    elif db.check_schema(path, wait=False, clock=io.deps.clock) == "missing":
+        yield None
+        return
+    conn = db.connect(path, mode="rw" if kind == "write" else "ro")
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 @dataclass(frozen=True)
@@ -52,11 +107,24 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _version(args: argparse.Namespace, io: Io) -> dict[str, Any]:
-    return {"package": "control_plane"}
+    return {"package": "control_plane", "schema_version": migrations.current_schema_version()}
+
+
+def _daemon(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    return daemon.run(io.deps.clock, probe=io.deps.probe, idle_exit_s=daemon.IDLE_EXIT_S, tick_s=daemon.TICK_S)
+
+
+def _ensure(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    return ensure_daemon(io)
 
 
 COMMANDS: dict[str, Command] = {
-    c.name: c for c in (Command("version", "exempt", _version, help="print the package and schema version (no DB)"),)
+    c.name: c
+    for c in (
+        Command("version", "exempt", _version, help="print the package and schema version (no DB)"),
+        Command("daemon", "exempt", _daemon, help="run the daemon (migrates the DB, heartbeats, ticks)"),
+        Command("ensure", "exempt", _ensure, help="start or restart the daemon if needed"),
+    )
 }
 
 
@@ -91,7 +159,7 @@ def _emit(out: TextIO, payload: dict[str, Any]) -> None:
 
 
 def main(argv: Sequence[str] | None = None, *, stdin: TextIO | None = None, stdout: TextIO | None = None) -> int:
-    io = Io(stdin=stdin or sys.stdin, stdout=stdout or sys.stdout)
+    io = Io(stdin=stdin or sys.stdin, stdout=stdout or sys.stdout, deps=make_deps())
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
         args = build_parser().parse_args(argv)

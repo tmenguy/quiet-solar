@@ -29,17 +29,31 @@ SCRIPTS_QS = Path(__file__).resolve().parents[3] / "scripts" / "qs"
 if str(SCRIPTS_QS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_QS))
 
-MODULES = ("errors", "clock", "faults", "runner", "procsetup", "paths", "liveness", "cli")
+MODULES = (
+    "errors",
+    "clock",
+    "faults",
+    "runner",
+    "procsetup",
+    "paths",
+    "liveness",
+    "schema_v1",
+    "migrations",
+    "db",
+    "daemon",
+    "cli",
+)
 for _name in MODULES:
     importlib.import_module(f"control_plane.{_name}")
 
-from control_plane import cli, clock, faults, paths, procsetup  # noqa: E402
+from control_plane import cli, clock, db, faults, liveness, migrations, paths, procsetup  # noqa: E402
 from control_plane.runner import RunResult  # noqa: E402
 
 REAL_PROCSETUP_GET = procsetup.get
 REAL_CODE_ROOT = paths.code_root
 REAL_MAIN_CHECKOUT = paths.main_checkout
 REAL_MAIN_HEAD_BRANCH = paths.main_head_branch
+REAL_MAKE_DEPS = cli.make_deps
 
 ENV_CLEARED = (
     "CLAUDE_CODE_SESSION_ID",
@@ -123,8 +137,151 @@ class FakeRunner:
             return [c for c in self.calls if argv_matches(c.argv, pattern)]
 
 
+@pytest.fixture
+def fake_clock() -> clock.FakeClock:
+    return clock.FakeClock()
+
+
+@pytest.fixture
+def fake_runner() -> FakeRunner:
+    return FakeRunner()
+
+
+class FakeProbe(liveness.ProcessProbe):
+    """Every pid and group is alive until ``kill``-ed; ``me()`` is a fresh pid per call."""
+
+    def __init__(self) -> None:
+        super().__init__(FakeRunner())
+        self.dead_pids: set[int] = set()
+        self.dead_groups: set[int] = set()
+        self._next = 50_000
+        self._lock = threading.Lock()
+
+    def alive(self, pid: int | None, start: str | None) -> bool:
+        if pid is None or pid in self.dead_pids:
+            return False
+        return start is None or start == f"start-{pid}"
+
+    def group_alive(self, pgid: int | None) -> bool:
+        return pgid is not None and pgid not in self.dead_groups
+
+    def start_of(self, pid: int) -> str | None:
+        return None if pid in self.dead_pids else f"start-{pid}"
+
+    def me(self) -> liveness.Holder:
+        with self._lock:
+            self._next += 1
+            pid = self._next
+        return liveness.Holder(pid, f"start-{pid}", pid)
+
+    def kill(self, pid: int | None, *, group: bool = True) -> None:
+        if pid is not None:
+            self.dead_pids.add(pid)
+            if group:
+                self.dead_groups.add(pid)
+
+
+def agent(session_id: str, name: str | None = None, **kw: Any) -> liveness.Agent:
+    fields: dict[str, Any] = {
+        "id": None,
+        "cwd": None,
+        "kind": "background",
+        "status": "idle",
+        "state": None,
+        "pid": None,
+        "started_at_ms": None,
+    }
+    fields.update(kw)
+    return liveness.Agent(session_id=session_id, name=name, **fields)
+
+
+class FakeClaude(liveness.ClaudeCli):
+    """``agents()`` returns ``listing`` (``None`` → a failed listing); launches go to the ``FakeRunner``."""
+
+    def __init__(self, run: FakeRunner) -> None:
+        super().__init__(run)
+        self.listing: list[liveness.Agent] | None = []
+        self.listings = 0
+
+    def agents(self) -> list[liveness.Agent]:
+        self.listings += 1
+        if self.listing is None:
+            raise liveness.errors.CpError("INTERNAL", "fake listing failure")
+        return list(self.listing)
+
+
+@dataclass
+class FakePopen:
+    calls: list[tuple[list[str], dict[str, Any]]] = field(default_factory=list)
+    on_call: Callable[[list[str], dict[str, Any]], None] | None = None
+
+    def __call__(self, argv: list[str], **kwargs: Any) -> object:
+        self.calls.append((list(argv), kwargs))
+        if self.on_call is not None:
+            self.on_call(list(argv), kwargs)
+        return object()
+
+
+@dataclass
+class FakeKill:
+    calls: list[tuple[int, int]] = field(default_factory=list)
+    on_call: Callable[[int, int], None] | None = None
+
+    def __call__(self, pid: int, sig: int) -> None:
+        self.calls.append((pid, sig))
+        if self.on_call is not None:
+            self.on_call(pid, sig)
+
+
+@pytest.fixture
+def fake_probe() -> FakeProbe:
+    return FakeProbe()
+
+
+@pytest.fixture
+def fake_claude(fake_runner: FakeRunner) -> FakeClaude:
+    return FakeClaude(fake_runner)
+
+
+@pytest.fixture
+def fake_popen() -> FakePopen:
+    return FakePopen()
+
+
+@pytest.fixture
+def fake_kill() -> FakeKill:
+    return FakeKill()
+
+
+@pytest.fixture
+def deps(fake_clock, fake_runner, fake_probe, fake_claude, fake_popen, fake_kill) -> cli.Deps:
+    return cli.Deps(
+        clock=fake_clock, runner=fake_runner, probe=fake_probe, claude=fake_claude, popen=fake_popen, kill=fake_kill
+    )
+
+
+@pytest.fixture
+def db_path(tmp_path: Path) -> Path:
+    return tmp_path / "state" / "test_state.db"
+
+
+@pytest.fixture
+def migrated(db_path: Path) -> Path:
+    migrations.migrate(db_path, role="test")
+    return db_path
+
+
+@pytest.fixture
+def conn(migrated: Path) -> Iterator[Any]:
+    c = db.connect(migrated)
+    try:
+        yield c
+    finally:
+        c.close()
+
+
 @pytest.fixture(autouse=True)
-def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeProcessSetup]:
+def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deps: cli.Deps) -> Iterator[FakeProcessSetup]:
     for name in ENV_CLEARED:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("QS_CP_DB", str(tmp_path / "state" / "test_state.db"))
@@ -139,6 +296,7 @@ def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[F
     monkeypatch.setattr(paths, "main_head_branch", lambda main_dir: "main")
     setup = FakeProcessSetup()
     monkeypatch.setattr(procsetup, "get", lambda: setup)
+    monkeypatch.setattr(cli, "make_deps", lambda: deps)
     faults.reset()
     try:
         yield setup
@@ -154,16 +312,6 @@ def fake_setup(_cp_isolation: FakeProcessSetup) -> FakeProcessSetup:
 @pytest.fixture
 def fake_main(tmp_path: Path) -> Path:
     return tmp_path / "main"
-
-
-@pytest.fixture
-def fake_clock() -> clock.FakeClock:
-    return clock.FakeClock()
-
-
-@pytest.fixture
-def fake_runner() -> FakeRunner:
-    return FakeRunner()
 
 
 def run_cli(*argv: str, stdin: str = "") -> tuple[int, Any]:
