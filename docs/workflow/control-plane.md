@@ -43,7 +43,7 @@ The hooks print the Claude Code hook protocol instead, or nothing.
 | 5 | `SCHEMA_TOO_NEW`, `SCHEMA_PENDING` | the code is older than the DB, or a migration did not finish in time (`restart_wait` from `wait`) |
 | 6 | `BUSY` | a lock, a cap, an in-flight call of the same tool and key, the node cap, or an unknown liveness |
 | 7 | `PATH_GUARD` | this copy of the code may not open this DB |
-| 8 | `NOT_FOUND`, `CONFLICT`, `INVALID_STATE` | unknown id; uniqueness, argument or receipt mismatch, or a token used out of bounds; forbidden transition |
+| 8 | `NOT_FOUND`, `CONFLICT`, `INVALID_STATE` | unknown id; uniqueness, argument or receipt mismatch, a token used out of bounds (a task of another run included), or a tool call's claim taken over by another process (`claim_taken_over`); forbidden transition |
 | 9 | `POLICY_REFUSED` | merge policy, a foreign or `core.hooksPath` hook, a write into the main checkout, a live DB outside `main`, … |
 
 **Tokens.** A token is `run:R<n>.<epoch>.<nonce>` or `node:N<n>.<generation>.<nonce>`.
@@ -83,7 +83,7 @@ Kinds:
 | `task add` | `[--run R] --title --kind epic\|feature\|bug [--target] [--parent T] [--issue N] [--lane L] [--deliverable] [--item-of T]` (`--parent` / `--item-of` must be a task of the caller's run, or of none: `CONFLICT` otherwise) | run | write |
 | `task set` | `--task T [--issue] [--worktree] [--branch] [--pr-number --pr-url] [--ci-state --ci-sha]` | run | write |
 | `task state` | `--task T --to STATE\|unblock [--note]` | run, or node (own task, node range) | write |
-| `task dep` / `task root` / `task work-list` | `add\|remove …` | run | write |
+| `task dep` / `task root` / `task work-list` | `add\|remove …` (both tasks of a `task dep` must be of the caller's run, or of none: `CONFLICT` otherwise) | run | write |
 | `criteria set` / `validate` / `state` | `--task T …` | run | write |
 | `question open` | `--task T --text-file F [--blocking]` | run, or node (own task) | write |
 | `question ask` / `question answer` | `Q-n …` | run | write |
@@ -164,15 +164,17 @@ Before migrating an existing DB, the daemon backs it up to `QS_CP_BACKUP_DIR`, w
 ### The daemon and `ensure`
 
 - **Its lease.** `daemon` takes a singleton `flock`, then reads its own start time. It retries `PID_START_RETRIES` times; if `ps` keeps failing it logs and exits (`"exit": "no_pid_start"`) rather than write a lease with a NULL `pid_start` that nobody could verify. Its final lease clear never masks the loop's result: a failure there is logged.
-- **A `BUSY` beat is skipped.** A heartbeat that hits contention is logged and skipped, and the loop goes on to the next tick. `wait` does the same with a `BUSY` poll.
+- **Its heartbeat.** The daemon beats its lease at the start of every tick and again after every tick hook, so a slow tick is never mistaken for a hung daemon. A tick hook must return within `STALE_AFTER_S`, or call `daemon.beat(conn, clock)` itself while it works.
+- **A `BUSY` beat is skipped.** A heartbeat that hits contention is logged and skipped, and the loop goes on. `wait` does the same with a `BUSY` poll.
 - **`ensure`'s answers.** `already_running` (a fresh lease at this schema), `started`, `restarted`, `migrate_failed` (inside `MIGRATE_BACKOFF_S` of a recorded migration error), `restart_pending` and `stale_alive`.
-- **Stopping the previous daemon.** `ensure` stops a daemon whose lease is older than this code's schema and that is not proven dead, and a same-schema daemon whose lease is stale while its pid is proven alive with a matching start time (a hung daemon: a new one would exit at once on the singleton lock).
+- **Stopping the previous daemon.** `ensure` stops a daemon whose lease is older than this code's schema and that is not proven dead, and a daemon of this very schema whose lease is stale while its pid is proven alive with a matching start time (a hung daemon: a new one would exit at once on the singleton lock). A daemon of a **newer** schema is never signalled: the new daemon exits on the held singleton, and commands get `SCHEMA_TOO_NEW`. A stale same-schema lease whose liveness is unknown is not stopped either: a new daemon is simply started.
   - A stale lease with no `pid_start` cannot be verified (its pid may be reused): it is never signalled or waited on, and a new daemon simply starts (it exits if the singleton is still held).
+  - **The singleton `flock` is the authority on "gone".** The kernel drops it when the daemon exits, before its parent reaps it, so `ensure` checks it before any signal and inside both waits: free means the old daemon is gone (it exited, crashed, or is a zombie that `kill(pid, 0)` and `ps` still report alive), and the new daemon starts at once.
   - A daemon proven dead is not waited for.
   - SIGTERM goes only to a daemon proven alive whose identity is checkable (a recorded start time, or a fresh lease). A pid already gone at the signal is fine.
-  - The wait ends as soon as the lease is cleared or another daemon's pid holds it.
-  - When `DAEMON_RESTART_WAIT_S` passes, `ensure` sends SIGKILL only if the old pid is still proven alive, has the same start time, and its heartbeat has not moved since the SIGTERM; it then waits up to `KILL_WAIT_S` and starts the new daemon.
-  - Otherwise (liveness unknown, a heartbeat still moving, or a SIGKILL that did not take) it answers `restart_pending` for an older schema or `stale_alive` for the same one, and starts nothing. `wait` treats both as `restart_wait` (exit 5).
+  - The wait ends as soon as the lease is cleared or another daemon's pid holds it, the singleton is free, or the pid is proven dead.
+  - When `DAEMON_RESTART_WAIT_S` passes, `ensure` sends SIGKILL only if the old pid is still proven alive, has the same start time, and its heartbeat has not moved since the SIGTERM; it then waits up to `KILL_WAIT_S` (same exits) and starts the new daemon.
+  - Otherwise (liveness unknown with the singleton held, a heartbeat still moving, or a SIGKILL that did not take) it answers `restart_pending` for an older schema or `stale_alive` for the same one, and starts nothing. `wait` treats both as `restart_wait` (exit 5).
 
 ## Locks and caps
 
@@ -215,10 +217,10 @@ Before migrating an existing DB, the daemon backs it up to `QS_CP_BACKUP_DIR`, w
 
 Every tool runs through `run_recorded`:
 
-1. Verify the token. A call already finished under the key is replayed at once, before its steps are built: a deleted argument file or a task column cleared meanwhile cannot break the replay. Every `*_file` argument is read **once**, here, into a cache: a non-regular file (a FIFO, `/dev/stdin`) is `USAGE`, and a fresh call with a missing file is `USAGE` before any effect.
+1. Every `*_file` argument is read **once**, when the call starts (before the token check), into a cache. Then verify the token. A call already finished under the key is replayed at once, before its steps are built: a deleted argument file or a task column cleared meanwhile cannot break the replay. Otherwise a non-regular file (a FIFO, `/dev/stdin`) or a file that is not UTF-8 is `USAGE`, and a fresh call with a missing file is `USAGE`, before the claim and before any effect. A call whose in-flight holder released the key meanwhile becomes a fresh call at the claim, and needs every file too.
 2. Claim `tool_calls(tool, key)` before any effect.
 3. Probe: the probe is authoritative for each step it reports, done or not done.
-4. Run the missing steps under the locks or the cap, re-checking the token and lock ownership before each step. A step reads its file from the cache only when it runs, so a takeover whose effect step is already recorded (or found by the probe) never needs the file again.
+4. Run the missing steps under the locks or the cap, re-checking the token and lock ownership before each step. A step reads its file from the cache only when it runs, so a takeover whose effect step is already recorded (or found by the probe) never needs the file again. `spawn` and `resume` read their file before they stamp `launch_at`, so a takeover with the file gone is `USAGE` with nothing launched, and the same key works once the file is back.
 5. Record the call `succeeded` or `failed`.
 
 **Keys** are chosen by the caller: `msg:<id>` for a popped message, or `task:<id>:<purpose>` otherwise. A key is 1 to 200 characters out of `[A-Za-z0-9._:/-]` (`USAGE` otherwise), so it can never break a `gh` search query. Replaying the same key never repeats an effect. The key's `args_hash` covers the arguments and the content of every `*_file` argument: the same key with an edited file is a `CONFLICT`.
@@ -230,7 +232,7 @@ A probe that cannot tell (a failed or unparseable `gh` listing or `gh pr view`) 
 | `worktree-create` (`phase`) | run | `<MAIN>` | `main-checkout` | none; `setup_task.py` is idempotent |
 | `worktree-cleanup` | run | `<MAIN>` | `main-checkout` | directory absent and unregistered. Refuses the main checkout and a directory whose `.git` is not a file (`POLICY_REFUSED`); a path another non-terminal task shares only clears this task's column (`shared_with`) |
 | `gate` (`mode`, `paths`) | run, or node (own task) | worktree | `gates` slot | none; safe to re-run |
-| `spawn` (`agent`, `model?`, `permission_mode`, `prompt_file`, `replace?`) | run | worktree | node cap (`--replace` frees the replaced node's place first) | the reserved row through `spawn_tool_key`, and the listing by name. A launch never listed within `LAUNCH_SETTLE_S` is reaped and relaunched; the relaunch rotates the row's nonce (the first launch's token is `STALE_TOKEN`) and its name (`<name>-r<n>`), so a late first launch is never adopted |
+| `spawn` (`agent`, `model?`, `permission_mode`, `prompt_file`, `replace?`) | run | worktree | node cap (`--replace` frees the replaced node's place first) | the reserved row through `spawn_tool_key`, and the listing by name. A launch never listed within `LAUNCH_SETTLE_S` is reaped. If the replay that re-takes the reaped row sees its launch listed after all, it adopts it (same name, same nonce). Otherwise it relaunches: the relaunch rotates the row's nonce (the first launch's token is `STALE_TOKEN`) and its name (`<name>-r<n>`), so a late first launch is never adopted, and a listing that shows it later gets it a best-effort `claude stop <id>` |
 | `resume` (`message_file`) | run | worktree | node cap | the row through `spawn_tool_key`, and the listing by name and `startedAt` |
 | `issue-create` (`title`, `body_file`, `labels`) | run | `<MAIN>` | — | the exact `<!-- qs-cp-key: … -->` marker in the issue bodies: first a consistent listing of the 100 newest issues (the search index lags), then, on a miss, `gh issue list --search` (`--limit 100`) |
 | `pr-create` (`title`, `summary_file`) | run, or node (own task) | worktree | — | the marker in the PR bodies of the branch |
@@ -240,7 +242,7 @@ A probe that cannot tell (a failed or unparseable `gh` listing or `gh pr view`) 
 Notes:
 
 - Every built-in tool except `worktree-cleanup` refuses a terminal task with `INVALID_STATE`, recorded `failed`.
-- `merge` also requires the task to be `ready_to_merge`, unless the PR is already merged. Once the PR is merged, `merge_sha` is recorded when known (a missing `mergeCommit` is read once more; an unknown sha never overwrites a recorded one). A task already `merged` is a noop success (`noop: true`). If the task left `ready_to_merge` for any other state meanwhile, the call still succeeds, with `state_conflict: {"expected": "ready_to_merge", "actual": …}`, for the orchestrator or the maintainer to reconcile; it is also recorded as a `hook_events` `alert` (hook `tool:merge`), so `snapshot` shows it.
+- `merge` also requires the task to be `ready_to_merge`, unless the PR is already merged. Once the PR is merged, `merge_sha` is recorded when known (a missing `mergeCommit` is read once more, after `MERGE_SHA_RETRY_S`; an unknown sha never overwrites a recorded one). A task already `merged` is a noop success (`noop: true`). If the task left `ready_to_merge` for any other state meanwhile, the call still succeeds, with `state_conflict: {"expected": "ready_to_merge", "actual": …}`, for the orchestrator or the maintainer to reconcile; it is also recorded as a `hook_events` `alert` (hook `tool:merge`), so `snapshot` shows it.
 - `merge` is refused by the default merge policy until child 7 installs one (`merge_policy.install`).
 
 **Outcomes.**
@@ -299,8 +301,8 @@ def invoke(name, *, key, task_id, args, token, actor, ctx=None) -> dict
 
 **The DB-access rule** (`PreToolUse`, Bash): a segment that names `harness_state.db` is denied unless it starts with a read-only program (`grep`, `rg`, `git`, `ls`, `sed -n`, `cat`, `head`, `tail`, `wc`, `find`, `echo`) or is a `cp.py` call. Even then:
 
-- a redirect onto the DB file itself (`harness_state.db`, `-wal`, `-shm`) is denied, inside a `cp.py` segment too; a sibling such as `> harness_state.db.json` or `.bak` is allowed;
-- `find` stays read-only only without `-delete`, `-exec`, `-execdir`, `-ok`, `-okdir`, `-fprint`, `-fprint0`, `-fprintf` or `-fls`.
+- a redirect onto the DB file itself (`harness_state.db`, `-wal`, `-shm`) is denied, inside a `cp.py` segment too; a sibling such as `> harness_state.db.json`, `.bak`, `-wal.bak` or `-backup.sql` is allowed;
+- `find` stays read-only only without `-delete`, `-exec`, `-execdir`, `-ok`, `-okdir`, `-fprint`, `-fprint0`, `-fprintf` or `-fls`, quoted or not (`'-delete'` is `-delete`).
 
 Whether `--settings` hooks survive a bare `claude --bg --resume` is unverified, an open point for 6b. `pre-push` is git-level, so it applies regardless.
 
@@ -318,7 +320,7 @@ The shim and the settings commands run `<MAIN>/venv/bin/python`. Without it they
 
 ## Module constants
 
-Each is overridable by a function argument.
+Most are overridable by a function argument. These are module-level only (tests patch the module): `MIGRATE_BUSY_RETRIES`, `PID_START_RETRIES`, `PID_START_RETRY_S`, `KILL_WAIT_S`, `MAX_TIME_S`, `MIN_POLL_S`, `IDENTIFY_POLL_S` and `MERGE_SHA_RETRY_S`.
 
 | constant | value | module |
 |---|---|---|
@@ -332,9 +334,11 @@ Each is overridable by a function argument.
 | `MIGRATE_BACKOFF_S` | 300 | `daemon` |
 | `MIGRATE_BUSY_RETRIES` | 6 | `daemon` |
 | `PID_START_RETRIES` | 3 | `daemon` |
+| `PID_START_RETRY_S` | 1 | `daemon` |
 | `KILL_WAIT_S` | 2 | `daemon` |
 | `MAX_TIME_S` / `MIN_POLL_S` | 86400 / 0.05 | `cli` |
 | `LAUNCH_SETTLE_S` | 60 | `nodes` |
+| `IDENTIFY_POLL_S` / `MERGE_SHA_RETRY_S` | 2 / 2 | `tools` |
 | `GATE_WAIT_S` | 1800 | `locks` |
 | `LOCK_WAIT_S` | 600 | `locks` |
 | `DIGEST_MAX_BYTES` | 16 KiB | `reports` |
@@ -346,13 +350,13 @@ Each is overridable by a function argument.
 | `Clock` | `SystemClock` | `FakeClock`: `sleep` advances time |
 | `Runner` | `subprocess.run` with an environment delta | `FakeRunner`: records argv, cwd, environment delta and `detach` |
 | `ProcessProbe` | `kill(pid, 0)` plus `ps -o lstart=` (UTC, C locale; a failed `ps` is unknown), and `killpg` | `FakeProbe`: a fresh pid per call, reaped when the CLI call returns |
-| `ClaudeCli` | `claude agents --json`, `claude --bg …` | `FakeClaude`: a scripted listing |
+| `ClaudeCli` | `claude agents --json`, `claude --bg …`, `claude stop <id>` | `FakeClaude`: a scripted listing |
 | `ProcessSetup` | `setpgid`, `signal.signal` | a recorder: pytest's own process never changes group or gets a handler |
 | `Popen` | `subprocess.Popen`, for `ensure` | a recorder |
 | `faults.hit(name)` | no-op | `faults.arm(name, exc, skip=n)` |
 | `merge_policy` | refuses | `install(fn)` |
 | `export.LEDGER_SECTIONS` | empty: "No ledger recorded." | #375 fills it |
-| the daemon's `tick_hooks` | none | child 14's active loop |
+| the daemon's `tick_hooks` | none | child 14's active loop. A tick hook must return within `STALE_AFTER_S` or beat the lease itself (`daemon.beat(conn, clock)`); the daemon beats before and after every hook |
 
 ## Conventions: what no hook enforces
 
@@ -362,15 +366,15 @@ Each is overridable by a function argument.
 - **`run claim --session-id` trusts its caller.** The id names the session claiming the lease, and nothing checks that the caller is that session. The threat model covers agent mistakes, not adversarial sessions: forging another session's id is a deliberate act.
 - `gh` issue and PR edits made outside the tools.
 - `SendMessage` from an unregistered session.
-- DB access that slips past the Bash segment rule, for example through an allowlisted program, or code that reads the path from a variable. Known gaps: `sed -i` behind an allowlisted program name, `$(…)` command substitution, `git rm`. The hook guards against accidents; it is not a sandbox.
+- DB access that slips past the Bash segment rule, for example through an allowlisted program, or code that reads the path from a variable. Known gaps: `sed -i` behind an allowlisted program name, `$(…)` command substitution, `git rm`, and a `find` whose pattern does not name `harness_state.db` literally (`find . -name 'harness_state*' -delete`). The hook guards against accidents; it is not a sandbox.
 - **`gh pr merge` through a wrapper.** The merge rule matches a segment that starts with `gh pr merge`; a wrapper (`env gh pr merge`, `command gh …`, an alias, a script, `gh api`) is not caught.
 - **The fencing window on external effects.** GitHub never sees the token. A superseded session's already-started step can still land; its next step is refused. `merge` narrows the window with `--match-head-commit`.
 - **The session-lock fallback limit.**
   - When the liveness listing fails, a session-held lock falls back to the pid stamped at the session's last use. After an app restart that pid can be stale, so the lock can be freed while the session is alive.
   - A node that is not listed again, such as a reaped `--bg` node not yet resumed, also loses its lock.
   - The branch move is a ref compare-and-swap, so the cost is redoing an integration step, never corruption.
-- **The launch-settle limit.** A `claude --bg` session that only appears in the listing more than `LAUNCH_SETTLE_S` after its launch may be launched twice: a same-key replay reaps the unlisted launch and relaunches it. The relaunch rotates the node's nonce and name, so the late first session holds a `STALE_TOKEN` and is never adopted; it still runs until the maintainer archives it.
-- **A permanently unknown `ps`.** When `ps` keeps failing, an older daemon's liveness stays unknown: `ensure` never signals it and answers `restart_pending` (or starts a new daemon for a stale same-schema lease) until `ps` answers again.
+- **The launch-settle limit.** A `claude --bg` session that only appears in the listing more than `LAUNCH_SETTLE_S` after its launch may be launched twice: a same-key replay reaps the unlisted launch and relaunches it, unless the re-take sees the late launch listed, which it then adopts. The relaunch rotates the node's nonce and name, so the late first session holds a `STALE_TOKEN` and is never adopted; when a later listing shows it, the tool sends it a best-effort `claude stop <id>`, and otherwise it ends on its first `cp.py` call (`STALE_TOKEN`, exit 3). The `resume` equivalent is weaker: a late duplicate `--resume` keeps a valid token, because a resumed node's nonce cannot rotate (the session keeps its id and its prompt).
+- **A permanently unknown `ps`.** When `ps` keeps failing, an older daemon's liveness stays unknown. If nothing holds the singleton `flock`, `ensure` knows it is gone and starts the new daemon; while the `flock` is held, it never signals it and answers `restart_pending` (or starts a new daemon for a stale same-schema lease) until `ps` answers again.
 - **The hook `session_id` assumption.** The hook's stdin `session_id`, `$CLAUDE_CODE_SESSION_ID` and the `sessionId` of `claude agents --json` are assumed to be the same identifier. The last two were verified equal on 2026-10-04; the hook field is unverified.
 - **`--settings` hooks after a bare resume:** unverified.
 - **The orchestrator's hooks are unwired until child 9.**
