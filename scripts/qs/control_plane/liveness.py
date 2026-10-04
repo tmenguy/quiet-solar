@@ -48,7 +48,7 @@ class ProcessProbe:
             return False
         try:
             os.kill(pid, 0)
-        except ProcessLookupError:
+        except ProcessLookupError, OverflowError:  # OverflowError: no such pid can exist
             return False
         except PermissionError:
             pass  # exists, owned by someone else
@@ -64,7 +64,7 @@ class ProcessProbe:
             return False
         try:
             os.killpg(pgid, 0)
-        except ProcessLookupError:
+        except ProcessLookupError, OverflowError:
             return False
         except PermissionError:
             return True
@@ -125,9 +125,13 @@ def _opt_str(entry: dict[str, Any], key: str) -> str | None:
     return None if value is None else str(value)
 
 
-def _opt_int(entry: dict[str, Any], key: str) -> int | None:
+PID_MAX = 2**31  # pid_t is 32-bit signed: anything above is garbage (and overflows os.kill)
+
+
+def _opt_int(entry: dict[str, Any], key: str, upper: int | None = None) -> int | None:
     value = entry.get(key)
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+    ok = isinstance(value, int) and not isinstance(value, bool) and value > 0 and (upper is None or value < upper)
+    return value if ok else None
 
 
 class ClaudeCli:
@@ -158,7 +162,7 @@ class ClaudeCli:
                 kind=_opt_str(e, "kind"),
                 status=_opt_str(e, "status"),
                 state=_opt_str(e, "state"),
-                pid=_opt_int(e, "pid"),
+                pid=_opt_int(e, "pid", PID_MAX),
                 started_at_ms=_opt_int(e, "startedAt"),
             )
             for e in data

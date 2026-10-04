@@ -77,11 +77,28 @@ def _backup(conn: sqlite3.Connection, version: int) -> Path:
     return dest
 
 
+def _is_busy(exc: sqlite3.OperationalError) -> bool:
+    """SQLITE_BUSY / SQLITE_LOCKED, extended codes included (``BUSY_SNAPSHOT`` is 517)."""
+    return (getattr(exc, "sqlite_errorcode", 0) & 0xFF) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+
+
 def migrate(db_path: Path, *, role: str, lock_timeout: float = MIGRATE_LOCK_TIMEOUT_S) -> dict[str, Any]:
-    """Create or migrate ``db_path`` to the current schema → ``{from, to, backup}``."""
+    """Create or migrate ``db_path`` to the current schema → ``{from, to, backup}``.
+
+    Contention anywhere (connect, ``user_version``, the backup, a step, ``COMMIT``) is ``BUSY``, which the
+    daemon retries without the backoff sidecar.
+    """
+    try:
+        return _migrate(Path(db_path), role=role, lock_timeout=lock_timeout)
+    except sqlite3.OperationalError as exc:
+        if _is_busy(exc):
+            raise errors.CpError("BUSY", f"database busy while migrating: {exc}") from exc
+        raise
+
+
+def _migrate(db_path: Path, *, role: str, lock_timeout: float) -> dict[str, Any]:
     from . import db  # db imports this module for the version check
 
-    db_path = Path(db_path)
     with db.file_lock(paths.sidecar(db_path, ".migrate.lock"), exclusive=True, timeout=lock_timeout) as got:
         if not got:
             raise errors.CpError("BUSY", f"another migration of {db_path} holds the lock")

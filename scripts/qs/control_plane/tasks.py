@@ -117,6 +117,13 @@ def _run_scope(conn: sqlite3.Connection, who: tokens.Principal, run_ref: str | N
     return str(run["id"])
 
 
+def _same_run(row: sqlite3.Row, who: tokens.Principal) -> sqlite3.Row:
+    """A referenced task of another run is refused (the ``tokens.require`` rule: NULL or the caller's run)."""
+    if row["run_id"] not in (None, who.run_id):
+        raise errors.CpError("CONFLICT", f"task {row['id']} belongs to run {row['run_id']}, not {who.run_id}")
+    return row
+
+
 def add(
     conn: sqlite3.Connection,
     clock: clock_mod.Clock,
@@ -138,10 +145,10 @@ def add(
         who = tokens.require(conn, token, kinds={"run"})
         run_id = _run_scope(conn, who, run_ref)
         if parent is not None:
-            get(conn, parent)
+            _same_run(get(conn, parent), who)
         item_k = None
         if item_of is not None:
-            owner = get(conn, item_of)
+            owner = _same_run(get(conn, item_of), who)
             if not owner["is_deliverable"]:
                 raise errors.CpError("INVALID_STATE", f"task {item_of} is not a deliverable")
             item_k = allocate_item_k(conn, item_of)

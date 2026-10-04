@@ -497,3 +497,36 @@ class TestShimPythonGuard:
         proc = subprocess.run(["sh", "-c", command], input="{}", capture_output=True, text=True, check=False)
         assert proc.returncode == 0 and proc.stdout == "" and "3.14" in proc.stderr
         assert not (stub.parent / "calls.jsonl").exists()
+
+
+# --------------------------------------------------------------------------- review fix #02 (G7)
+
+
+class TestReviewFix02:
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "find . -name harness_state.db -delete",
+            "find /m -name 'harness_state.db*' -exec rm {} +",
+            "find . -name harness_state.db -execdir rm {} ;",
+            "find . -name harness_state.db -ok rm {} ;",
+            "find . -name harness_state.db -fprint /tmp/x",
+            "cp.py snapshot > harness_state.db",
+            "echo x > harness_state.db-shm",
+            "echo x >harness_state.db-wal",
+        ],
+    )
+    def test_find_actions_and_db_redirects_are_denied(self, command: str, db_path) -> None:
+        assert denied(pre_tool("S-x", "Bash", command=command))
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "find . -name harness_state.db",
+            "find . -name harness_state.db -print",
+            "venv/bin/python scripts/qs/cp.py snapshot > harness_state.db.json",
+            "cat harness_state.db > harness_state.db.bak",
+        ],
+    )
+    def test_read_only_find_and_sibling_redirects_are_allowed(self, command: str, db_path) -> None:
+        assert not denied(pre_tool("S-x", "Bash", command=command))

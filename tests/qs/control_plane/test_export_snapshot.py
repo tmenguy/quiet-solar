@@ -253,3 +253,21 @@ def test_snapshot_orders_text_ids_by_insertion(world, fake_clock) -> None:
         insert_task(world["db"], task_id, world["run"])
     ids = [t["id"] for t in run_cli("snapshot")[1]["tasks"]]
     assert ids.index("T9") < ids.index("T10")
+
+
+# --------------------------------------------------------------------------- review fix #02 (G19)
+
+
+def test_task_show_orders_questions_by_creation_then_insertion(migrated) -> None:
+    from .conftest import insert_task, open_run, run_cli, sql
+
+    run_id, token = open_run()
+    insert_task(migrated, "T1", run_id)
+    for qid in ("Q9", "Q10"):  # same created_at: insertion order, never the TEXT id ("Q10" < "Q9")
+        sql(
+            migrated,
+            "INSERT INTO questions (id, run_id, task_id, text, state, created_at) VALUES (?, ?, 'T1', 'q', 'open', 'x')",
+            [qid, run_id],
+        )
+    code, out = run_cli("task", "show", "--task", "T1")
+    assert code == 0 and [q["id"] for q in out["questions"]] == ["Q9", "Q10"]

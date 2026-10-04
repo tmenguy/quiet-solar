@@ -192,3 +192,25 @@ class TestTriState:
             json.dumps([{"sessionId": "a", "pid": 0}, {"sessionId": "b", "pid": -3}, {"sessionId": "c", "pid": 9}]),
         )
         assert [a.pid for a in liveness.ClaudeCli(fake).agents()] == [None, None, 9]
+
+
+# --------------------------------------------------------------------------- review fix #02 (G17)
+
+
+class TestReviewFix02:
+    def test_listing_pids_beyond_the_pid_range_are_dropped(self) -> None:
+        fake = FakeRunner()
+        fake.on(
+            ["claude", "agents"], json.dumps([{"sessionId": "a", "pid": 2**31}, {"sessionId": "b", "pid": 2**31 - 1}])
+        )
+        assert [a.pid for a in liveness.ClaudeCli(fake).agents()] == [None, 2**31 - 1]
+
+    def test_an_overflowing_pid_is_dead(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        probe = liveness.ProcessProbe(FakeRunner())
+
+        def overflow(*a: object) -> None:
+            raise OverflowError("signed integer is greater than maximum")
+
+        monkeypatch.setattr(liveness.os, "kill", overflow)
+        monkeypatch.setattr(liveness.os, "killpg", overflow)
+        assert probe.alive(2**40, None) is False and probe.group_alive(2**40) is False

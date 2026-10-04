@@ -280,3 +280,21 @@ def test_apply_transition_compare_and_set(migrated, run, conn) -> None:
     with db.write(conn):
         out = tasks.apply_transition(conn, clock.FakeClock(), "T1", "ready", actor="x", node=False, expect="proposed")
     assert out == {"task_id": "T1", "from": "proposed", "to": "ready"}
+
+
+# --------------------------------------------------------------------------- review fix #02 (G6)
+
+
+class TestReviewFix02:
+    def test_parent_and_item_of_are_scoped_to_the_callers_run(self, migrated, run) -> None:
+        run_a, token_a = run
+        add(token_a, "--run", run_a, "--deliverable")  # T1, run A's deliverable
+        add(token_a)  # T2, a later task (no run): anyone may attach to it
+        run_b, token_b = open_run("r2", session="S-other")
+        for flag in ("--item-of", "--parent"):
+            code, out = run_cli("task", "add", "--title", "x", "--kind", "feature", flag, "T1", "--token", token_b)
+            assert code == 8 and out["error"] == "CONFLICT" and run_a in out["detail"], flag
+        assert sql(migrated, "SELECT next_item_k FROM tasks WHERE id = 'T1'")[0][0] == 1
+        assert sql(migrated, "SELECT count(*) FROM tasks")[0][0] == 2
+        assert add(token_b, "--parent", "T2")["task_id"] == "T3"
+        assert add(token_a, "--run", run_a, "--item-of", "T1")["item_k"] == 1

@@ -521,3 +521,16 @@ class TestReviewFix01:
         with hold(world, ["main-checkout"], world["tok"], H(1)) as held:
             assert held.locks == ["main-checkout"]
         assert "release failed" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- review fix #02 (G16)
+
+
+class TestReviewFix02:
+    def test_a_listed_pid_that_no_longer_exists_skips_the_restamp(self, world, monkeypatch) -> None:
+        acquire(world, world["n1"], "S-n1")
+        world["claude"].listing = [agent("S-n1", pid=555)]
+        monkeypatch.setattr(world["probe"], "start_of", lambda pid: None)  # gone between the listing and ps
+        with hold(world, ["integration:QS_5"], world["n1"], H(11)):
+            row = lock_row(world)
+            assert (row["holder_pid"], row["holder_pid_start"]) == (201, "start-201")  # kept, never a NULL start

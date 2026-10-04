@@ -224,9 +224,11 @@ def _take_lock(
             agent = liveness.find(facts.listing, session_id=row["holder_session_id"])
             if agent is not None and agent.pid is not None:
                 try:
-                    restamp = (agent.pid, probe.start_of(agent.pid))
+                    start = probe.start_of(agent.pid)
                 except liveness.ProbeUnknown:
-                    restamp = None  # keep the recorded pid
+                    start = None
+                # unknown, or gone since the listing: keep the recorded pid (never a NULL start)
+                restamp = None if start is None else (agent.pid, start)
         blocker: sqlite3.Row | None = None
         with db.write(conn):
             who = tokens.require(conn, held.token, kinds={"run", "node"}, allow_stopped=held.allow_stopped)

@@ -2,8 +2,8 @@
 
 It checks the token first (a stale token exits 3 with no write), registers a
 ``waiters`` row, makes sure the daemon runs, then polls: heartbeat, token,
-schema version (a migration, or an older daemon that will not stop
-(``restart_pending``) → exit 5 with ``restart_wait``), queue. A ``BUSY`` poll
+schema version (a migration, or a previous daemon that will not stop
+(``restart_pending`` / ``stale_alive``) → exit 5 with ``restart_wait``), queue. A ``BUSY`` poll
 is logged and skipped. It never pops. The ``waiters`` row is always removed
 on exit, SIGTERM included.
 """
@@ -34,9 +34,12 @@ def live_waiter(conn: sqlite3.Connection, probe: liveness.ProcessProbe, run_id: 
 
 
 def _ensure(ensure: Callable[[], dict[str, Any]]) -> None:
-    if ensure().get("status") == "restart_pending":
+    status = ensure().get("status")
+    if status in ("restart_pending", "stale_alive"):
         raise errors.CpError(
-            "SCHEMA_TOO_NEW", "an older daemon is still running: restart `wait` shortly", restart_wait=True
+            "SCHEMA_TOO_NEW",
+            f"the previous daemon is still running ({status}): restart `wait` shortly",
+            restart_wait=True,
         )
 
 

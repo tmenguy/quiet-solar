@@ -169,6 +169,8 @@ def task_show(conn: sqlite3.Connection | None, task_id: str) -> dict[str, Any]:
             ],
             "nodes": _rows(conn, "SELECT * FROM nodes WHERE task_id = ? ORDER BY generation", (task_id,)),
             "reports": _rows(conn, "SELECT * FROM reports WHERE task_id = ? ORDER BY id", (task_id,)),
-            "questions": _rows(conn, "SELECT * FROM questions WHERE task_id = ? ORDER BY created_at, id", (task_id,)),
+            "questions": _rows(
+                conn, "SELECT * FROM questions WHERE task_id = ? ORDER BY created_at, rowid", (task_id,)
+            ),
             "decisions": _rows(conn, "SELECT * FROM decisions WHERE task_id = ? ORDER BY id", (task_id,)),
         }

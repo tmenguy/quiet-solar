@@ -250,3 +250,35 @@ def test_lock_timeout_must_be_finite_and_not_negative(value: str) -> None:
     argv = ["lock", "acquire", "--name", "integration:QS_1", "--purpose", "p", "--token", "x", "--session-id", "S"]
     code, out = run_cli(*argv, f"--timeout={value}")
     assert code == 2 and out["error"] == "USAGE"
+
+
+# --------------------------------------------------------------------------- review fix #02 (G15)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["msg", "pop", "--run", "R1", "--as", "orchestrator", "--token", "x", "--visibility=86401"],
+        ["wait", "--run", "R1", "--token", "x", "--poll=86401"],
+        ["wait", "--run", "R1", "--token", "x", "--timeout=1e9"],
+        ["wait", "--run", "R1", "--token", "x", "--poll=0.01"],
+        ["lock", "acquire", "--name", "integration:QS_1", "--purpose", "p", "--token", "x", "--session-id", "S"]
+        + ["--timeout=86401"],
+    ],
+)
+def test_time_flags_are_bounded(argv: list[str]) -> None:
+    code, out = run_cli(*argv)
+    assert code == 2 and out["error"] == "USAGE"
+
+
+def test_wait_poll_must_not_exceed_the_timeout(migrated) -> None:
+    run_id, token = open_run()
+    code, out = run_cli("wait", "--run", run_id, "--token", token, "--timeout", "5", "--poll", "10")
+    assert code == 2 and out["error"] == "USAGE" and "--poll" in out["detail"]
+    assert sql(migrated, "SELECT count(*) FROM waiters")[0][0] == 0
+
+
+def test_time_flags_at_their_bounds_are_accepted() -> None:
+    from control_plane import cli
+
+    assert cli.POSITIVE("86400") == 86400.0 and cli.NON_NEGATIVE("0") == 0.0 and cli.POLL("0.05") == 0.05

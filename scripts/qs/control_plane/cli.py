@@ -100,7 +100,13 @@ def _daemon_status(io: Io, result: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _float_flag(*, allow_zero: bool) -> Callable[[str], float]:
+MAX_TIME_S = 86400.0
+MIN_POLL_S = 0.05
+
+
+def _float_flag(*, allow_zero: bool, minimum: float = 0.0) -> Callable[[str], float]:
+    """A time flag: finite, ``> 0`` (or ``>= 0``), at least ``minimum``, at most a day."""
+
     def parse(text: str) -> float:
         try:
             value = float(text)
@@ -108,6 +114,8 @@ def _float_flag(*, allow_zero: bool) -> Callable[[str], float]:
             raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
         if not math.isfinite(value) or value < 0 or (value == 0 and not allow_zero):
             raise argparse.ArgumentTypeError(f"must be finite and {'>= 0' if allow_zero else '> 0'}: {text!r}")
+        if value < minimum or value > MAX_TIME_S:
+            raise argparse.ArgumentTypeError(f"must be between {minimum:g} and {MAX_TIME_S:g} seconds: {text!r}")
         return value
 
     return parse
@@ -115,6 +123,7 @@ def _float_flag(*, allow_zero: bool) -> Callable[[str], float]:
 
 POSITIVE = _float_flag(allow_zero=False)
 NON_NEGATIVE = _float_flag(allow_zero=True)
+POLL = _float_flag(allow_zero=False, minimum=MIN_POLL_S)
 
 
 @contextmanager
@@ -356,10 +365,12 @@ def _conf_wait(p: argparse.ArgumentParser) -> None:
     p.add_argument("--run", required=True)
     _token(p)
     p.add_argument("--timeout", type=POSITIVE, default=None)
-    p.add_argument("--poll", type=POSITIVE, default=None)
+    p.add_argument("--poll", type=POLL, default=None)
 
 
 def _wait(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    if args.timeout is not None and args.poll is not None and args.poll > args.timeout:
+        raise errors.CpError("USAGE", "--poll must not exceed --timeout")
     path = paths.select_db()
     with connection(io, "write") as conn:
         assert conn is not None

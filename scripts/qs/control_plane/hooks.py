@@ -54,7 +54,8 @@ HOOK_TIMEOUT_S = 10
 DB_BASENAMES = frozenset({"harness_state.db", "harness_state.db-wal", "harness_state.db-shm"})
 READ_ONLY_PROGRAMS = frozenset({"grep", "rg", "git", "ls", "sed", "cat", "head", "tail", "wc", "find", "echo"})
 _SEGMENT_SPLIT = re.compile(r"&&|\|\||;|\||\n")
-_REDIRECT_ONTO_DB = re.compile(r">\s*\S*harness_state\.db")
+_REDIRECT_ONTO_DB = re.compile(r">\s*\S*harness_state\.db(?:-wal|-shm)?(?![\w.])")  # not .db.json / .db.bak
+_FIND_ACTIONS = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"})
 STOP_QUEUE = "queue"
 STOP_WAIT = "wait"
 
@@ -218,6 +219,8 @@ def db_access_denial(tool_name: str, tool_input: dict[str, Any]) -> str | None:
         first = words[0]
         if not (first in READ_ONLY_PROGRAMS and (first != "sed" or "-n" in words)):
             return refused
+        if first == "find" and _FIND_ACTIONS.intersection(words):
+            return refused  # find deletes, runs commands or writes files with these actions
     return None
 
 

@@ -226,12 +226,13 @@ def test_a_busy_heartbeat_keeps_waiting(migrated, run, fake_clock, tmp_path, mon
     assert _waiters(migrated) == 0
 
 
-def test_restart_pending_from_ensure_is_restart_wait(migrated, run, monkeypatch) -> None:
-    """F9: an older daemon still running → exit 5 with ``restart_wait``, like a migration mid-wait."""
+@pytest.mark.parametrize("status", ["restart_pending", "stale_alive"])
+def test_restart_pending_from_ensure_is_restart_wait(migrated, run, monkeypatch, status) -> None:
+    """F9 / G18: a previous daemon still running → exit 5 with ``restart_wait``, like a migration mid-wait."""
     from control_plane import cli
 
     run_id, token = run
-    monkeypatch.setattr(cli, "ensure_daemon", lambda io, path=None: {"status": "restart_pending", "pid": 7})
+    monkeypatch.setattr(cli, "ensure_daemon", lambda io, path=None: {"status": status, "pid": 7})
     code, out = run_cli("wait", "--run", run_id, "--token", token)
-    assert code == 5 and out["restart_wait"] is True
+    assert code == 5 and out["restart_wait"] is True and status in out["detail"]
     assert _waiters(migrated) == 0

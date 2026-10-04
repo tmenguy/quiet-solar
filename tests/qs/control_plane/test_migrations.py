@@ -173,3 +173,36 @@ class TestReviewFix01:
         with pytest.raises(sqlite3.IntegrityError):
             migrations.migrate(migrated, role="test")
         assert _version(migrated) == 1 and "t" not in _tables(migrated)
+
+
+# --------------------------------------------------------------------------- review fix #02 (G14)
+
+
+class TestReviewFix02:
+    @pytest.mark.parametrize("code", [sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED, 517])  # 517: SQLITE_BUSY_SNAPSHOT
+    @pytest.mark.parametrize("where", ["user_version", "backup", "mid_step"])
+    def test_any_busy_or_locked_error_is_busy(self, migrated: Path, monkeypatch, code: int, where: str) -> None:
+        monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, V2))
+
+        def busy(*a: object, **k: object) -> object:
+            exc = sqlite3.OperationalError("database is locked")
+            exc.sqlite_errorcode = code  # type: ignore[attr-defined]
+            raise exc
+
+        if where == "user_version":
+            monkeypatch.setattr(db, "user_version", busy)
+        elif where == "backup":
+            monkeypatch.setattr(migrations, "_backup", busy)
+        else:
+            monkeypatch.setattr(faults, "hit", busy)  # inside the step, after its first statement
+        with pytest.raises(errors.CpError) as exc:
+            migrations.migrate(migrated, role="test")
+        assert exc.value.code == "BUSY" and _version(migrated) == 1
+
+    def test_another_operational_error_stays_itself(self, migrated: Path, monkeypatch) -> None:
+        def broken(*a: object, **k: object) -> object:
+            raise sqlite3.OperationalError("disk I/O error")
+
+        monkeypatch.setattr(db, "user_version", broken)
+        with pytest.raises(sqlite3.OperationalError):
+            migrations.migrate(migrated, role="test")

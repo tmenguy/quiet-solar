@@ -1,10 +1,13 @@
 """The daemon skeleton (§5.2) and ``ensure`` (§5.3) — the core of child 14's active loop.
 
-``run``: a singleton ``flock``, ``migrate(role="daemon")`` (retried on
-``BUSY``, which never writes the backoff sidecar), a ``daemon_lease`` row, a
-heartbeat (a ``BUSY`` beat is logged and skipped), the tick hooks, and an
-idle exit. ``ensure``: start the daemon when its lease is stale, restart it
-when it runs an older schema — ``restart_pending`` while the old one lives on.
+``run``: a singleton ``flock``, its own start time (retried; never a NULL
+``pid_start``), ``migrate(role="daemon")`` (retried on ``BUSY``, which never
+writes the backoff sidecar), a ``daemon_lease`` row, a heartbeat (a ``BUSY``
+beat is logged and skipped), the tick hooks, and an idle exit. ``ensure``:
+start the daemon when its lease is stale; stop an older-schema daemon, or a
+stale same-schema one proven alive, with SIGTERM, then SIGKILL when it is
+proven alive, the same process and its heartbeat frozen past the wait;
+``restart_pending`` / ``stale_alive`` while it cannot be proven gone.
 """
 
 from __future__ import annotations
@@ -28,6 +31,9 @@ STALE_AFTER_S = 30.0
 DAEMON_RESTART_WAIT_S = 15.0
 MIGRATE_BACKOFF_S = 300.0
 MIGRATE_BUSY_RETRIES = 6
+PID_START_RETRIES = 3
+PID_START_RETRY_S = 1.0
+KILL_WAIT_S = 2.0
 LOG_NAME = "harness_state.daemon.log"
 
 TickHook = Callable[[Any, clock_mod.Clock], None]
@@ -82,6 +88,10 @@ def run(
     with db.file_lock(paths.sidecar(db_path, ".daemon.lock"), exclusive=True, timeout=0) as got:
         if not got:
             return {"singleton": "held_elsewhere"}
+        me = _me_with_start(probe, clock)
+        if me is None:
+            _log("cannot read this process's start time: refusing to write a lease nobody could verify")
+            return {"ticks": 0, "exit": "no_pid_start"}
         try:
             migrated = _migrate(db_path, clock, tick_s)
         except Exception as exc:  # noqa: BLE001 — every failure but contention is recorded for `ensure`
@@ -95,7 +105,6 @@ def run(
             _log(f"migration failed: {error}")
             raise errors.CpError("INTERNAL", "migration failed", migrate_error=error) from exc
         paths.sidecar(db_path, ".migrate-error.json").unlink(missing_ok=True)
-        me = probe.me()
         conn = db.connect(db_path)
         try:
             with db.write(conn):
@@ -143,8 +152,21 @@ def run(
                     conn.execute(
                         "UPDATE daemon_lease SET pid = NULL, heartbeat_at = NULL WHERE id = 1 AND pid = ?", (me.pid,)
                     )
+            except errors.CpError as exc:  # never mask the loop's own result or error
+                _log(f"could not clear the daemon lease: {exc}")
             finally:
                 conn.close()
+
+
+def _me_with_start(probe: liveness.ProcessProbe, clock: clock_mod.Clock) -> liveness.Holder | None:
+    """This process, with its start time read (retried); ``None`` when ``ps`` keeps failing."""
+    for attempt in range(PID_START_RETRIES):
+        me = probe.me()
+        if me.pid_start is not None:
+            return me
+        if attempt + 1 < PID_START_RETRIES:
+            clock.sleep(PID_START_RETRY_S)
+    return None
 
 
 def read_lease(db_path: Path) -> dict[str, Any] | None:
@@ -173,6 +195,62 @@ def _fresh(lease: dict[str, Any] | None, clock: clock_mod.Clock, stale_after_s: 
         return False
     elapsed = clock_mod.age(clock, lease["heartbeat_at"])
     return elapsed is not None and elapsed < stale_after_s
+
+
+def _signal(kill: Callable[[int, int], None], pid: int, sig: int) -> bool:
+    """Send ``sig``; ``False`` when the process is already gone."""
+    try:
+        kill(pid, sig)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _stop_old(
+    lease: dict[str, Any],
+    *,
+    alive: bool | None,
+    fresh: bool,
+    pending: str,
+    db_path: Path,
+    clock: clock_mod.Clock,
+    probe: liveness.ProcessProbe,
+    kill: Callable[[int, int], None],
+    restart_wait_s: float,
+) -> dict[str, Any] | None:
+    """Stop the daemon of ``lease`` → ``None`` once it is gone, else ``{"status": pending, "pid": …}``.
+
+    SIGTERM only when it is proven alive and its identity is checkable (a recorded start time, or a fresh
+    lease); SIGKILL once the wait passes only when it is still proven alive, the same process (its start
+    time matches) and its heartbeat has not moved since the SIGTERM — a hung daemon. Unknown liveness
+    never gets a signal: ``pending``.
+    """
+    old_pid, start = lease["pid"], lease["pid_start"]
+    signalled = alive is True and (start is not None or fresh)
+    if signalled and not _signal(kill, old_pid, signal.SIGTERM):
+        return None
+    deadline = clock.now().timestamp() + restart_wait_s
+    while True:
+        current = read_lease(db_path)
+        if current is None or current["pid"] != old_pid:
+            return None  # gone, or replaced by another daemon
+        if clock.now().timestamp() >= deadline:
+            break
+        clock.sleep(db.POLL_S)
+    now_alive = probe.alive(old_pid, start)
+    if now_alive is False:
+        return None
+    hung = signalled and now_alive is True and start is not None and current["heartbeat_at"] == lease["heartbeat_at"]
+    if hung:
+        if not _signal(kill, old_pid, signal.SIGKILL):
+            return None
+        kill_deadline = clock.now().timestamp() + KILL_WAIT_S
+        while probe.alive(old_pid, start) is not False:
+            if clock.now().timestamp() >= kill_deadline:
+                return {"status": pending, "pid": old_pid}
+            clock.sleep(db.POLL_S)
+        return None
+    return {"status": pending, "pid": old_pid}
 
 
 def ensure(
@@ -204,24 +282,30 @@ def ensure(
         if elapsed is not None and elapsed < migrate_backoff_s:
             return {"status": "migrate_failed", "error": error.get("error")}
     status = "started"
-    older = lease is not None and lease["pid"] is not None and lease["schema_version"] < target
-    alive = probe.alive(lease["pid"], lease["pid_start"]) if older and lease is not None else False
-    if older and lease is not None and (fresh or alive is not False):
-        old_pid = lease["pid"]
-        # An older daemon, alive (fresh or hung) or freshly beating: stop it before starting this code's.
-        status = "restarted"
-        if alive is True:
-            kill(old_pid, signal.SIGTERM)  # never on "unknown": the pid may have been reused
-        deadline = clock.now().timestamp() + restart_wait_s
-        while True:
-            current = read_lease(db_path)
-            if current is None or current["pid"] is None:
-                break
-            if clock.now().timestamp() >= deadline:
-                if probe.alive(old_pid, lease["pid_start"]) is not False:
-                    return {"status": "restart_pending", "pid": old_pid}
-                break
-            clock.sleep(db.POLL_S)
+    if lease is not None and lease["pid"] is not None:
+        older = lease["schema_version"] < target
+        # A stale lease with no start time cannot be verified (its pid may be reused): never signalled or
+        # waited on — a new daemon that finds the singleton held simply exits.
+        checkable = lease["pid_start"] is not None or fresh
+        alive = probe.alive(lease["pid"], lease["pid_start"]) if checkable else False
+        stuck = not older and alive is True and lease["pid_start"] is not None  # stale, same schema, alive
+        if (older and alive is not False) or stuck:
+            outcome = _stop_old(
+                lease,
+                alive=alive,
+                fresh=fresh,
+                pending="restart_pending" if older else "stale_alive",
+                db_path=db_path,
+                clock=clock,
+                probe=probe,
+                kill=kill,
+                restart_wait_s=restart_wait_s,
+            )
+            if outcome is not None:
+                return outcome
+            status = "restarted"
+        elif older and fresh:
+            status = "restarted"  # a fresh older lease whose pid is proven dead: nothing to wait for
     if argv is None:
         venv_python = main_dir / "venv" / "bin" / "python"
         python = str(venv_python) if venv_python.exists() else sys.executable
