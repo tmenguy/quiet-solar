@@ -26,8 +26,10 @@ from . import (
     decisions,
     errors,
     liveness,
+    locks,
     messages,
     migrations,
+    nodes,
     paths,
     procsetup,
     questions,
@@ -575,6 +577,58 @@ def _digest_put(args: argparse.Namespace, io: Io) -> dict[str, Any]:
     return _write(io, reports.put_digest, io.deps.clock, token=args.token, task_id=args.task, body=body)
 
 
+def _node_stop(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    return _write(io, nodes.stop, io.deps.clock, token=args.token, task_id=args.task)
+
+
+def _node_take_over(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    return _write(io, nodes.take_over, io.deps.clock, token=args.token, task_id=args.task)
+
+
+def _conf_node_hand_back(p: argparse.ArgumentParser) -> None:
+    _conf_task_token(p)
+    p.add_argument("--summary-file", required=True)
+
+
+def _node_hand_back(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    summary = read_file(args.summary_file)
+    return _write(io, nodes.hand_back, io.deps.clock, token=args.token, task_id=args.task, summary=summary)
+
+
+def _conf_lock(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--name", required=True)
+    _token(p)
+    _sid(p)
+
+
+def _conf_lock_acquire(p: argparse.ArgumentParser) -> None:
+    _conf_lock(p)
+    p.add_argument("--purpose", required=True)
+    p.add_argument("--timeout", type=float, default=0.0)
+
+
+def _lock_acquire(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    sid = session_id(args)
+    d = io.deps
+    return _write(
+        io,
+        locks.acquire_session,
+        d.clock,
+        d.probe,
+        d.claude,
+        token=args.token,
+        name=args.name,
+        purpose=args.purpose,
+        session_id=sid,
+        timeout=args.timeout,
+    )
+
+
+def _lock_release(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    sid = session_id(args)
+    return _write(io, locks.release_session, token=args.token, name=args.name, session_id=sid)
+
+
 COMMANDS: dict[str, Command] = {
     c.name: c
     for c in (
@@ -609,6 +663,13 @@ COMMANDS: dict[str, Command] = {
         Command("decision add", "write", _decision_add, _conf_decision_add, help="record a decision"),
         Command("report post", "write", _report_post, _conf_report_post, help="post a node report"),
         Command("digest put", "write", _digest_put, _conf_digest_put, help="replace a task's digest"),
+        Command("node stop", "write", _node_stop, _conf_task_token, help="stop the task's node"),
+        Command(
+            "node take-over", "write", _node_take_over, _conf_task_token, help="the maintainer takes the node over"
+        ),
+        Command("node hand-back", "write", _node_hand_back, _conf_node_hand_back, help="hand the node back"),
+        Command("lock acquire", "write", _lock_acquire, _conf_lock_acquire, help="hold integration:<branch> (session)"),
+        Command("lock release", "write", _lock_release, _conf_lock, help="release a session-held lock"),
     )
 }
 
