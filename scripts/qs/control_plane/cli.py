@@ -25,6 +25,7 @@ from . import (
     db,
     decisions,
     errors,
+    hooks,
     liveness,
     locks,
     messages,
@@ -629,12 +630,43 @@ def _lock_release(args: argparse.Namespace, io: Io) -> dict[str, Any]:
     return _write(io, locks.release_session, token=args.token, name=args.name, session_id=sid)
 
 
+def _hook_stop(args: argparse.Namespace, io: Io) -> Raw:
+    return Raw(hooks.hook_stop(io.stdin.read(), io.deps.clock, io.deps.probe))
+
+
+def _hook_pre_tool_use(args: argparse.Namespace, io: Io) -> Raw:
+    return Raw(hooks.hook_pre_tool_use(io.stdin.read(), io.deps.clock))
+
+
+def _conf_hook_pre_push(p: argparse.ArgumentParser) -> None:
+    p.add_argument("git_args", nargs="*")
+
+
+def _hook_pre_push(args: argparse.Namespace, io: Io) -> Raw:
+    code, message = hooks.hook_pre_push(io.stdin.read(), io.deps.clock, io.deps.runner)
+    return Raw(message, code)
+
+
+def _conf_hooks_settings(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--role", required=True, choices=("node", "orchestrator"))
+
+
+def _hooks_settings(args: argparse.Namespace, io: Io) -> Raw:
+    return Raw(json.dumps(hooks.hooks_settings(args.role), sort_keys=True))
+
+
 COMMANDS: dict[str, Command] = {
     c.name: c
     for c in (
         Command("version", "exempt", _version, help="print the package and schema version (no DB)"),
         Command("daemon", "exempt", _daemon, help="run the daemon (migrates the DB, heartbeats, ticks)"),
         Command("ensure", "exempt", _ensure, help="start or restart the daemon if needed"),
+        Command("hook stop", "exempt", _hook_stop, help="the orchestrator's Stop hook (stdin: hook JSON)"),
+        Command("hook pre-tool-use", "exempt", _hook_pre_tool_use, help="the PreToolUse hook (stdin: hook JSON)"),
+        Command("hook pre-push", "exempt", _hook_pre_push, _conf_hook_pre_push, help="git's pre-push hook"),
+        Command(
+            "hooks-settings", "exempt", _hooks_settings, _conf_hooks_settings, help="print a hooks settings fragment"
+        ),
         Command("run open", "write", _run_open, _conf_run_open, help="open a run; returns its run token"),
         Command(
             "run claim", "write", _run_claim, _conf_run_claim, help="claim a run's lease (re-claim, take, take over)"
