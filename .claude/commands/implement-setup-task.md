@@ -1,5 +1,5 @@
 ---
-description: TDD implementation for dev-environment changes (scripts/, .claude/, .opencode/, legacy/, docs/, .github/, top-level config). Pass the impacted quality gate (--impacted; coverage-vacuous on dev-only trees), open PR.
+description: TDD implementation for dev-environment changes (scripts/, .claude/, .opencode/, legacy/, docs/, .github/, top-level config). Pass the impacted quality gate (--impacted; coverage-vacuous on dev-only trees except the Control Plane, scripts/qs/control_plane/, measured at 100%), open PR.
 ---
 
 > **Preferred entry**: open a fresh terminal in the worktree and run
@@ -20,8 +20,10 @@ subagent discovers task context from the branch name.
 Expected outcome:
 - TDD-implemented changes scoped strictly to dev-environment paths.
 - `python scripts/qs/quality_gate.py --impacted` passes (dev-only
-  changes carry no product-coverage delta, so that side is a fast
-  no-op; the tooling's own testmon-selected tests still run).
+  changes carry no coverage delta, so that side is a fast no-op —
+  except the Control Plane, `scripts/qs/control_plane/`, whose changed
+  lines must be 100% covered, QS-399; the tooling's own testmon-selected
+  tests still run).
 - For change sets touching any `tests/qs`-pinned non-Python file
   (agent files, commands, workflow docs, `.claude/settings.json`) —
   even when Python files changed too —

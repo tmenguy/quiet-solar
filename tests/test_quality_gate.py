@@ -1044,6 +1044,29 @@ class TestCiWorkflowConfig:
         env = pytest_step.get("env", {})
         assert env.get("COVERAGE_CORE") == "sysmon"
 
+    def test_shards_measure_the_control_plane(self) -> None:
+        """QS-399: every shard measures both sources; the combined report enforces 100% on both."""
+        data = self._load_workflow()
+        [step] = [s for s in data["jobs"]["test-shard"]["steps"] if s.get("name", "").startswith("Run shard")]
+        assert "--cov=custom_components/quiet_solar" in step["run"]
+        assert "--cov=scripts/qs/control_plane" in step["run"]
+        combine = [s for s in data["jobs"]["test"]["steps"] if s.get("name") == "Combine coverage and enforce 100%"]
+        assert combine and "--fail-under=100" in combine[0]["run"]
+
+    def test_lint_covers_the_control_plane(self) -> None:
+        """QS-399: ruff check and ruff format --check include the Control Plane paths."""
+        data = self._load_workflow()
+        runs = {s.get("name"): s.get("run", "") for s in data["jobs"]["lint"]["steps"]}
+        targets = "custom_components/quiet_solar/ scripts/qs/control_plane/ scripts/qs/cp.py"
+        assert runs["Ruff lint"] == f"ruff check {targets}"
+        assert runs["Ruff format check"] == f"ruff format --check {targets}"
+
+    def test_typecheck_covers_the_control_plane(self) -> None:
+        """QS-399: mypy runs on the Control Plane paths too (the pinned invocation of story §1)."""
+        data = self._load_workflow()
+        runs = {s.get("name"): s.get("run", "") for s in data["jobs"]["typecheck"]["steps"]}
+        assert runs["MyPy type check"] == "mypy custom_components/quiet_solar/ scripts/qs/control_plane/ scripts/qs/cp.py"
+
     def test_required_check_name_is_pinned(self) -> None:
         """The aggregation job's name is the LITERAL required status check.
 

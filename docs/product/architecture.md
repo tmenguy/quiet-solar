@@ -313,7 +313,7 @@ As the test suite grows, support targeted execution via existing pytest markers 
 - **Jobs**:
   - `lint`: Ruff check + Ruff format check (fail on violations)
   - `typecheck`: MyPy type checking (fail on errors)
-  - `test`: `pytest tests/ --cov=custom_components/quiet_solar --cov-report=term-missing` with coverage threshold = 100% (fail if below)
+  - `test`: `pytest tests/ --cov=custom_components/quiet_solar --cov=scripts/qs/control_plane --cov-report=term-missing` with coverage threshold = 100% (fail if below); the dev pipeline's Control Plane (`scripts/qs/control_plane/`, QS-399) is the second measured source
   - `hacs-validate`: HACS validation action (`hacs/action@main`) — validates manifest.json, directory structure, HACS compatibility. Critical for HACS distribution, often missed.
 - **Target runtime**: 3-5 minutes
 - **Python version**: Match HA's production Python version

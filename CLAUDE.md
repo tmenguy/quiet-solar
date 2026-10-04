@@ -67,8 +67,11 @@ frontmatter on both harnesses, the thinking effort into Claude's only;
 ## Quality gate
 
 `python scripts/qs/quality_gate.py` — pytest 100% cov + ruff + mypy +
-translations. Smart scope detection skips the full suite when only
-dev-infrastructure files changed. The mandatory pre-commit form is
+translations, over the product package **and** the Control Plane
+(`scripts/qs/control_plane/`, plus `scripts/qs/cp.py` for ruff and mypy;
+QS-399). Smart scope detection skips the full suite when only
+dev-infrastructure files changed (a Control Plane change is never
+dev-only). The mandatory pre-commit form is
 `python scripts/qs/quality_gate.py --impacted` (testmon-selected tests +
 changed-line 100% coverage + the CI-mirrored cheap checks (ruff lint,
 ruff format, mypy, translations when relevant), self-healing); the whole-suite gate
