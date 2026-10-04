@@ -998,7 +998,7 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
     def reserve(ctx: StepCtx) -> None:
         listing, alive = _reserve_prelude(ctx)
         adopted = reserve_tx(ctx, listing, alive)
-        if adopted is not None:  # after the write transaction: best-effort, never raises
+        if adopted is not None:  # after the write transaction; best-effort, the stop never raises
             assert listing is not None
             _stop_superseded(ctx, listing, adopted)
 
