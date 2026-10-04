@@ -29,14 +29,17 @@ SCRIPTS_QS = Path(__file__).resolve().parents[3] / "scripts" / "qs"
 if str(SCRIPTS_QS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_QS))
 
-MODULES = ("errors", "clock", "faults", "runner", "procsetup", "cli")
+MODULES = ("errors", "clock", "faults", "runner", "procsetup", "paths", "liveness", "cli")
 for _name in MODULES:
     importlib.import_module(f"control_plane.{_name}")
 
-from control_plane import cli, clock, faults, procsetup  # noqa: E402
+from control_plane import cli, clock, faults, paths, procsetup  # noqa: E402
 from control_plane.runner import RunResult  # noqa: E402
 
 REAL_PROCSETUP_GET = procsetup.get
+REAL_CODE_ROOT = paths.code_root
+REAL_MAIN_CHECKOUT = paths.main_checkout
+REAL_MAIN_HEAD_BRANCH = paths.main_head_branch
 
 ENV_CLEARED = (
     "CLAUDE_CODE_SESSION_ID",
@@ -127,6 +130,13 @@ def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[F
     monkeypatch.setenv("QS_CP_DB", str(tmp_path / "state" / "test_state.db"))
     monkeypatch.setenv("QS_CP_BACKUP_DIR", str(tmp_path / "backups"))
     (tmp_path / "state").mkdir()
+    # A fake main checkout, identical locally (a linked worktree) and in CI.
+    fake_main = tmp_path / "main"
+    (fake_main / ".git").mkdir(parents=True)
+    (fake_main / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    monkeypatch.setattr(paths, "code_root", lambda: fake_main)
+    monkeypatch.setattr(paths, "main_checkout", lambda root: fake_main)
+    monkeypatch.setattr(paths, "main_head_branch", lambda main_dir: "main")
     setup = FakeProcessSetup()
     monkeypatch.setattr(procsetup, "get", lambda: setup)
     faults.reset()
@@ -139,6 +149,11 @@ def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[F
 @pytest.fixture
 def fake_setup(_cp_isolation: FakeProcessSetup) -> FakeProcessSetup:
     return _cp_isolation
+
+
+@pytest.fixture
+def fake_main(tmp_path: Path) -> Path:
+    return tmp_path / "main"
 
 
 @pytest.fixture
