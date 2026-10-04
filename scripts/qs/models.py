@@ -46,14 +46,14 @@ LANES: tuple[str, ...] = tuple(f"{k}-{t}" for k in targets.KINDS for t in target
 # ``build`` does not affect ``opencode.json``).
 HARNESS_MODELS: dict[str, dict[str, str]] = {
     "claude": {  # Claude Code ≥ 2.1.280 (required by ``claude-opus-5-5``), first-party API
-        "build": "claude-opus-4-8",  # QS-367 E1: footprint — D3 reason still standing
+        "build": "claude-opus-5-5",  # maintainer 2026-10-04: build moves to Opus 5.5 (was 4.8, QS-367 E1)
         "deep": "claude-opus-5-5",  # QS-367 E2: analysis/review
         "frontier": "claude-fable-5-1",
         "light": "claude-sonnet-5",
         "fast": "claude-haiku-4-5",
     },
     "opencode": {  # OpenCode v2.0.14, github-copilot
-        "build": "github-copilot/claude-opus-4.8",  # QS-367 E1
+        "build": "github-copilot/claude-opus-5.5",  # maintainer 2026-10-04 (was 4.8, QS-367 E1)
         "deep": "github-copilot/claude-opus-5.5",  # QS-367 E2
         "frontier": "github-copilot/gpt-6-astra",  # no Claude Fable on this provider (D17)
         "light": "github-copilot/claude-sonnet-5",

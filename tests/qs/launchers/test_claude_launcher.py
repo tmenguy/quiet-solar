@@ -1425,10 +1425,10 @@ def test_fast_phase_without_prior_effort_level(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("next_cmd", "lane", "expected"),
     [
-        ("implement-setup-task", None, "claude-opus-4-8"),
+        ("implement-setup-task", None, "claude-opus-5-5"),
         # QS-367 N4: the second ``build`` phase (implement-task) was
         # uncovered, and no row exercised an ``epic-*`` lane.
-        ("implement-task", None, "claude-opus-4-8"),
+        ("implement-task", None, "claude-opus-5-5"),
         ("create-plan", "feature-factory", "claude-fable-5-1"),
         ("create-plan", "epic-factory", "claude-fable-5-1"),
         ("create-plan", "bug-product", "claude-opus-5-5"),
@@ -1480,7 +1480,7 @@ def test_phase_model_emitted_when_pin_skipped(tmp_path: Path) -> None:
         str(work_dir), 367, "Title", next_cmd="implement-task",
     )
     assert payload["phase_agent_pinned"] is False
-    assert payload["phase_model"] == "claude-opus-4-8"
+    assert payload["phase_model"] == "claude-opus-5-5"
 
 
 # --------------------------------------------------------------------------- #
