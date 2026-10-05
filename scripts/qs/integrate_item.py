@@ -94,6 +94,8 @@ def git(cwd: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.
         ["git", "-C", str(cwd), *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="surrogateescape",  # raw `-z` paths may not be UTF-8
         check=False,
         env={**os.environ, **env} if env else None,
     )
@@ -418,7 +420,10 @@ def _merge(ctx: Ctx, state: dict[str, Any], result: dict[str, Any]) -> dict[str,
         return {"status": "merged", **result}
     if rev(ctx.scratch, "MERGE_HEAD") is None:
         detail = (res.stdout + res.stderr).strip()
-        ctx.remove_scratch()
+        try:
+            ctx.remove_scratch()
+        except Refusal as exc:  # keep the merge's own failure visible
+            raise Refusal("merge-failed", detail, cleanup_error=exc.detail, **result) from None
         raise Refusal("merge-failed", detail, **result)
     files = unmerged_files(ctx.scratch)
     state["phase"], state["conflicted_files"] = "conflicts", files
@@ -590,7 +595,11 @@ def cmd_move(ctx: Ctx, new: str, old: str) -> dict[str, Any]:
     if wt is not None:
         res = git(wt, "merge", "--ff-only", new_sha)
         now = ctx.deliverable_tip()
-        if res.returncode != 0 or now != new_sha:
+        if now != new_sha:
+            if now is None:
+                raise Refusal("move-failed", f"{ctx.deliverable} is gone after the fast-forward")
+            if is_ancestor(ctx.main, new_sha, now):
+                return {"status": "already-moved", "head": new_sha}
             if now != old_sha:
                 raise Refusal("deliverable-moved", f"{ctx.deliverable} moved during the fast-forward (now {now})")
             raise Refusal("move-failed", res.stderr.strip() or "QS_<N> did not reach the new head")
@@ -603,10 +612,39 @@ def cmd_move(ctx: Ctx, new: str, old: str) -> dict[str, Any]:
     return {"status": "moved", "head": new_sha}
 
 
+def _scratch_git_broken(ctx: Ctx) -> bool:
+    """The scratch's ``.git`` provably is not this item's worktree (review fix #02 B).
+
+    True when the ``.git`` file is missing (git would then climb to an
+    enclosing repository), its ``gitdir:`` target is missing, or it points
+    outside ``<common dir>/worktrees/`` or not back at this scratch. Any other
+    state is a real worktree: a git failure there re-raises.
+    """
+    dot_git = ctx.scratch / ".git"
+    if not dot_git.is_file():
+        return True
+    try:
+        line = dot_git.read_text(encoding="utf-8").strip()
+    except OSError, UnicodeDecodeError:
+        return True
+    if not line.startswith("gitdir:"):
+        return True
+    admin = Path(line[len("gitdir:") :].strip())
+    if not admin.is_absolute():
+        admin = (ctx.scratch / admin).resolve()
+    if not admin.is_dir() or admin.parent.resolve() != (common_dir(ctx.main) / "worktrees").resolve():
+        return True
+    try:
+        back = Path((admin / "gitdir").read_text(encoding="utf-8").strip())
+    except OSError, UnicodeDecodeError:
+        return True
+    return back.resolve() != dot_git.resolve()
+
+
 def cmd_drop(ctx: Ctx) -> dict[str, Any]:
     if not ctx.scratch.is_dir():
         if is_registered(ctx.main, ctx.scratch):
-            git(ctx.main, "worktree", "prune")
+            ctx.remove_scratch()  # prune, unlock fallback, drop-failed if it survives
             return {"status": "dropped", "pruned": True, "dropped_head": None, "integrated": None}
         return {"status": "nothing-to-drop"}
     if not is_registered(ctx.main, ctx.scratch):
@@ -615,11 +653,10 @@ def cmd_drop(ctx: Ctx) -> dict[str, Any]:
         # so `worktree-setup.sh --integration` stops answering exit 3.
         shutil.rmtree(ctx.scratch)
         return {"status": "dropped", "not_a_worktree": True, "dropped_head": None, "integrated": None}
-    try:
-        git_dir(ctx.scratch)
-    except Refusal:
-        # Registered, but its `.git` is gone or corrupt: nothing readable to
-        # snapshot — remove it, so `prepare` is not blocked forever.
+    if _scratch_git_broken(ctx):
+        # Registered, but its `.git` is gone or foreign: nothing readable to
+        # snapshot (and never the enclosing repo's) — remove it, so `prepare`
+        # is not blocked forever.
         ctx.remove_scratch()
         return {"status": "dropped", "git_unreadable": True, "dropped_head": None, "integrated": None}
     state = ctx.read_state()
@@ -636,10 +673,18 @@ def cmd_drop(ctx: Ctx) -> dict[str, Any]:
         "discarded_files": [],
         "discarded_snapshot": None,
     }
-    files = dirty_files(ctx.scratch)
-    if files and head is not None:
+    try:
+        files: list[str] | None = dirty_files(ctx.scratch)
+    except Refusal as exc:
+        if head is None:  # nothing readable, yet `.git` looks valid: never remove blind
+            raise Refusal("drop-failed", f"cannot read {ctx.scratch}: {exc.detail}") from None
+        files = None  # e.g. a corrupt index: the snapshot uses its own index
+        out["status_unreadable"] = True
+    if (files is None or files) and head is not None:
         out["discarded_files"] = files
         out["discarded_snapshot"] = _snapshot(ctx, head)
+    elif files is None:
+        out["discarded_files"] = None
     ctx.remove_scratch()
     return out
 

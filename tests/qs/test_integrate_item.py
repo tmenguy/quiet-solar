@@ -803,3 +803,144 @@ def test_non_ascii_digit_timeout_falls_back_to_the_default(env: Env) -> None:
         assert (rc, out["error"], out["max_wait_s"]) == (1, "scratch-busy", 3300)
     finally:
         os.close(fd)
+
+
+# ---------------------------------------------------------------------------
+# Review fix #02
+# ---------------------------------------------------------------------------
+
+
+def test_drop_a_locked_registration_whose_directory_is_gone(env: Env) -> None:
+    """A: no prepare/drop loop on a locked registration with its directory removed by hand."""
+    assert env.prepare()[0] == 0
+    env.repo.git("worktree", "lock", str(env.scratch))
+    shutil.rmtree(env.scratch)
+    rc, out = env.run("drop")
+    assert (rc, out["status"], out["pruned"]) == (0, "dropped", True), out
+    assert "QS_42_1_integration" not in env.repo.git("worktree", "list").stdout
+    assert env.prepare()[1]["status"] == "merged"
+
+
+def test_drop_with_a_git_file_pointing_nowhere(env: Env) -> None:
+    """B: a ``.git`` file whose target is gone is provably unreadable."""
+    assert env.prepare()[0] == 0
+    (env.scratch / ".git").write_text("gitdir: /nonexistent/qs-400\n")
+    rc, out = env.run("drop")
+    assert (rc, out["status"], out["git_unreadable"]) == (0, "dropped", True), out
+    assert not env.scratch.exists()
+
+
+def test_drop_inside_an_enclosing_repository_never_touches_it(env: Env) -> None:
+    """B: with the scratch's ``.git`` gone, git would find the enclosing repo — drop must not use it."""
+    outer = env.repo.root
+    env.repo.git("init", "-q", str(outer))
+    (outer / "outer.txt").write_text("outer\n")
+    env.repo.git("add", "outer.txt", cwd=outer)
+    env.repo.git("commit", "-q", "-m", "outer", cwd=outer)
+    outer_head = env.repo.rev("HEAD", cwd=outer)
+    objects_before = env.repo.git("count-objects", "-v", cwd=outer).stdout
+    assert env.prepare()[0] == 0
+    (env.scratch / ".git").unlink()
+    rc, out = env.run("drop")
+    assert (rc, out["status"], out["git_unreadable"]) == (0, "dropped", True), out
+    assert out["dropped_head"] is None
+    assert env.repo.rev("HEAD", cwd=outer) == outer_head
+    assert env.repo.git("count-objects", "-v", cwd=outer).stdout == objects_before
+
+
+def test_drop_with_a_corrupt_index_still_snapshots(env: Env) -> None:
+    """C: ``git status`` fails on a corrupt index; the snapshot uses its own index."""
+    assert env.prepare()[0] == 0
+    (env.scratch / "work.txt").write_text("unsaved work\n")
+    gdir = Path(env.scratch_git("rev-parse", "--absolute-git-dir").stdout.strip())
+    (gdir / "index").write_bytes(b"junk")
+    rc, out = env.run("drop")
+    assert (rc, out["status"], out["status_unreadable"]) == (0, "dropped", True), out
+    assert out["discarded_files"] is None
+    snap = out["discarded_snapshot"]
+    assert env.repo.git("show", f"{snap}:work.txt").stdout == "unsaved work\n"
+    assert not env.scratch.exists()
+
+
+def test_non_utf8_paths_do_not_raise(env: Env) -> None:
+    """D: raw ``-z`` bytes are decoded with surrogateescape."""
+    import integrate_item
+
+    res = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        input=b"x\n",
+        cwd=str(env.repo.clone),
+        env=env.repo.env,
+        capture_output=True,
+        check=True,
+    )
+    sha = res.stdout.decode().strip()
+    subprocess.run(
+        [b"git", b"update-index", b"--add", b"--cacheinfo", b"100644," + sha.encode() + b",caf\xe9.txt"],
+        cwd=str(env.repo.clone),
+        env=env.repo.env,
+        check=True,
+    )
+    old = os.environ.copy()
+    os.environ.update(env.repo.env)
+    try:
+        files = integrate_item.dirty_files(env.repo.clone, untracked=False)
+    finally:
+        os.environ.clear()
+        os.environ.update(old)
+    assert any(name.startswith("caf") and name.endswith(".txt") for name in files)
+    json.dumps(files)  # stays JSON-serialisable
+
+
+def _hook(env: Env, body: str) -> None:
+    hooks = Path(env.repo.git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()) / "hooks"
+    hooks.mkdir(exist_ok=True)
+    hook = hooks / "post-merge"
+    hook.write_text("#!/bin/sh\n" + body + "\n")
+    hook.chmod(0o755)
+
+
+def test_move_ff_race_moved_elsewhere_is_deliverable_moved(env: Env) -> None:
+    """G: QS_42 jumps elsewhere right after the fast-forward."""
+    _deliverable_worktree(env)
+    head = _ready(env)
+    _hook(env, f"git update-ref refs/heads/QS_42 {env.tip('main')}")
+    rc, out = env.run("move", "--new", head, "--old", env.state()["base"])
+    assert (rc, out["error"]) == (1, "deliverable-moved"), out
+
+
+def test_move_ff_race_descendant_is_already_moved(env: Env) -> None:
+    """G: QS_42 gains a commit on top of the new head right after the fast-forward."""
+    _deliverable_worktree(env)
+    head = _ready(env)
+    _hook(env, 'c=$(git commit-tree "HEAD^{tree}" -p HEAD -m later) && git update-ref refs/heads/QS_42 "$c"')
+    rc, out = env.run("move", "--new", head, "--old", env.state()["base"])
+    assert (rc, out["status"]) == (0, "already-moved"), out
+
+
+def test_move_ff_reset_back_is_move_failed(env: Env) -> None:
+    """G: QS_42 is back at the old tip after the fast-forward → move-failed."""
+    _deliverable_worktree(env)
+    head = _ready(env)
+    old = env.state()["base"]
+    _hook(env, f"git update-ref refs/heads/QS_42 {old}")
+    rc, out = env.run("move", "--new", head, "--old", old)
+    assert (rc, out["error"]) == (1, "move-failed"), out
+
+
+def test_dirty_scratch_lists_a_staged_rename_once(env: Env) -> None:
+    """H: ``status -z`` prints a rename as ``new\\0old``; only the new name is reported."""
+    assert env.prepare()[0] == 0
+    env.scratch_git("mv", "item.txt", "renamed.txt")
+    rc, out = env.run("check")
+    assert (rc, out["error"], out["files"]) == (1, "dirty-scratch", ["renamed.txt"])
+
+
+def test_drop_refuses_a_valid_looking_but_unreadable_scratch(env: Env) -> None:
+    """B: ``.git`` points at this scratch's admin dir, yet git reads nothing → ``drop-failed``, nothing removed."""
+    assert env.prepare()[0] == 0
+    gdir = Path(env.scratch_git("rev-parse", "--absolute-git-dir").stdout.strip())
+    (gdir / "HEAD").write_text("garbage\n")
+    rc, out = env.run("drop")
+    assert (rc, out["error"]) == (1, "drop-failed"), out
+    assert env.scratch.exists()

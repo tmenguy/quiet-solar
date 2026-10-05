@@ -830,6 +830,41 @@ def _unintegrated_count(git_dir: Path, deliverable: str, tip: str | None) -> int
         return -1
 
 
+def _cas_delete_branch(main_wt: Path, branch: str, tip: str | None) -> tuple[bool, str | None]:
+    """Delete ``refs/heads/<branch>`` only if it still points at ``tip`` (review fix #02 E).
+
+    ``git update-ref -d <ref> <tip>`` is a compare-and-swap: a branch that moved
+    since its integration was proven is kept. Unlike ``git branch -D`` it does
+    not refuse a checked-out branch, so that check is made first, from the
+    worktree listing (a failed listing refuses too). With no readable ``tip``
+    (only reachable with ``--discard-unintegrated``) it falls back to
+    ``delete_local_branch``.
+    """
+    if tip is None:
+        return delete_local_branch(main_wt, branch)
+    listing = subprocess.run(
+        ["git", "-C", str(main_wt), "worktree", "list", "--porcelain"],
+        capture_output=True,
+        text=True,
+        cwd=str(main_wt),
+        check=False,
+    )
+    if listing.returncode != 0:
+        return False, f"cannot list worktrees to check that {branch} is not checked out: {listing.stderr.strip()}"
+    if f"branch refs/heads/{branch}" in listing.stdout.splitlines():
+        return False, f"{branch} is checked out in a worktree (git worktree list)"
+    result = subprocess.run(
+        ["git", "-C", str(main_wt), "update-ref", "-d", f"refs/heads/{branch}", tip],
+        capture_output=True,
+        text=True,
+        cwd=str(main_wt),
+        check=False,
+    )
+    if result.returncode != 0:
+        return False, f"{branch} moved since its integration was proven: {result.stderr.strip()}"
+    return True, None
+
+
 def _item_registration(main_wt: Path, item_branch: str) -> Path | None:
     """The (resolved) path of the worktree checking out ``refs/heads/<item_branch>``.
 
@@ -1050,11 +1085,11 @@ def _cleanup_item(  # noqa: C901
             return
 
     out["deleted_tip"] = tip
-    deleted, error = delete_local_branch(main_wt, item_branch)
+    deleted, error = _cas_delete_branch(main_wt, item_branch, tip)
     if not deleted:
         out["branch_kept_reason"] = "delete-failed"
         out["branch_delete_error"] = error
-        finish("removed-branch-kept", f"{wt_part}; git branch -D {item_branch} failed: {error}; branch kept")
+        finish("removed-branch-kept", f"{wt_part}; deleting {item_branch} failed: {error}; branch kept")
         return
     out["branch_deleted"] = True
     finish(

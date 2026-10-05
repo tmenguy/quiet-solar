@@ -114,9 +114,11 @@ if [ "$MODE" = integration ]; then
     _qs_require_deliverable
     # The listing goes into a variable first: under `pipefail`, `grep -q`
     # exiting on the first match could SIGPIPE the producer and hide it.
-    REGISTERED="$(git -C "$MAIN_DIR" worktree list --porcelain | sed -n 's/^worktree //p')"
-    if [ -e "$WORKTREE_DIR" ] || printf '%s\n' "$REGISTERED" \
-        | grep -qxF -e "$WORKTREE_DIR" -e "$WORKTREE_DIR_CANON"; then
+    if ! REGISTERED="$(git -C "$MAIN_DIR" worktree list --porcelain | sed -n 's/^worktree //p')"; then
+        echo "Error: 'git worktree list' failed in ${MAIN_DIR}"
+        exit 1
+    fi
+    if [ -e "$WORKTREE_DIR" ] || grep -qxF -e "$WORKTREE_DIR" -e "$WORKTREE_DIR_CANON" <<<"$REGISTERED"; then
         echo "Error: integration scratch already exists: ${WORKTREE_DIR}"
         exit 3
     fi

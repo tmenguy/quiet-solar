@@ -1599,9 +1599,25 @@ def test_item_counts_the_tip_read_before_the_count_and_reports_it(main_and_item,
     monkeypatch.setattr(cleanup_worktree, "_unintegrated_count", spy)
     out = _run_item(monkeypatch, capsys, item, "--delete-branch")
     assert seen == [("QS_77", tip)]
-    assert out["status"] == "removed" and out["unintegrated_commits"] == 0
+    assert out["unintegrated_commits"] == 0
+    # Review fix #02 E: the delete is a compare-and-swap on the proven tip — a
+    # branch that moved after the count is kept, never deleted unproven.
+    assert out["status"] == "removed-branch-kept"
+    assert out["branch_kept_reason"] == "delete-failed"
+    assert out["branch_deleted"] is False
+    assert _tip(main, "QS_77_1") == _tip(main, "main")
+
+
+def test_item_integrated_delete_reports_the_undo_point(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    _commit_on_item(item)
+    _merge_item_into_deliverable(main)
+    tip = _tip(main, "QS_77_1")
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "removed" and out["branch_deleted"] is True
     assert out["deleted_tip"] == tip
     assert f"git branch QS_77_1 {tip}" in out["message"]
+    assert _tip(main, "QS_77_1") is None
 
 
 def test_item_unreadable_tip_keeps_the_branch(main_and_item, monkeypatch, capsys) -> None:
@@ -1854,3 +1870,31 @@ def test_item_registration_finds_the_item_worktree(main_and_item, tmp_path) -> N
     not_a_repo = tmp_path / "plain"
     not_a_repo.mkdir()
     assert cleanup_worktree._item_registration(not_a_repo, "QS_77_1") is None
+
+
+def test_item_unreadable_tip_with_discard_falls_back_to_branch_d(main_and_item, monkeypatch, capsys) -> None:
+    """Review fix #02 E: no readable tip → no CAS possible; ``--discard-unintegrated`` uses ``git branch -D``."""
+    import cleanup_worktree
+
+    main, item = main_and_item
+    monkeypatch.setattr(cleanup_worktree, "_branch_tip", lambda g, b: None)
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch", "--discard-unintegrated")
+    assert out["status"] == "removed" and out["branch_deleted"] is True
+    assert _tip(main, "QS_77_1") is None
+
+
+def test_cas_delete_refuses_when_the_listing_fails(main_and_item, monkeypatch) -> None:
+    import cleanup_worktree
+
+    main, _item = main_and_item
+    real_run = cleanup_worktree.subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        if "worktree" in cmd and "list" in cmd:
+            return subprocess.CompletedProcess(cmd, 1, "", "boom")
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(cleanup_worktree.subprocess, "run", fake_run)
+    ok, error = cleanup_worktree._cas_delete_branch(main, "QS_77_1", _tip(main, "QS_77_1"))
+    assert ok is False and "boom" in (error or "")
+    assert _tip(main, "QS_77_1") is not None
