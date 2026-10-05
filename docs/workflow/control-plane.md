@@ -265,7 +265,14 @@ Full design: `docs/stories/QS-400.story.md` §7–§9.
 own is a new deliverable: its own issue `M`, branch `QS_<M>` and PR, added
 without `--item-of` (as a child, with a dependency, when it must land
 first). `QS_<N>_<k>` only ever names a work item that lands in `QS_<N>`'s
-PR. `task add`, `task set` and the item tools' guard all enforce it.
+PR. Enforced at every write path: `task add` (`USAGE`), `tasks.update_fields`
+— the one writer of `issue_number` / `pr_number` / `pr_url`, behind `task set`
+and every tool's `on_success` (`INVALID_STATE`) — and the deliverable-only
+tools `worktree-create`, `issue-create`, `pr-create`, `push` and `merge`, which
+refuse a work item when their steps are built (a bare `INVALID_STATE`: no
+probe, no `tool_calls` row). The item tools' guard also refuses a malformed
+row, except `item-cleanup` and `integrate-drop`, so a leftover is never
+stranded.
 
 The integration flow (the caller is the item's own node, or the
 orchestrator; child 6b decides when):

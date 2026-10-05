@@ -1653,3 +1653,28 @@ class TestReviewFix03:
         sleeps_before = list(w.clock.sleeps)
         assert tool(w, "merge", "m1")[0] == 0
         assert w.clock.sleeps[len(sleeps_before) :] == [tools.MERGE_SHA_RETRY_S]
+
+
+# --- QS-400: the deliverable-only tools refuse a work item --------------------------------------------------------
+
+DELIVERABLE_ONLY = ("worktree-create", "issue-create", "pr-create", "push", "merge")
+
+
+@pytest.mark.parametrize("name", DELIVERABLE_ONLY)
+def test_a_deliverable_only_tool_refuses_a_work_item(w: W, name: str) -> None:
+    """A work item lands in its deliverable's PR: no issue, worktree QS_<M>, PR, push or merge of its own.
+
+    Refused when the steps are built — a bare ``INVALID_STATE`` before the claim: no ``tool_calls`` row, no probe
+    (``issue-create``'s and ``pr-create``'s probes call ``gh``), no effect."""
+    t = TABLE[name]
+    t.prep(w)
+    insert_task(w.db, "T0", w.run, issue_number=10, branch="QS_10", is_deliverable=1)
+    sql(w.db, "UPDATE tasks SET deliverable_id = 'T0', item_k = 1, is_deliverable = 0 WHERE id = 'T1'")
+    calls_before = len(w.sim.runner.calls) if hasattr(w.sim, "runner") else None
+    code, out = tool(w, name, "k1", **t.args(w))
+    assert out["error"] == "INVALID_STATE", out
+    assert "own issue" in out["detail"]
+    assert call_row(w, name, "k1") is None
+    assert t.effect(w) == 0
+    if calls_before is not None:
+        assert len(w.sim.runner.calls) == calls_before

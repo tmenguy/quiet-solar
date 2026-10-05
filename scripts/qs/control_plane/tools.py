@@ -632,6 +632,16 @@ def compose(*guards: Callable[[StepCtx], None]) -> Callable[[StepCtx], None]:
 non_terminal = task_state_guard(lambda s: s in NON_TERMINAL_STATES)
 
 
+def _not_an_item(task: TaskRow) -> None:
+    """QS-400: a work item lands in its deliverable's PR — the deliverable-only tools refuse it.
+
+    Called when the steps are built: a bare ``INVALID_STATE`` before the claim, so no probe runs (some call
+    ``gh``) and no ``tool_calls`` row is written.
+    """
+    if task["deliverable_id"] is not None:
+        raise errors.CpError("INVALID_STATE", f"task {task['id']}: {tasks.ITEM_NOT_DELIVERABLE}")
+
+
 def _need(task: TaskRow, column: str) -> Any:
     value = task[column]
     if value is None:
@@ -703,6 +713,7 @@ def _gh_list_by_marker(ctx: StepCtx, argv: list[str], cwd: Path) -> dict[str, An
 
 
 def _worktree_create_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
+    _not_an_item(task)  # an item's worktree is `item-create`'s (QS-400)
     phase = args.get("phase")
     if phase not in PHASES:
         raise errors.CpError("USAGE", f"args.phase must be one of {', '.join(PHASES)}")
@@ -1217,6 +1228,7 @@ def _labels(args: Mapping[str, Any]) -> str:
 
 
 def _issue_create_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
+    _not_an_item(task)
     title = args.get("title")
     if not isinstance(title, str) or not title:
         raise errors.CpError("USAGE", "args.title is required")
@@ -1260,6 +1272,7 @@ def _issue_create_success(conn: sqlite3.Connection, ctx: StepCtx) -> dict[str, A
 
 
 def _pr_create_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
+    _not_an_item(task)
     wt = Path(_need(task, "worktree"))
     issue = _need(task, "issue_number")
     title = args.get("title")
@@ -1311,6 +1324,7 @@ def _head(ctx: StepCtx, wt: Path) -> str:
 
 
 def _push_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
+    _not_an_item(task)  # item branches are never pushed (D2; `pre-push` refuses them too)
     wt = Path(_need(task, "worktree"))
     branch = _need(task, "branch")
 
@@ -1372,6 +1386,7 @@ def _merge_sha(ctx: StepCtx, pr: str, data: Mapping[str, Any] | None) -> str | N
 
 
 def _merge_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
+    _not_an_item(task)
     pr = str(_need(task, "pr_number"))
 
     def policy(ctx: StepCtx) -> dict[str, Any]:

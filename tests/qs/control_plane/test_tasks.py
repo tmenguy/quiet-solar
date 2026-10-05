@@ -345,7 +345,7 @@ class TestItemIsNotADeliverable:
         code, out = run_cli(
             "task", "add", "--title", "x", "--kind", "feature", "--item-of", "T1", *extra, "--token", token
         )
-        assert out["error"] == "USAGE", out
+        assert code != 0 and out["error"] == "USAGE", out
         assert "own issue" in out["detail"]
         assert sql(migrated, "SELECT count(*) FROM tasks")[0][0] == 1
         assert sql(migrated, "SELECT next_item_k FROM tasks WHERE id = 'T1'")[0][0] == 1  # no k spent
@@ -355,8 +355,27 @@ class TestItemIsNotADeliverable:
         add(token, "--run", run_id, "--deliverable", "--issue", "7")
         add(token, "--run", run_id, "--item-of", "T1")
         code, out = run_cli("task", "set", "--task", "T2", "--issue", "12", "--token", token)
-        assert out["error"] == "INVALID_STATE", out
+        assert code != 0 and out["error"] == "INVALID_STATE", out
         assert sql(migrated, "SELECT issue_number FROM tasks WHERE id = 'T2'")[0][0] is None
         # other fields stay settable on an item, and a non-item still takes an issue
         assert run_cli("task", "set", "--task", "T2", "--branch", "QS_7_1", "--token", token)[0] == 0
         assert run_cli("task", "set", "--task", "T1", "--issue", "8", "--token", token)[0] == 0
+
+
+def test_update_fields_refuses_deliverable_fields_on_an_item(migrated, run, conn) -> None:
+    """QS-400 backstop: every writer (tools' ``on_success`` included) goes through ``update_fields``."""
+    run_id, token = run
+    add(token, "--run", run_id, "--deliverable", "--issue", "7")
+    add(token, "--run", run_id, "--item-of", "T1")
+    for fields in ({"issue_number": 12}, {"pr_number": 3, "pr_url": "u"}):
+        with pytest.raises(errors.CpError) as exc, db.write(conn):
+            tasks.update_fields(conn, clock.FakeClock(), "T2", fields)
+        assert exc.value.code == "INVALID_STATE"
+    with db.write(conn):
+        tasks.update_fields(conn, clock.FakeClock(), "T2", {"worktree": "/w", "branch": "QS_7_1"})
+        tasks.update_fields(conn, clock.FakeClock(), "T1", {"pr_number": 3, "pr_url": "u"})
+    assert sql(migrated, "SELECT issue_number, pr_number, branch FROM tasks WHERE id = 'T2'")[0][:] == (
+        None,
+        None,
+        "QS_7_1",
+    )

@@ -180,6 +180,9 @@ ITEM_NOT_DELIVERABLE = (
     "--issue — a deliverable is its own issue (branch QS_<M>); add it without --item-of"
 )
 
+# The columns only a deliverable carries (QS-400): an item has its deliverable's issue and PR.
+DELIVERABLE_FIELDS = ("issue_number", "pr_number", "pr_url")
+
 SETTABLE = ("issue_number", "worktree", "branch", "pr_number", "pr_url", "ci_state", "ci_sha", "merge_sha")
 
 
@@ -190,6 +193,13 @@ def update_fields(conn: sqlite3.Connection, clock: clock_mod.Clock, task_id: str
         raise errors.CpError("USAGE", f"not settable: {', '.join(sorted(unknown))}")
     if not fields:
         return
+    deliverable_fields = sorted(set(fields) & set(DELIVERABLE_FIELDS))
+    if deliverable_fields:
+        row = conn.execute("SELECT deliverable_id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row is not None and row["deliverable_id"] is not None:
+            raise errors.CpError(
+                "INVALID_STATE", f"task {task_id} ({', '.join(deliverable_fields)}): {ITEM_NOT_DELIVERABLE}"
+            )
     assignments = ", ".join(f"{k} = ?" for k in fields)
     conn.execute(
         f"UPDATE tasks SET {assignments}, updated_at = ? WHERE id = ?",
@@ -206,10 +216,8 @@ def set_fields(
         raise errors.CpError("USAGE", "--ci-state and --ci-sha go together")
     with db.write(conn):
         tokens.require(conn, token, kinds={"run"}, task_id=task_id)
-        row = get(conn, task_id)
-        if "issue_number" in fields and row["deliverable_id"] is not None:
-            raise errors.CpError("INVALID_STATE", f"task {task_id}: {ITEM_NOT_DELIVERABLE}")
-        update_fields(conn, clock, task_id, fields)
+        get(conn, task_id)
+        update_fields(conn, clock, task_id, fields)  # refuses a deliverable field on an item (QS-400)
     return {"task_id": task_id, "updated": sorted(fields)}
 
 

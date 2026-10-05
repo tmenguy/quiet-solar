@@ -121,11 +121,11 @@ def _deliverable(ctx: StepCtx) -> sqlite3.Row:
         return tasks.get(conn, ctx.task["deliverable_id"])
 
 
-def _item_guard(*, branch: bool = False, allow_null: bool = False) -> Callable[[StepCtx], None]:
+def _item_guard(*, branch: bool = False, allow_null: bool = False, shape: bool = True) -> Callable[[StepCtx], None]:
     """The deliverable is ``QS_<issue_number>``; with ``branch``, the item is on ``QS_<N>_<k>`` (or NULL)."""
 
     def guard(ctx: StepCtx) -> None:
-        if ctx.task["is_deliverable"] or ctx.task["issue_number"] is not None:
+        if shape and (ctx.task["is_deliverable"] or ctx.task["issue_number"] is not None):
             # `tasks.add` / `set_fields` refuse this shape; a row made by hand still must not cut
             # `QS_<N>_<k>` for what is really its own deliverable `QS_<M>`.
             raise errors.CpError("INVALID_STATE", f"task {ctx.task['id']}: {tasks.ITEM_NOT_DELIVERABLE}")
@@ -412,7 +412,7 @@ SPECS: tuple[ToolSpec, ...] = (
         "item-cleanup",
         _item_cleanup_steps,
         locks=_cleanup_locks,
-        guard=_item_guard(branch=True, allow_null=True),
+        guard=_item_guard(branch=True, allow_null=True, shape=False),  # a cleanup never strands a malformed row
         on_success=_item_cleanup_success,
     ),
     ToolSpec(
@@ -439,7 +439,7 @@ SPECS: tuple[ToolSpec, ...] = (
         _drop_steps,
         locks=_start_drop_locks,
         probe=_session_probe,
-        guard=_item_guard(branch=True),
+        guard=_item_guard(branch=True, shape=False),  # a drop never strands a malformed row
         on_success=_drop_success,
         token_kinds=NODE_KINDS,
     ),

@@ -837,3 +837,18 @@ def test_register_item_tools_is_idempotent_and_the_tools_are_in_the_cli(capsys) 
     text = capsys.readouterr().out
     assert all(name in text for name in ALL_TOOLS)
     assert set(items.NAMES) <= set(tools.REGISTRY)  # main() registered them again
+
+
+@pytest.mark.parametrize(("column", "value"), [("is_deliverable", 1), ("issue_number", 12)])
+def test_cleanup_and_drop_still_run_on_a_malformed_item(wi: W, column: str, value: int) -> None:
+    """The deliverable-shape refusal is for the tools that create or integrate; never strand a leftover."""
+    sql(wi.db, f"UPDATE tasks SET {column} = ? WHERE id = 'T2'", [value])
+    code, out = tool(wi, "integrate-drop", "d1", token=wi.node)
+    assert code == 0, out
+    for name in ("integrate-start", "integrate-finish"):
+        code, out = tool(wi, name, f"{name}-1", token=wi.node)
+        assert out.get("result", {}).get("error") == "INVALID_STATE", (name, out)
+    code, out = run_cli("lock", "release", "--name", "integration:QS_7", "--session-id", "S-n2", "--token", wi.node)
+    assert code == 0, out
+    code, out = tool(wi, "item-cleanup", "c1")
+    assert code == 0, out
