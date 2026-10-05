@@ -599,14 +599,17 @@ def cmd_move(ctx: Ctx, new: str, old: str) -> dict[str, Any]:
             if now is None:
                 raise Refusal("move-failed", f"{ctx.deliverable} is gone after the fast-forward")
             if is_ancestor(ctx.main, new_sha, now):
-                return {"status": "already-moved", "head": new_sha}
+                return {"status": "already-moved", "head": new_sha, "now": now}
             if now != old_sha:
                 raise Refusal("deliverable-moved", f"{ctx.deliverable} moved during the fast-forward (now {now})")
             raise Refusal("move-failed", res.stderr.strip() or "QS_<N> did not reach the new head")
     else:
         res = git(ctx.main, "update-ref", f"refs/heads/{ctx.deliverable}", new_sha, old_sha)
         if res.returncode != 0:
-            if ctx.deliverable_tip() != old_sha:
+            now = ctx.deliverable_tip()
+            if now is not None and now != old_sha and is_ancestor(ctx.main, new_sha, now):
+                return {"status": "already-moved", "head": new_sha, "now": now}
+            if now != old_sha:
                 raise Refusal("deliverable-moved", f"{ctx.deliverable} moved during the update")
             raise Refusal("move-failed", res.stderr.strip())
     return {"status": "moved", "head": new_sha}
@@ -624,21 +627,30 @@ def _scratch_git_broken(ctx: Ctx) -> bool:
     if not dot_git.is_file():
         return True
     try:
-        line = dot_git.read_text(encoding="utf-8").strip()
-    except OSError, UnicodeDecodeError:
-        return True
+        line = dot_git.read_text(encoding="utf-8", errors="surrogateescape").strip()
+    except OSError:
+        return False  # unreadable is not proof: let git decide (→ drop-failed if nothing reads)
     if not line.startswith("gitdir:"):
         return True
     admin = Path(line[len("gitdir:") :].strip())
-    if not admin.is_absolute():
-        admin = (ctx.scratch / admin).resolve()
-    if not admin.is_dir() or admin.parent.resolve() != (common_dir(ctx.main) / "worktrees").resolve():
+    if not admin.is_absolute():  # `worktree.useRelativePaths`: relative to the worktree
+        admin = ctx.scratch / admin
+    if not admin.is_dir() or not _same_file(admin.parent, common_dir(ctx.main) / "worktrees"):
         return True
     try:
-        back = Path((admin / "gitdir").read_text(encoding="utf-8").strip())
-    except OSError, UnicodeDecodeError:
-        return True
-    return back.resolve() != dot_git.resolve()
+        back = Path((admin / "gitdir").read_text(encoding="utf-8", errors="surrogateescape").strip())
+    except OSError:
+        return False
+    if not back.is_absolute():  # relative to the admin dir
+        back = admin / back
+    return not _same_file(back, dot_git)
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
 
 
 def cmd_drop(ctx: Ctx) -> dict[str, Any]:
@@ -680,28 +692,27 @@ def cmd_drop(ctx: Ctx) -> dict[str, Any]:
             raise Refusal("drop-failed", f"cannot read {ctx.scratch}: {exc.detail}") from None
         files = None  # e.g. a corrupt index: the snapshot uses its own index
         out["status_unreadable"] = True
-    if (files is None or files) and head is not None:
+    if files is None or files:  # unknown or dirty: always keep an undo point
         out["discarded_files"] = files
         out["discarded_snapshot"] = _snapshot(ctx, head)
-    elif files is None:
-        out["discarded_files"] = None
     ctx.remove_scratch()
     return out
 
 
-def _snapshot(ctx: Ctx, head: str) -> str:
+def _snapshot(ctx: Ctx, head: str | None) -> str:
     """A commit of the whole working tree (unmerged, untracked, marker files) on a temporary index."""
     index = git_dir(ctx.scratch) / DROP_INDEX_FILE
     env = {"GIT_INDEX_FILE": str(index)}
     try:
-        for args in (("read-tree", "HEAD"), ("add", "-A")):
+        base = ("read-tree", "HEAD") if head is not None else ("read-tree", "--empty")  # an orphan HEAD
+        for args in (base, ("add", "-A")):
             res = git(ctx.scratch, *args, env=env)
             if res.returncode != 0:
                 raise Refusal("drop-failed", f"git {args[0]} failed: {res.stderr.strip()}")
         tree = git(ctx.scratch, "write-tree", env=env)
         if tree.returncode != 0:
             raise Refusal("drop-failed", f"git write-tree failed: {tree.stderr.strip()}")
-        parents = ["-p", head]
+        parents = ["-p", head] if head is not None else []
         merge_head = rev(ctx.scratch, "MERGE_HEAD")
         if merge_head is not None:
             parents += ["-p", merge_head]
@@ -753,8 +764,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _json_safe(value: Any) -> Any:
+    """Lone surrogates (non-UTF-8 path bytes, decoded with surrogateescape) → ``\\xNN`` text.
+
+    The Control Plane stores the outputs in sqlite, which refuses lone
+    surrogates; internally the raw names still round-trip as pathspecs.
+    """
+    if isinstance(value, str):
+        return value.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def _emit(data: dict[str, Any], code: int = 0) -> NoReturn:
-    print(json.dumps(data, sort_keys=True))
+    print(json.dumps(_json_safe(data), sort_keys=True))
     sys.exit(code)
 
 

@@ -861,7 +861,18 @@ def _cas_delete_branch(main_wt: Path, branch: str, tip: str | None) -> tuple[boo
         check=False,
     )
     if result.returncode != 0:
-        return False, f"{branch} moved since its integration was proven: {result.stderr.strip()}"
+        return False, f"update-ref -d {branch} {tip} failed (branch moved, or ref locked): {result.stderr.strip()}"
+    # `update-ref -d` drops only the ref; `git branch -D` would also drop the
+    # `branch.<name>.*` config section (exit 5 = no section — fine).
+    subprocess.run(
+        ["git", "-C", str(main_wt), "config", "--remove-section", f"branch.{branch}"],
+        capture_output=True,
+        text=True,
+        cwd=str(main_wt),
+        check=False,
+    )
+    # The listing and the delete are not atomic, but both run under the
+    # Control Plane's `main-checkout` lock, which every worktree add takes.
     return True, None
 
 

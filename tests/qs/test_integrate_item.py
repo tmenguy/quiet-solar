@@ -944,3 +944,108 @@ def test_drop_refuses_a_valid_looking_but_unreadable_scratch(env: Env) -> None:
     rc, out = env.run("drop")
     assert (rc, out["error"]) == (1, "drop-failed"), out
     assert env.scratch.exists()
+
+
+# ---------------------------------------------------------------------------
+# Review fix #03
+# ---------------------------------------------------------------------------
+
+
+def test_drop_with_relative_worktree_paths_still_snapshots(env: Env) -> None:
+    """A healthy scratch made with ``worktree.useRelativePaths`` is not mistaken for a broken one."""
+    env.repo.git("config", "worktree.useRelativePaths", "true")
+    assert env.prepare()[0] == 0
+    gitfile = (env.scratch / ".git").read_text()
+    assert not gitfile.split(":", 1)[1].strip().startswith("/"), gitfile  # really relative
+    (env.scratch / "work.txt").write_text("keep me\n")
+    rc, out = env.run("drop")
+    assert (rc, out["status"]) == (0, "dropped"), out
+    assert "git_unreadable" not in out
+    assert env.repo.git("show", f"{out['discarded_snapshot']}:work.txt").stdout == "keep me\n"
+
+
+def test_already_moved_after_ff_reports_the_current_tip(env: Env) -> None:
+    _deliverable_worktree(env)
+    head = _ready(env)
+    _hook(env, 'c=$(git commit-tree "HEAD^{tree}" -p HEAD -m later) && git update-ref refs/heads/QS_42 "$c"')
+    rc, out = env.run("move", "--new", head, "--old", env.state()["base"])
+    assert (rc, out["status"], out["head"]) == (0, "already-moved", head)
+    assert out["now"] == env.tip("QS_42") != head
+
+
+def test_unreadable_git_file_is_not_proof_of_breakage(env: Env) -> None:
+    """SF-1: an unreadable ``.git`` lets git decide — never a snapshot-less removal."""
+    assert env.prepare()[0] == 0
+    dot_git = env.scratch / ".git"
+    dot_git.chmod(0o000)
+    try:
+        rc, out = env.run("drop")
+    finally:
+        dot_git.chmod(0o644)
+    assert (rc, out["error"]) == (1, "drop-failed"), out
+    assert env.scratch.exists()
+
+
+def test_emitted_json_carries_no_lone_surrogates(env: Env) -> None:
+    """SF-2: a non-UTF-8 name is emitted as valid Unicode (the Control Plane stores it in sqlite)."""
+    import integrate_item
+
+    text = integrate_item._json_safe({"files": ["caf\udce9.txt", "ok"], "n": 1, "nested": [{"x": "\udcff"}]})
+    dumped = json.dumps(text, ensure_ascii=False)
+    dumped.encode("utf-8")  # no lone surrogate survives
+    assert text["files"] == ["caf\\xe9.txt", "ok"]
+
+
+def test_drop_an_orphan_head_snapshots_without_parent(env: Env) -> None:
+    """SF-3: no HEAD commit, yet dirty files → a parentless snapshot, never a silent loss."""
+    assert env.prepare()[0] == 0
+    env.scratch_git("checkout", "-q", "--orphan", "x")
+    (env.scratch / "p.txt").write_text("precious\n")
+    rc, out = env.run("drop")
+    assert (rc, out["status"], out["dropped_head"]) == (0, "dropped", None), out
+    snap = out["discarded_snapshot"]
+    assert env.repo.git("show", f"{snap}:p.txt").stdout == "precious\n"
+    assert env.repo.git("rev-list", "--parents", "-n", "1", snap).stdout.split()[1:] == []
+
+
+def test_move_ff_race_deliverable_deleted_is_move_failed(env: Env) -> None:
+    """NF-3: QS_42 deleted right after the fast-forward → move-failed."""
+    _deliverable_worktree(env)
+    head = _ready(env)
+    _hook(env, "git update-ref -d refs/heads/QS_42")
+    rc, out = env.run("move", "--new", head, "--old", env.state()["base"])
+    assert (rc, out["error"]) == (1, "move-failed"), out
+
+
+def test_drop_with_a_git_file_pointing_at_another_worktree(env: Env) -> None:
+    """B: a ``.git`` pointing at another worktree's admin dir is not this scratch — removed, the other intact."""
+    other = _deliverable_worktree(env)
+    assert env.prepare()[0] == 0
+    other_admin = env.repo.git("rev-parse", "--absolute-git-dir", cwd=other).stdout.strip()
+    (env.scratch / ".git").write_text(f"gitdir: {other_admin}\n")
+    rc, out = env.run("drop")
+    assert (rc, out["status"], out["git_unreadable"]) == (0, "dropped", True), out
+    assert not env.scratch.exists()
+    assert env.repo.git("status", "--porcelain", cwd=other).returncode == 0
+
+
+def test_merge_failed_keeps_its_detail_when_cleanup_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """I: a failing scratch removal is attached as ``cleanup_error``; the code stays ``merge-failed``."""
+    import integrate_item
+
+    class FakeCtx:
+        issue, item, scratch = 42, 1, tmp_path
+
+        def remove_scratch(self) -> None:
+            raise integrate_item.Refusal("drop-failed", "boom")
+
+    monkeypatch.setattr(
+        integrate_item, "git", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "merge boom")
+    )
+    monkeypatch.setattr(integrate_item, "rev", lambda *a, **k: None)
+    state = {"item_tip": "abc"}
+    with pytest.raises(integrate_item.Refusal) as exc:
+        integrate_item._merge(FakeCtx(), state, {"item_tip": "abc"})  # type: ignore[arg-type]
+    assert exc.value.code == "merge-failed"
+    assert exc.value.detail == "merge boom"
+    assert exc.value.extra["cleanup_error"] == "boom"

@@ -1634,7 +1634,7 @@ def test_item_unreadable_tip_keeps_the_branch(main_and_item, monkeypatch, capsys
 
 def test_item_delete_failure_keeps_the_branch(main_and_item, monkeypatch, capsys) -> None:
     """The item stays checked out (a locked registration survives the prune) at its
-    default path, and ``--work-dir`` is that path, missing: ``git branch -D`` refuses."""
+    default path, and ``--work-dir`` is that path, missing: the CAS delete's listing check refuses."""
     import shutil
 
     main, item = main_and_item
@@ -1898,3 +1898,17 @@ def test_cas_delete_refuses_when_the_listing_fails(main_and_item, monkeypatch) -
     ok, error = cleanup_worktree._cas_delete_branch(main, "QS_77_1", _tip(main, "QS_77_1"))
     assert ok is False and "boom" in (error or "")
     assert _tip(main, "QS_77_1") is not None
+
+
+def test_item_cas_delete_drops_the_branch_config_section(main_and_item, monkeypatch, capsys) -> None:
+    """Review fix #03: like ``git branch -D``, the CAS delete removes ``branch.<item>.*``."""
+    main, item = main_and_item
+    _commit_on_item(item)
+    _merge_item_into_deliverable(main)
+    _git(main, "config", "branch.QS_77_1.description", "item one")
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["branch_deleted"] is True
+    res = subprocess.run(
+        ["git", "-C", str(main), "config", "--get", "branch.QS_77_1.description"], capture_output=True, check=False
+    )
+    assert res.returncode == 1

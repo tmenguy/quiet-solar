@@ -247,3 +247,27 @@ def test_integration_mode_alongside_the_item_worktree(deliverable: Repo) -> None
     assert repo.setup("42", "1").returncode == 0
     res = repo.setup("42", "1", "--integration")
     assert res.returncode == 0, res.stdout + res.stderr
+
+
+def test_integration_mode_worktree_list_failure_is_an_error(deliverable: Repo, tmp_path: Path) -> None:
+    """Review fix #02 F: a failing ``git worktree list`` → ``Error:`` + exit 1, nothing created."""
+    import os
+
+    real_git = shutil.which("git")
+    assert real_git
+    shim_dir = tmp_path / "shim"
+    shim_dir.mkdir()
+    shim = shim_dir / "git"
+    shim.write_text(
+        # Fails only `git -C <main> worktree list` (the integration-mode check),
+        # not the script's first, `-C`-less listing that finds the main checkout.
+        '#!/bin/sh\n[ "$1" = -C ] && [ "$3" = worktree ] && [ "$4" = list ] && exit 1\n'
+        f'exec {real_git} "$@"\n'
+    )
+    shim.chmod(0o755)
+    repo = deliverable
+    repo.env = {**repo.env, "PATH": f"{shim_dir}{os.pathsep}{repo.env['PATH']}"}
+    res = repo.setup("42", "1", "--integration")
+    assert res.returncode == 1, res.stdout + res.stderr
+    assert "Error: 'git worktree list' failed" in res.stdout
+    assert not (repo.worktrees / "QS_42_1_integration").exists()
