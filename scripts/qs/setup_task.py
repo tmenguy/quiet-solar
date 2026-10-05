@@ -383,7 +383,9 @@ def _setup_item(issue: int, item: int, harness_arg: str | None) -> None:
     if result.returncode != 0:
         output_json({
             "error": "Worktree setup failed",
-            "detail": result.stderr.strip() or result.stdout.strip(),
+            # worktree-setup.sh prints its `Error:` lines on stdout; git noise
+            # on stderr must not hide them.
+            "detail": "\n".join(part for part in (result.stdout.strip(), result.stderr.strip()) if part),
         })
         sys.exit(1)
     work_dir = str(get_worktree_dir(issue, item=item))

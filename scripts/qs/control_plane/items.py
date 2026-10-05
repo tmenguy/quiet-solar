@@ -4,7 +4,7 @@ Five ``ToolSpec``s on top of #399's ``run_recorded``:
 
 * ``item-create`` / ``item-cleanup`` — ``setup_task.py --item`` and
   ``cleanup_worktree.py --item`` run from ``<MAIN>`` under ``main-checkout``;
-  ``item-cleanup`` first drops the item's integration scratch under
+  ``item-cleanup`` then drops the item's integration scratch under
   ``integration:QS_<N>`` (process-held).
 * ``integrate-start`` / ``integrate-finish`` / ``integrate-drop`` — the
   subcommands of ``integrate_item.py``, called by a session that holds
@@ -237,7 +237,10 @@ def _item_create_success(conn: sqlite3.Connection, ctx: StepCtx) -> dict[str, An
 
 def _item_cleanup_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
     _require_item(task)
-    flags = [flag for name, flag in CLEANUP_FLAGS if _bool_arg(args, name)]
+    chosen = {name for name, _ in CLEANUP_FLAGS if _bool_arg(args, name)}
+    if "discard_unintegrated" in chosen and "delete_branch" not in chosen:
+        raise errors.CpError("USAGE", "args.discard_unintegrated requires args.delete_branch")
+    flags = [flag for name, flag in CLEANUP_FLAGS if name in chosen]
 
     def cleanup(ctx: StepCtx) -> dict[str, Any]:
         n, k = _numbers(ctx)
@@ -265,7 +268,8 @@ def _item_cleanup_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step
             raise _unexpected("cleanup_worktree.py", res, data)
         return data
 
-    return (Step("drop_scratch", _drop), Step("cleanup", cleanup))
+    # cleanup first: a refused cleanup (StepFailed) never drops a live scratch; a retry re-runs it idempotently
+    return (Step("cleanup", cleanup), Step("drop_scratch", _drop))
 
 
 def _item_cleanup_success(conn: sqlite3.Connection, ctx: StepCtx) -> dict[str, Any]:

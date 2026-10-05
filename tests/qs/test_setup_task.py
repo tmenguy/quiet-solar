@@ -602,7 +602,9 @@ def test_item_worktree_setup_failure_is_a_json_error(
     monkeypatch.setattr(
         setup_task.subprocess,
         "run",
-        lambda cmd, **_k: subprocess.CompletedProcess(cmd, 1, "", "Error: deliverable branch QS_42 not found"),
+        lambda cmd, **_k: subprocess.CompletedProcess(
+            cmd, 1, "Error: deliverable branch QS_42 not found\n", "warning: some git noise\n"
+        ),
     )
     monkeypatch.setattr("sys.argv", ["setup_task.py", "42", "--item", "3", "--harness", "claude-code"])
     with pytest.raises(SystemExit) as exc:

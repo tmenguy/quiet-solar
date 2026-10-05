@@ -795,14 +795,28 @@ def _cleanup_with_branch(work_dir: Path, issue: int, branch_name: str) -> None: 
 # --- QS-400 D5: work-item cleanup -------------------------------------------
 
 
-def _unintegrated_count(git_dir: Path, deliverable: str, item: str) -> int:
-    """Commits on ``item`` not reachable from ``deliverable`` (merges included).
-
-    ``git rev-list --count refs/heads/<deliverable>..refs/heads/<item>``; ``-1``
-    on a missing ref or any git failure. Module-level so tests can patch it.
-    """
+def _branch_tip(git_dir: Path, branch: str) -> str | None:
+    """The sha of ``refs/heads/<branch>``, or ``None`` when it cannot be read."""
     result = subprocess.run(
-        ["git", "-C", str(git_dir), "rev-list", "--count", f"refs/heads/{deliverable}..refs/heads/{item}"],
+        ["git", "-C", str(git_dir), "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+        capture_output=True,
+        text=True,
+        cwd=str(git_dir),
+        check=False,
+    )
+    return (result.stdout.strip() or None) if result.returncode == 0 else None
+
+
+def _unintegrated_count(git_dir: Path, deliverable: str, tip: str | None) -> int:
+    """Commits reachable from ``tip`` (the item's tip sha) not reachable from ``deliverable`` (merges included).
+
+    ``git rev-list --count refs/heads/<deliverable>..<tip>``; ``-1`` on no tip,
+    a missing ref or any git failure. Module-level so tests can patch it.
+    """
+    if tip is None:
+        return -1
+    result = subprocess.run(
+        ["git", "-C", str(git_dir), "rev-list", "--count", f"refs/heads/{deliverable}..{tip}"],
         capture_output=True,
         text=True,
         cwd=str(git_dir),
@@ -864,8 +878,10 @@ def _cleanup_item(  # noqa: C901
     2. the branch step deletes ``QS_<N>_<k>`` only when fully integrated into
        ``QS_<N>`` (``rev-list --count`` is 0), unless ``discard``.
 
-    ``error`` / ``action_required`` stop the call before the branch step. Emits
-    one JSON object with every key always present.
+    A detached worktree removed with ``--force`` reports its HEAD as
+    ``detached_head`` (the undo point). ``error`` / ``action_required`` stop
+    the call before the branch step. Emits one JSON object with every key
+    always present.
     """
     item_branch = task_branch_name(issue, item)
     deliverable = task_branch_name(issue)
@@ -886,6 +902,7 @@ def _cleanup_item(  # noqa: C901
         "deleted_tip": None,
         "uncommitted_files": [],
         "detached": False,
+        "detached_head": None,
         "options": {},
     }
 
@@ -938,12 +955,22 @@ def _cleanup_item(  # noqa: C901
                         f"Item worktree {work_dir} has {' and '.join(reasons)}; re-run with --force to discard.",
                     )
                     return
+            detached_head = None
+            if kind == "detached":  # the undo point of the discarded HEAD, read before it goes
+                head_result = subprocess.run(
+                    ["git", "-C", str(work_dir), "rev-parse", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                detached_head = (head_result.stdout.strip() or None) if head_result.returncode == 0 else None
             wt_error = remove_worktree(work_dir)
             if wt_error and work_dir.exists():
                 out["worktree_remove_error"] = wt_error
                 finish("error", f"Item worktree removal failed: {wt_error}")
                 return
             out["worktree_removed"] = True
+            out["detached_head"] = detached_head
             out["worktree_remove_error"] = wt_error
             if wt_error:
                 _prune_worktrees(main_wt)  # N2: the dir is gone, clear the stale registration
@@ -975,6 +1002,9 @@ def _cleanup_item(  # noqa: C901
 
     if out["worktree_removed"]:
         wt_part = f"Item worktree {work_dir} removed"
+        if out["detached_head"]:
+            head = out["detached_head"]
+            wt_part += f" (its detached HEAD was {head}; undo: git branch <name> {head})"
     elif out["stale_directory"]:
         wt_part = (
             f"{work_dir} is a stale unregistered leftover, left on disk (remove it by hand, or "
@@ -993,7 +1023,9 @@ def _cleanup_item(  # noqa: C901
         finish("removed", f"{wt_part}; branch {item_branch} already absent.")
         return
     deliverable_missing = not _branch_exists(main_wt, deliverable)
-    n = _unintegrated_count(main_wt, deliverable, item_branch)
+    # The tip first, then the count on that sha: the deleted tip is the commit proven integrated.
+    tip = _branch_tip(main_wt, item_branch)
+    n = _unintegrated_count(main_wt, deliverable, tip)
     if n >= 0:
         out["unintegrated_commits"] = n
 
@@ -1017,14 +1049,7 @@ def _cleanup_item(  # noqa: C901
             )
             return
 
-    tip_result = subprocess.run(
-        ["git", "-C", str(main_wt), "rev-parse", "--verify", "--quiet", f"refs/heads/{item_branch}"],
-        capture_output=True,
-        text=True,
-        cwd=str(main_wt),
-        check=False,
-    )
-    out["deleted_tip"] = tip_result.stdout.strip() or None
+    out["deleted_tip"] = tip
     deleted, error = delete_local_branch(main_wt, item_branch)
     if not deleted:
         out["branch_kept_reason"] = "delete-failed"

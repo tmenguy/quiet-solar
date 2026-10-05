@@ -112,9 +112,10 @@ _qs_require_deliverable() {
 # `integrate_item.py drop` removes) — report it and touch nothing.
 if [ "$MODE" = integration ]; then
     _qs_require_deliverable
-    if [ -e "$WORKTREE_DIR" ] || git -C "$MAIN_DIR" worktree list --porcelain \
-        | grep -E "^worktree " \
-        | sed 's/^worktree //' \
+    # The listing goes into a variable first: under `pipefail`, `grep -q`
+    # exiting on the first match could SIGPIPE the producer and hide it.
+    REGISTERED="$(git -C "$MAIN_DIR" worktree list --porcelain | sed -n 's/^worktree //p')"
+    if [ -e "$WORKTREE_DIR" ] || printf '%s\n' "$REGISTERED" \
         | grep -qxF -e "$WORKTREE_DIR" -e "$WORKTREE_DIR_CANON"; then
         echo "Error: integration scratch already exists: ${WORKTREE_DIR}"
         exit 3

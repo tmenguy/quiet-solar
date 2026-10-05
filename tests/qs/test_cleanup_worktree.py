@@ -1251,6 +1251,7 @@ _ITEM_KEYS = {
     "deleted_tip",
     "uncommitted_files",
     "detached",
+    "detached_head",
     "options",
 }
 
@@ -1363,6 +1364,7 @@ def test_item_clean_worktree_is_removed_without_force(main_and_item, monkeypatch
     assert out["worktree_removed"] is True
     assert out["worktree_absent"] is False
     assert out["detached"] is False
+    assert out["detached_head"] is None
     assert out["options"] == {}
     assert not item.exists()
     assert _tip(main, "QS_77_1") is not None
@@ -1420,6 +1422,7 @@ def test_item_detached_requires_force(main_and_item, monkeypatch, capsys) -> Non
     out = _run_item(monkeypatch, capsys, item)
     assert out["status"] == "action_required"
     assert out["detached"] is True
+    assert out["detached_head"] is None  # nothing removed
     assert "--force" in out["options"]
     assert item.exists()
 
@@ -1427,11 +1430,27 @@ def test_item_detached_requires_force(main_and_item, monkeypatch, capsys) -> Non
 def test_item_detached_with_force_is_removed(main_and_item, monkeypatch, capsys) -> None:
     main, item = main_and_item
     _git(item, "checkout", "-q", "--detach")
+    _commit_on_item(item, "detached.txt")  # a commit only the detached HEAD reaches
+    head = _git(item, "rev-parse", "HEAD").strip()
     out = _run_item(monkeypatch, capsys, item, "--force")
     assert out["status"] == "removed"
     assert out["worktree_removed"] is True
+    assert out["detached_head"] == head  # the undo point, read before the removal
+    assert f"git branch <name> {head}" in out["message"]
     assert not item.exists()
-    assert _tip(main, "QS_77_1") is not None
+    assert _tip(main, "QS_77_1") is not None and _tip(main, "QS_77_1") != head
+
+
+def test_item_detached_removal_failure_records_no_detached_head(main_and_item, monkeypatch, capsys) -> None:
+    import cleanup_worktree
+
+    main, item = main_and_item
+    _git(item, "checkout", "-q", "--detach")
+    monkeypatch.setattr(cleanup_worktree, "remove_worktree", lambda wd: "boom removing")
+    out = _run_item(monkeypatch, capsys, item, "--force")
+    assert out["status"] == "error"
+    assert out["detached_head"] is None
+    assert item.exists()
 
 
 def test_item_status_failure_is_an_error(main_and_item, monkeypatch, capsys) -> None:
@@ -1551,12 +1570,49 @@ def test_item_count_failure_keeps_the_branch(main_and_item, monkeypatch, capsys)
     import cleanup_worktree
 
     main, item = main_and_item
-    monkeypatch.setattr(cleanup_worktree, "_unintegrated_count", lambda g, d, i: -1)
+    monkeypatch.setattr(cleanup_worktree, "_unintegrated_count", lambda g, d, tip: -1)
     out = _run_item(monkeypatch, capsys, item, "--delete-branch")
     assert out["status"] == "removed-branch-kept"
     assert out["branch_kept_reason"] == "count-failed"
     assert out["unintegrated_commits"] is None
     assert out["message"].endswith("; branch kept")
+    assert _tip(main, "QS_77_1") is not None
+
+
+def test_item_counts_the_tip_read_before_the_count_and_reports_it(main_and_item, monkeypatch, capsys) -> None:
+    """The tip is read first; the count runs on that sha, so ``deleted_tip`` is the commit proven integrated."""
+    import cleanup_worktree
+
+    main, item = main_and_item
+    _commit_on_item(item)
+    _merge_item_into_deliverable(main)
+    tip = _tip(main, "QS_77_1")
+    real = cleanup_worktree._unintegrated_count
+    seen: list[tuple[str, str | None]] = []
+
+    def spy(git_dir: Path, deliverable: str, item_tip: str | None) -> int:
+        seen.append((deliverable, item_tip))
+        n = real(git_dir, deliverable, item_tip)
+        _git(main, "update-ref", "refs/heads/QS_77_1", "refs/heads/main")  # the branch moves after the count
+        return n
+
+    monkeypatch.setattr(cleanup_worktree, "_unintegrated_count", spy)
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert seen == [("QS_77", tip)]
+    assert out["status"] == "removed" and out["unintegrated_commits"] == 0
+    assert out["deleted_tip"] == tip
+    assert f"git branch QS_77_1 {tip}" in out["message"]
+
+
+def test_item_unreadable_tip_keeps_the_branch(main_and_item, monkeypatch, capsys) -> None:
+    import cleanup_worktree
+
+    main, item = main_and_item
+    monkeypatch.setattr(cleanup_worktree, "_branch_tip", lambda g, b: None)
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "removed-branch-kept"
+    assert out["branch_kept_reason"] == "count-failed"
+    assert out["deleted_tip"] is None
     assert _tip(main, "QS_77_1") is not None
 
 
@@ -1763,11 +1819,21 @@ def test_unintegrated_count_counts_and_fails_on_a_missing_ref(main_and_item) -> 
     import cleanup_worktree
 
     main, item = main_and_item
-    assert cleanup_worktree._unintegrated_count(main, "QS_77", "QS_77_1") == 0
+    assert cleanup_worktree._unintegrated_count(main, "QS_77", _tip(main, "QS_77_1")) == 0
     _commit_on_item(item)
-    assert cleanup_worktree._unintegrated_count(main, "QS_77", "QS_77_1") == 1
-    assert cleanup_worktree._unintegrated_count(main, "QS_77", "QS_77_404") == -1
-    assert cleanup_worktree._unintegrated_count(main, "QS_404", "QS_77_1") == -1
+    tip = _tip(main, "QS_77_1")
+    assert cleanup_worktree._unintegrated_count(main, "QS_77", tip) == 1
+    assert cleanup_worktree._unintegrated_count(main, "QS_77", "f" * 40) == -1
+    assert cleanup_worktree._unintegrated_count(main, "QS_77", None) == -1
+    assert cleanup_worktree._unintegrated_count(main, "QS_404", tip) == -1
+
+
+def test_branch_tip_reads_the_sha_or_none(main_and_item) -> None:
+    import cleanup_worktree
+
+    main, _item = main_and_item
+    assert cleanup_worktree._branch_tip(main, "QS_77_1") == _tip(main, "QS_77_1")
+    assert cleanup_worktree._branch_tip(main, "QS_77_404") is None
 
 
 def test_unintegrated_count_is_minus_one_on_unparsable_output(main_and_item, monkeypatch) -> None:
@@ -1776,7 +1842,7 @@ def test_unintegrated_count_is_minus_one_on_unparsable_output(main_and_item, mon
     main, _item = main_and_item
     fake = subprocess.CompletedProcess(args=[], returncode=0, stdout="not a number\n", stderr="")
     monkeypatch.setattr(cleanup_worktree.subprocess, "run", lambda *a, **k: fake)
-    assert cleanup_worktree._unintegrated_count(main, "QS_77", "QS_77_1") == -1
+    assert cleanup_worktree._unintegrated_count(main, "QS_77", "f" * 40) == -1
 
 
 def test_item_registration_finds_the_item_worktree(main_and_item, tmp_path) -> None:

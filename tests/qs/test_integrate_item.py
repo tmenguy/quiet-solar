@@ -729,3 +729,77 @@ def test_drop_removes_a_leftover_that_is_not_a_worktree(env: Env) -> None:
     assert out["not_a_worktree"] is True
     assert not env.scratch.exists()
     assert (env.repo.clone / "venv" / "bin" / "python").exists()
+
+
+# ---------------------------------------------------------------------------
+# Review fix #01
+# ---------------------------------------------------------------------------
+
+
+def test_drop_a_scratch_whose_git_file_is_gone(env: Env) -> None:
+    """Fix 1: a registered scratch with no ``.git`` is still dropped (no ``stale-scratch`` loop)."""
+    assert env.prepare()[0] == 0
+    (env.scratch / ".git").unlink()
+    rc, out = env.run("drop")
+    assert (rc, out["status"], out["git_unreadable"]) == (0, "dropped", True), out
+    assert not env.scratch.exists()
+    assert "QS_42_1_integration" not in env.repo.git("worktree", "list").stdout
+    assert env.prepare()[1]["status"] == "merged"
+
+
+def test_stale_deliverable_registration_is_ignored(env: Env) -> None:
+    """Fix 2: a registration of QS_42 whose directory is gone neither blocks check nor move."""
+    wt = _deliverable_worktree(env)
+    shutil.rmtree(wt)
+    head = _ready(env)
+    rc, out = env.run("move", "--new", head, "--old", env.state()["base"])
+    assert (rc, out["status"]) == (0, "moved"), out
+    assert env.tip("QS_42") == head
+
+
+def test_non_ascii_conflicted_file_is_scanned_for_markers(env: Env) -> None:
+    """Fix 3: paths are read unquoted; the marker grep sees ``café.txt``."""
+    env.commit("QS_42_1", {"café.txt": "item side\n"})
+    env.commit("QS_42", {"café.txt": "deliverable side\n"})
+    rc, out = env.prepare()
+    assert (rc, out["status"], out["files"]) == (0, "conflicts", ["café.txt"]), out
+    (env.scratch / "café.txt").write_text("<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> item\n")
+    env.scratch_git("add", "café.txt")
+    env.scratch_git("commit", "-q", "--no-edit")
+    rc, out = env.run("check")
+    assert (rc, out["error"], out["files"]) == (1, "conflict-markers", ["café.txt"])
+
+
+def test_dirty_files_are_reported_unquoted(env: Env) -> None:
+    assert env.prepare()[0] == 0
+    (env.scratch / "naïve.txt").write_text("x\n")
+    rc, out = env.run("check")
+    assert (rc, out["error"], out["files"]) == (1, "dirty-scratch", ["naïve.txt"])
+
+
+def test_drop_a_locked_scratch(env: Env) -> None:
+    """Fix 7: a locked scratch is removed and unregistered too."""
+    assert env.prepare()[0] == 0
+    env.repo.git("worktree", "lock", str(env.scratch))
+    rc, out = env.run("drop")
+    assert (rc, out["status"]) == (0, "dropped"), out
+    assert "QS_42_1_integration" not in env.repo.git("worktree", "list").stdout
+
+
+def test_io_error_is_json(env: Env) -> None:
+    """Fix 8: an OSError (here: the lock file cannot be created) is a JSON ``io-failed``."""
+    lock = env.lock_path()
+    lock.mkdir()  # os.open(O_RDWR) on a directory → IsADirectoryError
+    rc, out = env.run("check")
+    assert (rc, out["error"]) == (1, "io-failed")
+
+
+def test_non_ascii_digit_timeout_falls_back_to_the_default(env: Env) -> None:
+    """Fix 10."""
+    fd = os.open(env.lock_path(), os.O_RDWR | os.O_CREAT)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        rc, out = env.run("check", env={"QS_INTEGRATE_GATE_TIMEOUT_S": "²"})
+        assert (rc, out["error"], out["max_wait_s"]) == (1, "scratch-busy", 3300)
+    finally:
+        os.close(fd)

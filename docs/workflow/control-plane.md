@@ -239,7 +239,7 @@ A probe that cannot tell (a failed or unparseable `gh` listing or `gh pr view`) 
 | `push` | run, or node (own task) | worktree | — | `git ls-remote` equals `HEAD` |
 | `merge` | run | `<MAIN>` | `integration:<branch>`, `main-merge` | `gh pr view` shows `MERGED` (a failed or unparseable view is `BUSY`) |
 | `item-create` (#400) | run | `<MAIN>` | `main-checkout` | none; `setup_task.py <N> --item <k>` is idempotent. Sets the item's `worktree` and `branch` |
-| `item-cleanup` (`delete_branch`, `discard_unintegrated`, `force`) (#400) | run | `<MAIN>` | `integration:QS_<N>` (process-held; omitted for a NULL `branch`), `main-checkout` | none: `integrate_item.py drop`, then `cleanup_worktree.py --item`; any state. Clears `worktree` only — a cleaned item keeps its `branch` |
+| `item-cleanup` (`delete_branch`, `discard_unintegrated`, `force`) (#400) | run | `<MAIN>` | `integration:QS_<N>` (process-held; omitted for a NULL `branch`), `main-checkout` | none: `cleanup_worktree.py --item`, then `integrate_item.py drop` (a refused cleanup never drops a live scratch); any state. Clears `worktree` only — a cleaned item keeps its `branch` |
 | `integrate-start` (#400) | run, or node (own task) | `<MAIN>` | `integration:QS_<N>` (co-held: the caller's **session** must hold it), `main-checkout` | the session check only (`POLICY_REFUSED` otherwise, before any wait) |
 | `integrate-finish` (#400) | run, or node (own task) | `<MAIN>` | `integration:QS_<N>` (co-held), `gates` slot | the session check only |
 | `integrate-drop` (#400) | run, or node (own task) | `<MAIN>` | `integration:QS_<N>` (co-held), `main-checkout` | the session check only; any state |

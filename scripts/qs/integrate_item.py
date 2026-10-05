@@ -47,7 +47,7 @@ import time
 from pathlib import Path
 from typing import Any, NoReturn
 
-from utils import get_integration_dir, get_main_worktree  # type: ignore[import-not-found]
+from utils import get_integration_dir, get_main_worktree, positive_int  # type: ignore[import-not-found]
 
 DEFAULT_GATE_TIMEOUT_S = 3300
 TAIL_LINES = 40
@@ -71,7 +71,7 @@ PHASES = ("created", "merged", "conflicts")
 def gate_timeout_s() -> int:
     """The gate deadline; ``QS_INTEGRATE_GATE_TIMEOUT_S`` overrides it (tests)."""
     raw = os.environ.get("QS_INTEGRATE_GATE_TIMEOUT_S", "")
-    return int(raw) if raw.isdigit() and int(raw) > 0 else DEFAULT_GATE_TIMEOUT_S
+    return int(raw) if raw.isascii() and raw.isdigit() and int(raw) > 0 else DEFAULT_GATE_TIMEOUT_S
 
 
 class Refusal(Exception):
@@ -123,16 +123,26 @@ def common_dir(main: Path) -> Path:
 
 
 def unmerged_files(worktree: Path) -> list[str]:
-    res = git(worktree, "diff", "--name-only", "--diff-filter=U")
-    return sorted({line for line in res.stdout.splitlines() if line})
+    """Unmerged paths, NUL-separated so a non-ASCII name is never quoted."""
+    res = git(worktree, "diff", "--name-only", "-z", "--diff-filter=U")
+    return sorted({name for name in res.stdout.split("\0") if name})
 
 
 def dirty_files(worktree: Path, *, untracked: bool = True) -> list[str]:
-    args = ["status", "--porcelain", "--untracked-files=all" if untracked else "--untracked-files=no"]
+    """Changed paths from ``status --porcelain -z`` (unquoted; a rename's source entry skipped)."""
+    args = ["status", "--porcelain", "-z", "--untracked-files=all" if untracked else "--untracked-files=no"]
     res = git(worktree, *args)
     if res.returncode != 0:
         raise Refusal("git-failed", f"git status failed in {worktree}: {res.stderr.strip()}")
-    return [line[3:] for line in res.stdout.splitlines() if line]
+    files: list[str] = []
+    entries = iter(res.stdout.split("\0"))
+    for entry in entries:
+        if not entry:
+            continue
+        files.append(entry[3:])
+        if "R" in entry[:2] or "C" in entry[:2]:
+            next(entries, None)  # the rename / copy source
+    return files
 
 
 def operation_in_progress(worktree: Path) -> str | None:
@@ -171,8 +181,9 @@ def is_registered(main: Path, path: Path) -> bool:
 
 
 def checkout_of(main: Path, branch: str) -> Path | None:
+    """The worktree holding ``branch``; a registration whose directory is gone does not count."""
     for path, ref in worktrees(main):
-        if ref == f"refs/heads/{branch}":
+        if ref == f"refs/heads/{branch}" and path.is_dir():
             return path
     return None
 
@@ -222,7 +233,7 @@ class Ctx:
     def read_state(self) -> dict[str, Any] | None:
         try:
             data = json.loads(self.state_path().read_text(encoding="utf-8"))
-        except OSError, ValueError:
+        except OSError, ValueError, Refusal:
             return None
         if not isinstance(data, dict) or data.get("phase") not in PHASES:
             return None
@@ -250,12 +261,20 @@ class Ctx:
         return state
 
     def remove_scratch(self) -> None:
-        """``git worktree remove --force`` + prune; never follows the venv symlink."""
+        """``git worktree remove -f -f`` (a locked scratch too) + prune; never follows the venv symlink.
+
+        A registration that survives the prune → ``drop-failed``.
+        """
         if self.scratch.exists():
-            res = git(self.main, "worktree", "remove", "--force", str(self.scratch))
+            res = git(self.main, "worktree", "remove", "--force", "--force", str(self.scratch))
             if res.returncode != 0 and self.scratch.exists():
                 shutil.rmtree(self.scratch)
         git(self.main, "worktree", "prune")
+        if is_registered(self.main, self.scratch):
+            git(self.main, "worktree", "unlock", str(self.scratch))
+            git(self.main, "worktree", "prune")
+            if is_registered(self.main, self.scratch):
+                raise Refusal("drop-failed", f"{self.scratch} is still registered after git worktree prune")
 
 
 def _integrated(ctx: Ctx, state: dict[str, Any]) -> tuple[bool, str | None]:
@@ -444,8 +463,9 @@ def cmd_check(ctx: Ctx) -> dict[str, Any]:
 def _conflict_markers(ctx: Ctx, files: list[str]) -> list[str]:
     if not files:
         return []
-    res = git(ctx.scratch, "grep", "-l", "-E", MARKER_RE, "HEAD", "--", *files)
-    return sorted(line.split(":", 1)[1] for line in res.stdout.splitlines() if ":" in line)
+    pathspecs = [f":(literal){name}" for name in files]
+    res = git(ctx.scratch, "-c", "core.quotePath=false", "grep", "-l", "-z", "-E", MARKER_RE, "HEAD", "--", *pathspecs)
+    return sorted(hit.split(":", 1)[1] for hit in res.stdout.split("\0") if ":" in hit)
 
 
 def cmd_gate(ctx: Ctx, expect_head: str) -> dict[str, Any]:
@@ -569,7 +589,10 @@ def cmd_move(ctx: Ctx, new: str, old: str) -> dict[str, Any]:
     wt = _deliverable_worktree_ready(ctx)
     if wt is not None:
         res = git(wt, "merge", "--ff-only", new_sha)
-        if res.returncode != 0 or ctx.deliverable_tip() != new_sha:
+        now = ctx.deliverable_tip()
+        if res.returncode != 0 or now != new_sha:
+            if now != old_sha:
+                raise Refusal("deliverable-moved", f"{ctx.deliverable} moved during the fast-forward (now {now})")
             raise Refusal("move-failed", res.stderr.strip() or "QS_<N> did not reach the new head")
     else:
         res = git(ctx.main, "update-ref", f"refs/heads/{ctx.deliverable}", new_sha, old_sha)
@@ -592,6 +615,13 @@ def cmd_drop(ctx: Ctx) -> dict[str, Any]:
         # so `worktree-setup.sh --integration` stops answering exit 3.
         shutil.rmtree(ctx.scratch)
         return {"status": "dropped", "not_a_worktree": True, "dropped_head": None, "integrated": None}
+    try:
+        git_dir(ctx.scratch)
+    except Refusal:
+        # Registered, but its `.git` is gone or corrupt: nothing readable to
+        # snapshot — remove it, so `prepare` is not blocked forever.
+        ctx.remove_scratch()
+        return {"status": "dropped", "git_unreadable": True, "dropped_head": None, "integrated": None}
     state = ctx.read_state()
     head = rev(ctx.scratch, "HEAD")
     tip = ctx.deliverable_tip()
@@ -650,20 +680,14 @@ def _snapshot(ctx: Ctx, head: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _positive(raw: str) -> int:
-    if not raw.isascii() or not raw.isdigit() or raw.startswith("0"):
-        raise argparse.ArgumentTypeError(f"expected a positive integer, got {raw!r}")
-    return int(raw)
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Integrate a work item into its deliverable (QS-400)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     def add(name: str) -> argparse.ArgumentParser:
         p = sub.add_parser(name)
-        p.add_argument("--issue", type=_positive, required=True)
-        p.add_argument("--item", type=_positive, required=True)
+        p.add_argument("--issue", type=positive_int, required=True)
+        p.add_argument("--item", type=positive_int, required=True)
         return p
 
     add("prepare").add_argument("--item-tip", required=True)
@@ -709,6 +733,8 @@ def main(argv: list[str] | None = None) -> None:
             out = cmd_drop(ctx)
     except Refusal as exc:
         _emit({"error": exc.code, "detail": exc.detail, **exc.extra}, 1)
+    except OSError as exc:
+        _emit({"error": "io-failed", "detail": str(exc)}, 1)
     _emit(out)
 
 

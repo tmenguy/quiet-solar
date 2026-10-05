@@ -299,6 +299,15 @@ def test_a_non_boolean_cleanup_flag_is_usage(w: W) -> None:
     assert w.runner.calls == []
 
 
+def test_discard_unintegrated_without_delete_branch_is_usage(w: W) -> None:
+    for extra in ({}, {"delete_branch": False}):
+        code, out = tool(w, "item-cleanup", "k1", discard_unintegrated=True, **extra)
+        assert code == 2 and out["error"] == "USAGE", out
+        assert "discard_unintegrated" in out["detail"] and "delete_branch" in out["detail"]
+        assert call_row(w, "item-cleanup", "k1") is None
+    assert w.runner.calls == [] and lock_rows(w) == []
+
+
 # --------------------------------------------------------------------------- item-create
 
 
@@ -375,14 +384,14 @@ class TestItemCleanup:
         w.runner.calls.clear()
         return w
 
-    def test_drops_the_scratch_then_cleans_under_both_locks(self, wc: W) -> None:
+    def test_cleans_then_drops_the_scratch_under_both_locks(self, wc: W) -> None:
         w = wc
         seen: dict[str, Any] = {}
         snapshot_locks(w, "drop", seen)
         snapshot_locks(w, "cleanup", seen)
         code, out = tool(w, "item-cleanup", "item:T2:cleanup:1", delete_branch=True)
         assert code == 0, out
-        drop, cleanup = w.runner.calls  # drop_scratch runs first
+        cleanup, drop = w.runner.calls  # cleanup runs first: a refused cleanup never drops
         assert drop.argv == [
             str(w.main / "venv" / "bin" / "python"),
             str(w.main / "scripts" / "qs" / "integrate_item.py"),
@@ -495,12 +504,25 @@ class TestItemCleanup:
         assert code == 1 and out["error"] == "TOOL_FAILED" and out["result"]["error"] == "CONFLICT", out
         assert w.runner.calls == []
 
-    def test_a_failed_drop_stops_before_cleanup(self, wc: W) -> None:
+    def test_a_failed_drop_after_the_cleanup_fails_and_a_new_key_retries(self, wc: W) -> None:
         wc.sim.busy.add("drop")
         code, out = tool(wc, "item-cleanup", "k1")
         assert code == 1 and out["error"] == "TOOL_FAILED"
         assert out["result"]["output"]["json"]["error"] == "scratch-busy"
-        assert wc.sim.count("cleanup_worktree.py") == 0 and task_col(wc, "T2", "worktree") is not None
+        assert wc.sim.count("cleanup_worktree.py") == 1 and task_col(wc, "T2", "worktree") is not None
+        assert 1 in wc.sim.scratches
+        wc.sim.busy.clear()
+        code, out = tool(wc, "item-cleanup", "k2")  # the cleanup is idempotent: run it again, then drop
+        assert code == 0, out
+        assert out["result"]["scratch"]["outcome"] == "dropped" and wc.sim.scratches == {}
+        assert task_col(wc, "T2", "worktree") is None
+
+    def test_a_refused_cleanup_never_drops_the_scratch(self, wc: W) -> None:
+        wc.sim.cleanup_status = "action_required"
+        code, out = tool(wc, "item-cleanup", "k1", delete_branch=True)
+        assert code == 1 and out["error"] == "TOOL_FAILED", out
+        assert wc.sim.count("integrate_item.py") == 0 and wc.sim.calls("drop") == []
+        assert wc.sim.scratches[1] == Scratch("d0", "i1", "m9", "merged")
 
     @pytest.mark.parametrize("status", ["action_required", "error", "garbage"])
     def test_a_cleanup_that_did_not_remove_fails_with_its_json(self, wc: W, status: str) -> None:
@@ -510,6 +532,7 @@ class TestItemCleanup:
         expected = None if status == "garbage" else {"status": status, "branch": "QS_7_1"}
         assert out["result"]["output"]["json"] == expected
         assert task_col(wc, "T2", "worktree") is not None
+        assert wc.sim.count("integrate_item.py") == 0 and 1 in wc.sim.scratches
 
     def test_same_key_replay_has_no_second_effect(self, wc: W) -> None:
         assert tool(wc, "item-cleanup", "k1")[0] == 0
