@@ -193,7 +193,8 @@ def update_fields(conn: sqlite3.Connection, clock: clock_mod.Clock, task_id: str
         raise errors.CpError("USAGE", f"not settable: {', '.join(sorted(unknown))}")
     if not fields:
         return
-    deliverable_fields = sorted(set(fields) & set(DELIVERABLE_FIELDS))
+    # A NULL write is allowed: it repairs a malformed item, never makes one.
+    deliverable_fields = sorted(k for k in set(fields) & set(DELIVERABLE_FIELDS) if fields[k] is not None)
     if deliverable_fields:
         row = conn.execute("SELECT deliverable_id FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if row is not None and row["deliverable_id"] is not None:

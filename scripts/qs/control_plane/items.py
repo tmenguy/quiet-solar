@@ -126,7 +126,7 @@ def _item_guard(*, branch: bool = False, allow_null: bool = False, shape: bool =
 
     def guard(ctx: StepCtx) -> None:
         if shape and (ctx.task["is_deliverable"] or ctx.task["issue_number"] is not None):
-            # `tasks.add` / `set_fields` refuse this shape; a row made by hand still must not cut
+            # `tasks.add` / `update_fields` refuse this shape; a row made by hand still must not cut
             # `QS_<N>_<k>` for what is really its own deliverable `QS_<M>`.
             raise errors.CpError("INVALID_STATE", f"task {ctx.task['id']}: {tasks.ITEM_NOT_DELIVERABLE}")
         deliverable = _deliverable(ctx)

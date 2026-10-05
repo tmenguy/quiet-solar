@@ -845,9 +845,12 @@ def test_cleanup_and_drop_still_run_on_a_malformed_item(wi: W, column: str, valu
     sql(wi.db, f"UPDATE tasks SET {column} = ? WHERE id = 'T2'", [value])
     code, out = tool(wi, "integrate-drop", "d1", token=wi.node)
     assert code == 0, out
+    wi.runner.calls.clear()
     for name in ("integrate-start", "integrate-finish"):
         code, out = tool(wi, name, f"{name}-1", token=wi.node)
-        assert out.get("result", {}).get("error") == "INVALID_STATE", (name, out)
+        assert code == 1 and out["result"]["error"] == "INVALID_STATE", (name, out)
+        assert "own issue" in out["result"]["detail"]  # the shape refusal, not another guard
+    assert wi.runner.calls == []
     code, out = run_cli("lock", "release", "--name", "integration:QS_7", "--session-id", "S-n2", "--token", wi.node)
     assert code == 0, out
     code, out = tool(wi, "item-cleanup", "c1")

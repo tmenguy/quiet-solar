@@ -372,6 +372,8 @@ def test_update_fields_refuses_deliverable_fields_on_an_item(migrated, run, conn
             tasks.update_fields(conn, clock.FakeClock(), "T2", fields)
         assert exc.value.code == "INVALID_STATE"
     with db.write(conn):
+        # resetting to NULL repairs a malformed item, so it is allowed
+        tasks.update_fields(conn, clock.FakeClock(), "T2", {"issue_number": None, "pr_number": None})
         tasks.update_fields(conn, clock.FakeClock(), "T2", {"worktree": "/w", "branch": "QS_7_1"})
         tasks.update_fields(conn, clock.FakeClock(), "T1", {"pr_number": 3, "pr_url": "u"})
     assert sql(migrated, "SELECT issue_number, pr_number, branch FROM tasks WHERE id = 'T2'")[0][:] == (
