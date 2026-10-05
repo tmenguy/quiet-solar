@@ -5,8 +5,8 @@ the concrete ones so a future edit cannot silently drop them. What it pins:
 
 * ``harness.md`` — ``phase_model`` and ``model picker`` (the GUI gesture),
   ``Five classes``, the ``deep`` model IDs ``claude-opus-5-5`` /
-  ``claude-opus-5.5``, the ```build``` class token with its ``build`` model
-  IDs ``claude-opus-4-8`` / ``claude-opus-4.8``, and the CLI floor
+  ``claude-opus-5.5``, the ```build``` class token (its model IDs are the
+  same Opus 5.5 IDs since 2026-10-04), and the CLI floor
   ``2.1.280``;
 * ``docs/agents/glossary.md`` — the ```build``` class token;
 * ``CLAUDE.md`` / ``project-rules.md`` — "five classes" (never "four");
@@ -48,9 +48,9 @@ def test_harness_md_carries_ac8_model_tokens() -> None:
 
     The ``deep`` IDs (``claude-opus-5-5`` / ``claude-opus-5.5``) are what
     ``HARNESS_MODELS`` maps to the ``deep`` class; the ``build`` row is the
-    ```build``` class token together with its ``claude-opus-4-8`` /
-    ``claude-opus-4.8`` model IDs. Both are pinned so an edit cannot drop
-    either class's IDs (QS-367 S1/S3).
+    ```build``` class token. Since 2026-10-04 ``build`` also maps to the
+    Opus 5.5 IDs pinned here, and the row table must carry them (QS-367
+    S1/S3).
     """
     body = _normalised(HARNESS_MD)
     for token in (
@@ -58,8 +58,7 @@ def test_harness_md_carries_ac8_model_tokens() -> None:
         "claude-opus-5-5",  # deep model IDs
         "claude-opus-5.5",
         "`build`",  # build class token + its model IDs
-        "claude-opus-4-8",
-        "claude-opus-4.8",
+        "| `build` | `claude-opus-5-5` | `claude-opus-5.5` |",  # build row
         "2.1.280",
     ):
         assert token in body, (

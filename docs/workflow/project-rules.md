@@ -120,7 +120,8 @@ source venv/bin/activate && pytest tests/test_solver.py::test_function_name -v
 
 **Local-vs-CI coverage invariant (QS-276).** Local commits run
 `--impacted` (the lines you changed are 100% covered); the **full-suite
-100% coverage of `custom_components/quiet_solar/`** requirement is
+100% coverage of `custom_components/quiet_solar/` and of the Control
+Plane, `scripts/qs/control_plane/` (QS-399)** requirement is
 enforced in **CI on every PR** and is
 what actually guarantees full coverage. The implement phase ALWAYS
 runs `--impacted` before commit/PR and never substitutes the full gate
@@ -209,7 +210,8 @@ directly, by design. The raw-`pytest` grammar rule and the
 *interactive and agent* commands, not CI. Where the PR suite is
 sharded, the job providing the required status check on `main` ends in
 a single authoritative fail-under-100 coverage verdict over the whole
-of `custom_components/quiet_solar/` — spelled
+of `custom_components/quiet_solar/` and `scripts/qs/control_plane/`
+(QS-399) — spelled
 `pytest --cov-fail-under=100` or `coverage report --fail-under=100`.
 
 **UI-only fast path.** When only `custom_components/quiet_solar/ui/*.j2`

@@ -433,7 +433,7 @@ def test_render_context_missing_model_key_applies_policy(tmp_path: Path) -> None
     r.render_all(tmp_path, context=ctx, out_root=out, templates_dir=tdir)
     agents_c = out / ".claude" / "agents"
     assert (agents_c / "qs-finish-task.md").read_text() == "model=claude-haiku-4-5 effort=None\n"
-    assert (agents_c / "qs-implement-task.md").read_text() == "model=claude-opus-4-8 effort=high\n"
+    assert (agents_c / "qs-implement-task.md").read_text() == "model=claude-opus-5-5 effort=high\n"
     for hdir in (".claude", ".opencode"):
         for f in (out / hdir / "agents").glob("*.md"):
             assert "model=inherit" not in f.read_text()

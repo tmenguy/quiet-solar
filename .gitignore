@@ -210,3 +210,13 @@ custom_components/volkswagencarnet
 # revision of the writer may have left in an existing worktree.
 .claude/settings.local.json*
 .lane_check_cache
+
+# QS-399: the Control Plane's live state DB (main checkout only), its SQLite
+# sidecars, its flock files and the daemon's migrate-error sidecar. Anchored:
+# the DB only ever lives at the main checkout's root. The daemon log
+# (harness_state.daemon.log) is already covered by the `*.log` rule above.
+/harness_state.db
+/harness_state.db-wal
+/harness_state.db-shm
+/harness_state.db.*.lock
+/harness_state.db.migrate-error.json

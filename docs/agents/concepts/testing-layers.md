@@ -65,7 +65,8 @@ cover.
 Orthogonal to the two *layers* above is a third *execution mode* for
 the dev loop: `python scripts/qs/quality_gate.py --impacted`. It uses
 `pytest-testmon` to run **only the tests impacted by your change set**
-(across both layers), under `--cov=custom_components/quiet_solar`, then
+(across both layers), under `--cov=custom_components/quiet_solar` and
+`--cov=scripts/qs/control_plane` (the Control Plane, QS-399), then
 `diff-cover --fail-under=100` asserts the **lines you changed** are
 100% covered. It also runs the CI-mirrored cheap checks (ruff lint,
 ruff format, mypy, translations when relevant) — it mirrors CI's lint /
@@ -129,10 +130,12 @@ shared `integration` marker — because ~9 **domain** integration files
 that marker AND exercise `custom_components/quiet_solar`. Excluding them
 would let a production line covered *only* by a domain integration test
 report 0% and FAIL `--impacted` with no local remedy (review-fix MF1).
-The self-tests never cover `custom_components/quiet_solar`, so ignoring
+The self-tests never cover `custom_components/quiet_solar` or the
+Control Plane, so ignoring
 that one file cannot change the diff-cover verdict; it just keeps the
 loop fast. CI's whole-repo gate (`pr-quality.yml`: N parallel
-`pytest tests/ -n auto --cov=custom_components/quiet_solar --splits N
+`pytest tests/ -n auto --cov=custom_components/quiet_solar
+--cov=scripts/qs/control_plane --splits N
 --group <i>` shards whose data is combined into one
 `coverage report --fail-under=100`) ignores no test, so it runs every
 test — domain integration and self-tests alike — for the authoritative

@@ -1,0 +1,205 @@
+{
+  "alerts": [
+    "at",
+    "decision",
+    "detail",
+    "hook",
+    "id",
+    "session_id"
+  ],
+  "cap_slots": [
+    "acquired_at",
+    "cap",
+    "holder_actor",
+    "holder_pgid",
+    "holder_pid",
+    "holder_pid_start",
+    "slot"
+  ],
+  "criteria": [
+    "idx",
+    "state",
+    "task_id",
+    "text",
+    "validated_at"
+  ],
+  "daemon": [
+    "code_schema_version",
+    "heartbeat_age_s",
+    "heartbeat_at",
+    "id",
+    "pid",
+    "pid_start",
+    "schema_version",
+    "started_at"
+  ],
+  "decisions": [
+    "at",
+    "id",
+    "reason",
+    "run_id",
+    "source",
+    "task_id",
+    "text"
+  ],
+  "digests": [
+    "bytes",
+    "task_id",
+    "updated_at"
+  ],
+  "integrations": [
+    "at",
+    "deliverable_id",
+    "id",
+    "item_task_id",
+    "item_tip",
+    "merge_commit",
+    "result",
+    "tool_call_key"
+  ],
+  "locks": [
+    "acquired_at",
+    "cohold_pgid",
+    "cohold_pid",
+    "cohold_pid_start",
+    "holder_actor",
+    "holder_epoch",
+    "holder_kind",
+    "holder_pgid",
+    "holder_pid",
+    "holder_pid_start",
+    "holder_session_id",
+    "name",
+    "purpose",
+    "token_subject"
+  ],
+  "nodes": [
+    "generation",
+    "handed_back_at",
+    "id",
+    "launch_at",
+    "name",
+    "permission_mode",
+    "run_id",
+    "session_id",
+    "short_id",
+    "spawn_tool_key",
+    "spawned_at",
+    "state",
+    "taken_over_at",
+    "task_id",
+    "updated_at"
+  ],
+  "questions": [
+    "answer",
+    "answered_at",
+    "blocking",
+    "created_at",
+    "id",
+    "message_id",
+    "reason",
+    "run_id",
+    "state",
+    "task_id",
+    "text"
+  ],
+  "queues": [
+    "dead",
+    "depth",
+    "in_flight",
+    "oldest_age_s",
+    "recipient",
+    "run_id"
+  ],
+  "reports": [
+    "at",
+    "fields",
+    "id",
+    "node_id",
+    "phase",
+    "round",
+    "status",
+    "summary",
+    "task_id"
+  ],
+  "run_roots": [
+    "run_id",
+    "task_id"
+  ],
+  "runs": [
+    "closed_at",
+    "created_at",
+    "global_plan",
+    "id",
+    "lease",
+    "name",
+    "state",
+    "title"
+  ],
+  "runs.lease": [
+    "claimed_at",
+    "epoch",
+    "full_grant",
+    "name_bound_session_id",
+    "pending_bind_session_id",
+    "permission_mode",
+    "run_id",
+    "session_id",
+    "session_name",
+    "short_id"
+  ],
+  "schema_version": "int",
+  "task_deps": [
+    "depends_on",
+    "task_id"
+  ],
+  "task_history": [
+    "actor",
+    "at",
+    "from_state",
+    "id",
+    "note",
+    "task_id",
+    "to_state"
+  ],
+  "tasks": [
+    "blocked_from",
+    "branch",
+    "ci_sha",
+    "ci_state",
+    "created_at",
+    "deliverable_id",
+    "id",
+    "is_deliverable",
+    "issue_number",
+    "item_k",
+    "kind",
+    "lane",
+    "merge_sha",
+    "next_item_k",
+    "parent_id",
+    "pr_number",
+    "pr_url",
+    "run_id",
+    "state",
+    "target",
+    "title",
+    "updated_at",
+    "worktree"
+  ],
+  "tool_calls_in_flight": [
+    "actor",
+    "age_s",
+    "holder_pgid",
+    "holder_pid",
+    "key",
+    "run_id",
+    "started_at",
+    "task_id",
+    "tool"
+  ],
+  "work_list": [
+    "run_id",
+    "task_id"
+  ]
+}

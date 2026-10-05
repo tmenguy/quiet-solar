@@ -391,14 +391,15 @@ hand-sets a model.
 
   | class | Claude (frontmatter, full ID) | OpenCode (`github-copilot/…`) | effort |
   |---|---|---|---|
-  | `build` | `claude-opus-4-8` | `claude-opus-4.8` | `high` |
+  | `build` | `claude-opus-5-5` | `claude-opus-5.5` | `high` |
   | `deep` | `claude-opus-5-5` | `claude-opus-5.5` | `high` |
   | `frontier` | `claude-fable-5-1` | `gpt-6-astra` | `high` |
   | `light` | `claude-sonnet-5` | `claude-sonnet-5` | `medium` |
   | `fast` | `claude-haiku-4-5` | `claude-haiku-4.5` | — |
 
-  `deep` → Opus 5.5 for analysis/review; `build` keeps Opus 4.8 for
-  implementer footprint; the plan dev-proxy runs the implementer's model —
+  `deep` → Opus 5.5 for analysis/review; `build` → Opus 5.5 too since
+  2026-10-04 (maintainer; it kept Opus 4.8 for implementer footprint
+  under QS-367); the plan dev-proxy runs the implementer's model —
   see QS-367. To add a harness, add a row (a test refuses a harness the
   renderer knows but the policy does not).
 - **Declared asymmetries.** On OpenCode the `frontier` class runs GPT-6

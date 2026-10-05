@@ -175,7 +175,10 @@ first with its own message. The two variants:
 - **`implement-setup-task`** — `target:factory` (the dev pipeline
   itself: `scripts/`, `.claude/`, `.opencode/`, `legacy/`, `docs/`,
   `.github/`, top-level config). Narrower edit scope; the quality gate
-  runs the dev-only fast path.
+  runs the dev-only fast path — except for a change under
+  `scripts/qs/control_plane/` or to `scripts/qs/cp.py` (the Control
+  Plane, QS-399), which takes the full path: 100% coverage, ruff and
+  mypy.
 - **`implement-task`** — `target:product` (production code under
   `custom_components/quiet_solar/`). Full quality gate
   (pytest 100% + ruff + mypy + translations).
@@ -228,7 +231,9 @@ Code intelligence is opt-in per harness: Claude agents carry a native pyright `L
 ## Quality gate
 
 `python scripts/qs/quality_gate.py` — pytest 100% coverage + ruff + mypy
-+ translations. Smart scope detection skips the full suite when only
-dev-infrastructure files changed (**dev-only fast path**), or only
++ translations, over the product package and the Control Plane
+(QS-399). Smart scope detection skips the full suite when only
+dev-infrastructure files changed (**dev-only fast path**; the Control
+Plane is never dev-only), or only
 UI assets under `custom_components/quiet_solar/ui/` changed (**ui-only
 fast path** — runs only `tests/test_dashboard_rendering.py`).

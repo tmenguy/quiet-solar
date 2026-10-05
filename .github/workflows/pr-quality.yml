@@ -26,11 +26,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements_test.txt
 
+      # QS-399: the Control Plane (scripts/qs/control_plane/ + its cp.py shim)
+      # is linted, format-checked and type-checked like the package.
       - name: Ruff lint
-        run: ruff check custom_components/quiet_solar/
+        run: ruff check custom_components/quiet_solar/ scripts/qs/control_plane/ scripts/qs/cp.py
 
       - name: Ruff format check
-        run: ruff format --check custom_components/quiet_solar/
+        run: ruff format --check custom_components/quiet_solar/ scripts/qs/control_plane/ scripts/qs/cp.py
 
   typecheck:
     name: MyPy Type Check
@@ -53,7 +55,7 @@ jobs:
           pip install -r requirements.txt -r requirements_test.txt
 
       - name: MyPy type check
-        run: mypy custom_components/quiet_solar/
+        run: mypy custom_components/quiet_solar/ scripts/qs/control_plane/ scripts/qs/cp.py
 
   test-shard:
     name: Tests shard ${{ matrix.shard }}/4
@@ -113,6 +115,10 @@ jobs:
           echo "${total}" > total-collected.txt
           cat total-collected.txt
 
+      # QS-399: two measured sources — the package and the Control Plane
+      # (scripts/qs/control_plane). The combined report below enforces 100%
+      # on both; scripts/qs/cp.py is a logic-free shim outside the source.
+      #
       # Each shard's terminal coverage report shows only what THAT shard
       # exercised — roughly 58-70% of the package, which is expected and
       # is not a regression. Only the aggregation job's combined report
@@ -128,6 +134,7 @@ jobs:
           pytest tests/ -n auto
           --splits 4 --group ${{ matrix.shard }}
           --cov=custom_components/quiet_solar
+          --cov=scripts/qs/control_plane
           --junitxml=junit-shard-${{ matrix.shard }}.xml
 
       - name: Upload shard data
