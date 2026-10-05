@@ -145,6 +145,8 @@ def add(
 ) -> dict[str, Any]:
     if kind not in KINDS:
         raise errors.CpError("USAGE", f"--kind must be one of {', '.join(KINDS)}")
+    if item_of is not None and (deliverable or issue is not None):
+        raise errors.CpError("USAGE", ITEM_NOT_DELIVERABLE)
     with db.write(conn):
         who = tokens.require(conn, token, kinds={"run"})
         run_id = _run_scope(conn, who, run_ref)
@@ -170,6 +172,13 @@ def add(
         )
     return {"task_id": task_id, "item_k": item_k, "run_id": run_id}
 
+
+# QS-400: a work item lands in its deliverable's PR (branch `QS_<N>_<k>`); a deliverable is its own
+# issue `M` (branch `QS_<M>`, its own PR). One task is never both.
+ITEM_NOT_DELIVERABLE = (
+    "a work item is part of its deliverable's PR (branch QS_<N>_<k>): it has no --deliverable flag and no "
+    "--issue — a deliverable is its own issue (branch QS_<M>); add it without --item-of"
+)
 
 SETTABLE = ("issue_number", "worktree", "branch", "pr_number", "pr_url", "ci_state", "ci_sha", "merge_sha")
 
@@ -197,7 +206,9 @@ def set_fields(
         raise errors.CpError("USAGE", "--ci-state and --ci-sha go together")
     with db.write(conn):
         tokens.require(conn, token, kinds={"run"}, task_id=task_id)
-        get(conn, task_id)
+        row = get(conn, task_id)
+        if "issue_number" in fields and row["deliverable_id"] is not None:
+            raise errors.CpError("INVALID_STATE", f"task {task_id}: {ITEM_NOT_DELIVERABLE}")
         update_fields(conn, clock, task_id, fields)
     return {"task_id": task_id, "updated": sorted(fields)}
 

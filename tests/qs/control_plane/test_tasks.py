@@ -329,3 +329,34 @@ class TestReviewFix03:
         out = add(token_a, "--parent", "T1")  # no run, parent in the token's own run: allowed
         assert out["run_id"] is None
         assert add(token_a, "--item-of", "T1")["item_k"] == 1
+
+
+# --------------------------------------------------------------------------- QS-400: an item is never a deliverable
+
+
+class TestItemIsNotADeliverable:
+    """A work item lands in its deliverable's PR (branch ``QS_<N>_<k>``); a deliverable is its own
+    issue ``M`` with branch ``QS_<M>``. One task can never be both (QS-400)."""
+
+    @pytest.mark.parametrize("extra", [("--deliverable",), ("--issue", "12"), ("--deliverable", "--issue", "12")])
+    def test_item_of_refuses_a_deliverable_or_an_issue(self, migrated, run, extra: tuple[str, ...]) -> None:
+        run_id, token = run
+        add(token, "--run", run_id, "--deliverable", "--issue", "7")
+        code, out = run_cli(
+            "task", "add", "--title", "x", "--kind", "feature", "--item-of", "T1", *extra, "--token", token
+        )
+        assert out["error"] == "USAGE", out
+        assert "own issue" in out["detail"]
+        assert sql(migrated, "SELECT count(*) FROM tasks")[0][0] == 1
+        assert sql(migrated, "SELECT next_item_k FROM tasks WHERE id = 'T1'")[0][0] == 1  # no k spent
+
+    def test_an_item_cannot_get_an_issue_later(self, migrated, run) -> None:
+        run_id, token = run
+        add(token, "--run", run_id, "--deliverable", "--issue", "7")
+        add(token, "--run", run_id, "--item-of", "T1")
+        code, out = run_cli("task", "set", "--task", "T2", "--issue", "12", "--token", token)
+        assert out["error"] == "INVALID_STATE", out
+        assert sql(migrated, "SELECT issue_number FROM tasks WHERE id = 'T2'")[0][0] is None
+        # other fields stay settable on an item, and a non-item still takes an issue
+        assert run_cli("task", "set", "--task", "T2", "--branch", "QS_7_1", "--token", token)[0] == 0
+        assert run_cli("task", "set", "--task", "T1", "--issue", "8", "--token", token)[0] == 0

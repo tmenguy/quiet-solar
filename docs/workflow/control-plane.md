@@ -80,8 +80,8 @@ Kinds:
 | `run set-mode` | `--permission-mode M [--full-grant\|--no-full-grant]` | run | write |
 | `run set-plan` | `--run R --file F` | run | write |
 | `run close` | — | run | write |
-| `task add` | `[--run R] --title --kind epic\|feature\|bug [--target] [--parent T] [--issue N] [--lane L] [--deliverable] [--item-of T]` (`--parent` / `--item-of` must be a task of the caller's run, or of none: `CONFLICT` otherwise) | run | write |
-| `task set` | `--task T [--issue] [--worktree] [--branch] [--pr-number --pr-url] [--ci-state --ci-sha]` | run | write |
+| `task add` | `[--run R] --title --kind epic\|feature\|bug [--target] [--parent T] [--issue N] [--lane L] [--deliverable] [--item-of T]` (`--parent` / `--item-of` must be a task of the caller's run, or of none: `CONFLICT` otherwise; `--item-of` with `--deliverable` or `--issue` is `USAGE` — a work item lands in its deliverable's PR, a deliverable is its own issue `QS_<M>`, #400) | run | write |
+| `task set` | `--task T [--issue] [--worktree] [--branch] [--pr-number --pr-url] [--ci-state --ci-sha]` (`--issue` on a work item is `INVALID_STATE`, #400) | run | write |
 | `task state` | `--task T --to STATE\|unblock [--note]` | run, or node (own task, node range) | write |
 | `task dep` / `task root` / `task work-list` | `add\|remove …` (both tasks of a `task dep` must be of the caller's run, or of none: `CONFLICT` otherwise) | run | write |
 | `criteria set` / `validate` / `state` | `--task T …` | run | write |
@@ -260,6 +260,12 @@ plain scripts outside this package — `setup_task.py --item`,
 `cleanup_worktree.py --item` and `integrate_item.py` — and the five tools
 above add the locks, the fencing, the gate slot and the `integrations` rows.
 Full design: `docs/stories/QS-400.story.md` §7–§9.
+
+**An item is never a deliverable.** A piece of a split that ships on its
+own is a new deliverable: its own issue `M`, branch `QS_<M>` and PR, added
+without `--item-of` (as a child, with a dependency, when it must land
+first). `QS_<N>_<k>` only ever names a work item that lands in `QS_<N>`'s
+PR. `task add`, `task set` and the item tools' guard all enforce it.
 
 The integration flow (the caller is the item's own node, or the
 orchestrator; child 6b decides when):

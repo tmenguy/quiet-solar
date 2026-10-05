@@ -362,6 +362,15 @@ class TestItemCreate:
         assert code == 1 and out["result"]["error"] == "INVALID_STATE", out
         assert w.runner.calls == []
 
+    @pytest.mark.parametrize(("column", "value"), [("is_deliverable", 1), ("issue_number", 12)])
+    def test_an_item_that_is_also_a_deliverable_is_refused(self, w: W, column: str, value: int) -> None:
+        """QS-400: a deliverable is its own issue ``QS_<M>``, never an item ``QS_<N>_<k>`` (rows made by hand)."""
+        sql(w.db, f"UPDATE tasks SET {column} = ? WHERE id = 'T2'", [value])
+        code, out = tool(w, "item-create", "c1")
+        assert code == 1 and out["result"]["error"] == "INVALID_STATE", out
+        assert "own issue" in out["result"]["detail"]
+        assert w.runner.calls == []
+
     def test_a_failed_setup_spends_the_key(self, w: W) -> None:
         w.runner.on(["setup_task.py"], RunResult(1, json.dumps({"error": "deliverable branch QS_7 not found"}), ""))
         code, out = tool(w, "item-create", "c1")
