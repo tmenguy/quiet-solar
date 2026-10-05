@@ -956,7 +956,8 @@ def test_drop_with_relative_worktree_paths_still_snapshots(env: Env) -> None:
     env.repo.git("config", "worktree.useRelativePaths", "true")
     assert env.prepare()[0] == 0
     gitfile = (env.scratch / ".git").read_text()
-    assert not gitfile.split(":", 1)[1].strip().startswith("/"), gitfile  # really relative
+    if gitfile.split(":", 1)[1].strip().startswith("/"):
+        pytest.skip("this git ignores worktree.useRelativePaths (< 2.48)")
     (env.scratch / "work.txt").write_text("keep me\n")
     rc, out = env.run("drop")
     assert (rc, out["status"]) == (0, "dropped"), out
@@ -973,6 +974,7 @@ def test_already_moved_after_ff_reports_the_current_tip(env: Env) -> None:
     assert out["now"] == env.tip("QS_42") != head
 
 
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root reads a chmod-000 file")
 def test_unreadable_git_file_is_not_proof_of_breakage(env: Env) -> None:
     """SF-1: an unreadable ``.git`` lets git decide — never a snapshot-less removal."""
     assert env.prepare()[0] == 0
@@ -1039,9 +1041,7 @@ def test_merge_failed_keeps_its_detail_when_cleanup_fails(monkeypatch: pytest.Mo
         def remove_scratch(self) -> None:
             raise integrate_item.Refusal("drop-failed", "boom")
 
-    monkeypatch.setattr(
-        integrate_item, "git", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "merge boom")
-    )
+    monkeypatch.setattr(integrate_item, "git", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "merge boom"))
     monkeypatch.setattr(integrate_item, "rev", lambda *a, **k: None)
     state = {"item_tip": "abc"}
     with pytest.raises(integrate_item.Refusal) as exc:
@@ -1049,3 +1049,29 @@ def test_merge_failed_keeps_its_detail_when_cleanup_fails(monkeypatch: pytest.Mo
     assert exc.value.code == "merge-failed"
     assert exc.value.detail == "merge boom"
     assert exc.value.extra["cleanup_error"] == "boom"
+
+
+# ---------------------------------------------------------------------------
+# Review fix #04
+# ---------------------------------------------------------------------------
+
+
+def test_drop_refuses_an_unregistered_directory_that_is_a_git_worktree(env: Env) -> None:
+    """A worktree moved by hand to the scratch path (registration points elsewhere) is never rmtree'd."""
+    elsewhere = env.repo.root / "elsewhere"
+    env.repo.git("worktree", "add", "-q", "--detach", str(elsewhere), "QS_42")
+    (elsewhere / "w.txt").write_text("work\n")
+    env.scratch.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(elsewhere), str(env.scratch))
+    rc, out = env.run("drop")
+    assert (rc, out["error"]) == (1, "drop-failed"), out
+    assert "worktree repair" in out["detail"]
+    assert (env.scratch / "w.txt").read_text() == "work\n"
+
+
+def test_json_safe_never_raises() -> None:
+    import integrate_item
+
+    out = integrate_item._json_safe({"a": ("\ud800", "ok"), "b": "\udce9"})
+    json.dumps(out, ensure_ascii=False).encode("utf-8")
+    assert out["a"][1] == "ok"

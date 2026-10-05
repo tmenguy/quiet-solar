@@ -607,7 +607,9 @@ def cmd_move(ctx: Ctx, new: str, old: str) -> dict[str, Any]:
         res = git(ctx.main, "update-ref", f"refs/heads/{ctx.deliverable}", new_sha, old_sha)
         if res.returncode != 0:
             now = ctx.deliverable_tip()
-            if now is not None and now != old_sha and is_ancestor(ctx.main, new_sha, now):
+            if now is None:
+                raise Refusal("move-failed", f"{ctx.deliverable} is gone after the failed update")
+            if now != old_sha and is_ancestor(ctx.main, new_sha, now):
                 return {"status": "already-moved", "head": new_sha, "now": now}
             if now != old_sha:
                 raise Refusal("deliverable-moved", f"{ctx.deliverable} moved during the update")
@@ -660,6 +662,14 @@ def cmd_drop(ctx: Ctx) -> dict[str, Any]:
             return {"status": "dropped", "pruned": True, "dropped_head": None, "integrated": None}
         return {"status": "nothing-to-drop"}
     if not is_registered(ctx.main, ctx.scratch):
+        if os.path.lexists(ctx.scratch / ".git"):
+            # Looks like a worktree moved here by hand (its registration names
+            # another path): it may hold work — never remove it blind.
+            raise Refusal(
+                "drop-failed",
+                f"{ctx.scratch} holds a .git but is not registered at this path; "
+                f"run `git worktree repair {ctx.scratch}` (or move it away), then drop again",
+            )
         # A leftover directory at this item's scratch path that git does not
         # know (e.g. a half-removed scratch): nothing to snapshot, remove it
         # so `worktree-setup.sh --integration` stops answering exit 3.
@@ -771,10 +781,13 @@ def _json_safe(value: Any) -> Any:
     surrogates; internally the raw names still round-trip as pathspecs.
     """
     if isinstance(value, str):
-        return value.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
+        try:
+            return value.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
+        except UnicodeError:  # a surrogate outside U+DC80..U+DCFF (e.g. a hand-edited state)
+            return value.encode("utf-8", "backslashreplace").decode("utf-8")
     if isinstance(value, dict):
         return {key: _json_safe(item) for key, item in value.items()}
-    if isinstance(value, list):
+    if isinstance(value, list | tuple):
         return [_json_safe(item) for item in value]
     return value
 

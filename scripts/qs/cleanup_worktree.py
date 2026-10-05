@@ -863,7 +863,8 @@ def _cas_delete_branch(main_wt: Path, branch: str, tip: str | None) -> tuple[boo
     if result.returncode != 0:
         return False, f"update-ref -d {branch} {tip} failed (branch moved, or ref locked): {result.stderr.strip()}"
     # `update-ref -d` drops only the ref; `git branch -D` would also drop the
-    # `branch.<name>.*` config section (exit 5 = no section — fine).
+    # `branch.<name>.*` config section (exit 128 = no such section — fine;
+    # best-effort, like the rest of the section's lifecycle).
     subprocess.run(
         ["git", "-C", str(main_wt), "config", "--remove-section", f"branch.{branch}"],
         capture_output=True,
