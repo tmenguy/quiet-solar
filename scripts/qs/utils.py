@@ -7,6 +7,7 @@ discovery, commit/PR plumbing).
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -101,11 +102,55 @@ def get_issue_from_branch(branch: str | None = None) -> int | None:
     return int(branch[3:])
 
 
-def get_worktree_dir(issue_number: int) -> Path:
-    """Return the conventional worktree path for an issue."""
+_TASK_BRANCH_RE = re.compile(r"QS_([0-9]+)(?:_([1-9][0-9]*))?")
+_POSITIVE_INT_RE = re.compile(r"[1-9][0-9]*")
+
+
+def parse_task_branch(branch: str) -> tuple[int, int | None] | None:
+    """Parse ``QS_<N>`` → ``(N, None)`` and ``QS_<N>_<k>`` → ``(N, k)`` (QS-400 D1).
+
+    ``N`` is ASCII digits, ``k`` a positive integer without leading zeros.
+    Every other form — ``QS_400_0``, ``QS_400_02``, ``QS_400_integration``,
+    a trailing newline, a non-ASCII digit — is ``None``.
+    ``get_issue_from_branch`` is deliberately left unchanged: it still
+    answers ``None`` for an item branch.
+    """
+    match = _TASK_BRANCH_RE.fullmatch(branch)
+    if match is None:
+        return None
+    item = match.group(2)
+    return int(match.group(1)), (int(item) if item is not None else None)
+
+
+def task_branch_name(issue: int, item: int | None = None) -> str:
+    """Spell a task branch: ``QS_<N>``, or ``QS_<N>_<k>`` for a work item (QS-400).
+
+    The one place in ``scripts/qs/`` (outside the Control Plane, which may
+    not import this module) where the name is built.
+    """
+    return f"QS_{issue}" if item is None else f"QS_{issue}_{item}"
+
+
+def positive_int(raw: str) -> int:
+    """argparse ``type`` for ``--item``: ``[1-9][0-9]*`` only (QS-400 D1)."""
+    if _POSITIVE_INT_RE.fullmatch(raw) is None:
+        raise argparse.ArgumentTypeError(f"expected a positive integer without leading zeros, got {raw!r}")
+    return int(raw)
+
+
+def _worktrees_root() -> Path:
     main = get_main_worktree()
-    basename = main.name
-    return main.parent / f"{basename}-worktrees" / f"QS_{issue_number}"
+    return main.parent / f"{main.name}-worktrees"
+
+
+def get_worktree_dir(issue_number: int, item: int | None = None) -> Path:
+    """Return the conventional worktree path for an issue, or for one of its items."""
+    return _worktrees_root() / task_branch_name(issue_number, item)
+
+
+def get_integration_dir(issue_number: int, item: int) -> Path:
+    """Return the integration scratch path of item ``k`` of deliverable ``N`` (QS-400 §8)."""
+    return _worktrees_root() / f"{task_branch_name(issue_number, item)}_integration"
 
 
 def is_worktree(work_dir: str | Path) -> bool:

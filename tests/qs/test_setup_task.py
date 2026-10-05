@@ -506,3 +506,185 @@ def test_render_failure_remedy_uses_the_passed_next_cmd(
     with pytest.raises(SystemExit):
         setup_task.main()
     assert "next_step.py --next-cmd diagnose-task" in json.loads(capsys.readouterr().out)["detail"]
+
+
+# ---------------------------------------------------------------------------
+# QS-400: --item K cuts a work-item worktree (no fetch, no pin, unbound render)
+# ---------------------------------------------------------------------------
+
+_TASK = ["kind:feature", "target:factory", "scale:task"]
+
+
+class _ExplodingLauncher:
+    @staticmethod
+    def build_payload(*_args: Any, **_kwargs: Any) -> dict:
+        raise AssertionError("an item gets no launcher payload")
+
+
+def _item_fakes(monkeypatch: pytest.MonkeyPatch, tmp_path, labels: list[str]) -> dict[str, Any]:
+    """Fake every collaborator of ``setup_task.main()`` on the item path; return the record."""
+    from pathlib import Path
+
+    import render_agents
+    import setup_task
+
+    import utils
+
+    rec: dict[str, Any] = {"git": [], "script": [], "wt_dir": [], "render": []}
+
+    def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if cmd[:3] == ["gh", "issue", "view"]:
+            return subprocess.CompletedProcess(cmd, 0, _gh_labels_response(labels), "")
+        rec["git"].append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def fake_subprocess_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        rec["script"].append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+    def fake_get_worktree_dir(issue: int, item: int | None = None) -> Path:
+        rec["wt_dir"].append((issue, item))
+        return tmp_path / f"wt-{issue}-{item}"
+
+    def fake_build_render_context(work_dir: str, **kwargs: Any) -> dict:
+        rec["render"].append((work_dir, kwargs))
+        return {"ctx": True}
+
+    monkeypatch.setattr(utils, "run", fake_run)
+    monkeypatch.setattr(setup_task, "get_main_worktree", lambda: tmp_path)
+    monkeypatch.setattr(setup_task.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(setup_task, "get_worktree_dir", fake_get_worktree_dir)
+    monkeypatch.setattr(render_agents, "build_render_context", fake_build_render_context)
+    monkeypatch.setattr(render_agents, "render_all", lambda *a, **k: [])
+    monkeypatch.setitem(setup_task.LAUNCHERS, "claude-code", _ExplodingLauncher)
+    return rec
+
+
+def test_item_cuts_an_item_worktree(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path
+) -> None:
+    import setup_task
+
+    rec = _item_fakes(monkeypatch, tmp_path, _TASK)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["setup_task.py", "42", "--item", "3", "--harness", "claude-code", "--next-cmd", "/review-task"],
+    )
+    setup_task.main()
+
+    assert not any(cmd[:2] == ["git", "fetch"] for cmd in rec["git"])
+    assert rec["git"] == []
+    assert len(rec["script"]) == 1
+    assert rec["script"][0][0] == "bash"
+    assert rec["script"][0][1].endswith("scripts/worktree-setup.sh")
+    assert rec["script"][0][2:] == ["42", "3"]
+    assert rec["wt_dir"] == [(42, 3)]
+    assert len(rec["render"]) == 1
+    assert rec["render"][0][0] == str(tmp_path / "wt-42-3")
+    assert rec["render"][0][1]["bound"] is False
+    out = json.loads(capsys.readouterr().out)
+    assert out == {
+        "issue_number": 42,
+        "item": 3,
+        "branch": "QS_42_3",
+        "worktree_path": str(tmp_path / "wt-42-3"),
+        "no_worktree": False,
+        "harness": "claude-code",
+    }
+
+
+def test_item_worktree_setup_failure_is_a_json_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path
+) -> None:
+    import setup_task
+
+    _item_fakes(monkeypatch, tmp_path, _TASK)
+    monkeypatch.setattr(
+        setup_task.subprocess,
+        "run",
+        lambda cmd, **_k: subprocess.CompletedProcess(cmd, 1, "", "Error: deliverable branch QS_42 not found"),
+    )
+    monkeypatch.setattr("sys.argv", ["setup_task.py", "42", "--item", "3", "--harness", "claude-code"])
+    with pytest.raises(SystemExit) as exc:
+        setup_task.main()
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["error"] == "Worktree setup failed"
+    assert "QS_42 not found" in out["detail"]
+
+
+def test_item_with_no_worktree_is_refused_before_any_call(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import setup_task
+
+    import utils
+
+    def boom(*_a: Any, **_k: Any) -> Any:
+        raise AssertionError("no gh / git call expected")
+
+    monkeypatch.setattr(utils, "run", boom)
+    monkeypatch.setattr(setup_task.subprocess, "run", boom)
+    monkeypatch.setattr("sys.argv", ["setup_task.py", "42", "--item", "1", "--no-worktree"])
+    with pytest.raises(SystemExit) as exc:
+        setup_task.main()
+    assert exc.value.code == 1
+    assert "--item" in json.loads(capsys.readouterr().out)["error"]
+
+
+@pytest.mark.parametrize("next_cmd", [None, "/decompose-epic", "decompose-epic"])
+def test_item_on_an_epic_is_refused(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path, next_cmd: str | None
+) -> None:
+    import setup_task
+
+    rec = _item_fakes(monkeypatch, tmp_path, _EPIC_FACTORY)
+    argv = ["setup_task.py", "340", "--item", "1"]
+    if next_cmd is not None:
+        argv += ["--next-cmd", next_cmd]
+    monkeypatch.setattr("sys.argv", argv)
+    with pytest.raises(SystemExit) as exc:
+        setup_task.main()
+    assert exc.value.code == 1
+    assert json.loads(capsys.readouterr().out)["scale"] == "epic"
+    assert rec["git"] == [] and rec["script"] == []
+
+
+@pytest.mark.parametrize("raw", ["0", "01", "x", "-1"])
+def test_item_rejects_a_bad_k(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    import setup_task
+
+    monkeypatch.setattr("sys.argv", ["setup_task.py", "42", "--item", raw])
+    with pytest.raises(SystemExit) as exc:
+        setup_task.main()
+    assert exc.value.code == 2
+
+
+def test_item_render_failure_names_only_render_agents(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path
+) -> None:
+    import render_agents
+    import setup_task
+
+    _item_fakes(monkeypatch, tmp_path, _TASK)
+
+    def _boom(*_a: Any, **_k: Any) -> None:
+        raise render_agents.RenderError("boom")
+
+    monkeypatch.setattr(render_agents, "render_all", _boom)
+    monkeypatch.setattr("sys.argv", ["setup_task.py", "42", "--item", "2", "--harness", "claude-code"])
+    with pytest.raises(SystemExit) as exc:
+        setup_task.main()
+    assert exc.value.code == 1
+    detail = json.loads(capsys.readouterr().out)["detail"]
+    assert "render_agents.py --work-dir" in detail
+    assert "next_step.py" not in detail
+    assert "boom" in detail
+
+
+def test_fail_render_task_text_unchanged_by_default(capsys: pytest.CaptureFixture[str]) -> None:
+    import setup_task
+
+    with pytest.raises(SystemExit):
+        setup_task._fail_render(ImportError("x"), "/wd", 1, "T", "/create-plan")
+    assert "next_step.py --next-cmd create-plan" in json.loads(capsys.readouterr().out)["detail"]

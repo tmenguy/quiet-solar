@@ -3,7 +3,18 @@
 # Symlinks venv, config, and non-git custom_components from the main worktree.
 #
 # Usage: bash scripts/worktree-setup.sh <issue_number>
+#        bash scripts/worktree-setup.sh <issue_number> <item>
+#        bash scripts/worktree-setup.sh <issue_number> <item> --integration
 # Result: ../<repo>-worktrees/QS_<issue_number>/ ready for development
+#
+# QS-400 modes (one linear flow; the item and integration modes only skip
+# or alter steps):
+#   task         QS_<N> from origin/main, fetched and published (unchanged).
+#   item         QS_<N>_<k> from the LOCAL refs/heads/QS_<N>: no fetch, no
+#                upstream (--no-track), no push. Item branches stay local.
+#   integration  QS_<N>_<k>_integration: a scratch worktree detached at
+#                QS_<N>, seeded with venv + caches only; exit 3 if it
+#                already exists (nothing touched).
 
 set -euo pipefail
 
@@ -21,12 +32,14 @@ _qs_cleanup_tmpfiles() {
 }
 trap _qs_cleanup_tmpfiles EXIT
 
-if [ $# -ne 1 ]; then
-    echo "Usage: $0 <issue_number>"
+if [ $# -lt 1 ] || [ $# -gt 3 ]; then
+    echo "Usage: $0 <issue_number> [<item> [--integration]]"
     exit 1
 fi
 
 ISSUE="$1"
+ITEM="${2:-}"
+MODE_FLAG="${3:-}"
 
 # P4: Validate issue number is numeric only
 if ! [[ "$ISSUE" =~ ^[0-9]+$ ]]; then
@@ -34,7 +47,35 @@ if ! [[ "$ISSUE" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 
-BRANCH="QS_${ISSUE}"
+# QS-400: optional item number (positive, no leading zeros) and the
+# optional literal `--integration`.
+MODE="task"
+if [ $# -ge 2 ]; then
+    if ! [[ "$ITEM" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: Item number must be a positive integer without leading zeros, got '${ITEM}'"
+        exit 1
+    fi
+    MODE="item"
+fi
+if [ $# -eq 3 ]; then
+    if [ "$MODE_FLAG" != "--integration" ]; then
+        echo "Usage: $0 <issue_number> [<item> [--integration]]"
+        exit 1
+    fi
+    MODE="integration"
+fi
+
+if [ "$MODE" = task ]; then
+    BRANCH="QS_${ISSUE}"
+    DIR_NAME="$BRANCH"
+else
+    BRANCH="QS_${ISSUE}_${ITEM}"
+    if [ "$MODE" = integration ]; then
+        DIR_NAME="${BRANCH}_integration"
+    else
+        DIR_NAME="$BRANCH"
+    fi
+fi
 
 # P1: Resolve main worktree reliably (works even if run from inside a worktree)
 MAIN_DIR="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
@@ -53,8 +94,32 @@ mkdir -p "$WORKTREES_DIR_RAW"
 # `rm -rf` against a live tracked worktree.
 WORKTREES_DIR="$WORKTREES_DIR_RAW"
 WORKTREES_DIR_CANON="$(cd "$WORKTREES_DIR_RAW" && pwd -P)"
-WORKTREE_DIR="${WORKTREES_DIR}/${BRANCH}"
-WORKTREE_DIR_CANON="${WORKTREES_DIR_CANON}/${BRANCH}"
+WORKTREE_DIR="${WORKTREES_DIR}/${DIR_NAME}"
+WORKTREE_DIR_CANON="${WORKTREES_DIR_CANON}/${DIR_NAME}"
+
+# QS-400: an item (or its integration scratch) is cut from the LOCAL
+# deliverable branch QS_<N>, which must exist. Called before anything is
+# torn down or created.
+_qs_require_deliverable() {
+    if ! git -C "$MAIN_DIR" show-ref --verify --quiet "refs/heads/QS_${ISSUE}"; then
+        echo "Error: deliverable branch QS_${ISSUE} not found"
+        exit 1
+    fi
+}
+
+# QS-400: integration mode never recovers. An existing scratch directory or
+# registration belongs to an integration in progress (or a stale one that
+# `integrate_item.py drop` removes) — report it and touch nothing.
+if [ "$MODE" = integration ]; then
+    _qs_require_deliverable
+    if [ -e "$WORKTREE_DIR" ] || git -C "$MAIN_DIR" worktree list --porcelain \
+        | grep -E "^worktree " \
+        | sed 's/^worktree //' \
+        | grep -qxF -e "$WORKTREE_DIR" -e "$WORKTREE_DIR_CANON"; then
+        echo "Error: integration scratch already exists: ${WORKTREE_DIR}"
+        exit 3
+    fi
+fi
 
 # FIX #05 SF-6: track whether this run rebuilt the worktree directory.
 # If we rebuilt it (either `worktree remove --force` or `rm -rf`), the
@@ -72,7 +137,7 @@ WORKTREE_RECOVERED="no"
 # in the script (e.g. a non-fast-forward `push -u`, network blip, or
 # missing remote) left the worktree directory on disk and blocked all
 # subsequent retries.
-if [ -d "$WORKTREE_DIR" ]; then
+if [ "$MODE" != integration ] && [ -d "$WORKTREE_DIR" ]; then
     # Treat as fully set up only if git agrees this is a tracked worktree
     # whose HEAD is on $BRANCH AND whose upstream is origin/$BRANCH.
     # `grep -qxF` requires a full-line match (porcelain emits one entry per
@@ -128,10 +193,20 @@ if [ -d "$WORKTREE_DIR" ]; then
             exit 1
         fi
         ACTUAL_UPSTREAM="$(git -C "$WORKTREE_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo "")"
-        if [ "$ACTUAL_HEAD" = "$BRANCH" ] && [ "$ACTUAL_UPSTREAM" = "origin/${BRANCH}" ]; then
+        if [ "$MODE" = item ]; then
+            # QS-400: an item branch has no upstream by design.
+            if [ "$ACTUAL_HEAD" = "$BRANCH" ]; then
+                echo "Worktree ${WORKTREE_DIR} already set up on ${BRANCH} (local branch)."
+                exit 0
+            fi
+        elif [ "$ACTUAL_HEAD" = "$BRANCH" ] && [ "$ACTUAL_UPSTREAM" = "origin/${BRANCH}" ]; then
             echo "Worktree ${WORKTREE_DIR} already set up on ${BRANCH} tracking origin/${BRANCH}."
             exit 0
         fi
+    fi
+    # QS-400: nothing is torn down for an item whose deliverable is gone.
+    if [ "$MODE" = item ]; then
+        _qs_require_deliverable
     fi
     # FIX #04 SF-5: refuse to proceed when $WORKTREE_DIR is unreadable.
     # Otherwise `find` emits nothing, HAS_NONGIT_CONTENT stays empty, and
@@ -252,20 +327,35 @@ if [ -d "$WORKTREE_DIR" ]; then
 fi
 
 # Fetch latest so origin/main is up to date (safe even if main is not checked out)
-echo "Fetching latest from origin..."
-git -C "$MAIN_DIR" fetch origin
+# QS-400: items and integration scratches work on local refs only — no fetch.
+if [ "$MODE" = task ]; then
+    echo "Fetching latest from origin..."
+    git -C "$MAIN_DIR" fetch origin
+else
+    _qs_require_deliverable
+fi
 
 # Create worktrees parent directory if needed
 mkdir -p "$WORKTREES_DIR"
 
 # Create worktree — reuse existing branch or create new one
-if git -C "$MAIN_DIR" show-ref --verify --quiet "refs/heads/${BRANCH}" 2>/dev/null; then
-    # F17: Warn if existing branch has diverged from main
-    if ! git -C "$MAIN_DIR" merge-base --is-ancestor "$BRANCH" main 2>/dev/null; then
+if [ "$MODE" = integration ]; then
+    # QS-400: detached at the deliverable's tip. BRANCH (QS_<N>_<k>) is held
+    # by the item worktree and is used in messages only.
+    echo "Creating integration scratch at ${WORKTREE_DIR}, detached at QS_${ISSUE}..."
+    git -C "$MAIN_DIR" worktree add --detach "$WORKTREE_DIR" "refs/heads/QS_${ISSUE}"
+elif git -C "$MAIN_DIR" show-ref --verify --quiet "refs/heads/${BRANCH}" 2>/dev/null; then
+    # F17: Warn if existing branch has diverged from main (task branches only)
+    if [ "$MODE" = task ] && ! git -C "$MAIN_DIR" merge-base --is-ancestor "$BRANCH" main 2>/dev/null; then
         echo "Warning: Branch ${BRANCH} has diverged from main. Consider rebasing."
     fi
     echo "Creating worktree at ${WORKTREE_DIR} using existing branch ${BRANCH}..."
     git -C "$MAIN_DIR" worktree add "$WORKTREE_DIR" "$BRANCH"
+elif [ "$MODE" = item ]; then
+    # QS-400: from the local deliverable (full ref, so a same-named tag
+    # cannot win), with no upstream.
+    echo "Creating worktree at ${WORKTREE_DIR} on new local branch ${BRANCH} from QS_${ISSUE}..."
+    git -C "$MAIN_DIR" worktree add --no-track -b "$BRANCH" "$WORKTREE_DIR" "refs/heads/QS_${ISSUE}"
 else
     echo "Creating worktree at ${WORKTREE_DIR} on new branch ${BRANCH}..."
     git -C "$MAIN_DIR" worktree add "$WORKTREE_DIR" -b "$BRANCH" origin/main
@@ -277,6 +367,10 @@ if [ -d "${MAIN_DIR}/venv" ]; then
     echo "Symlinked venv"
 fi
 
+# QS-400: the integration scratch gets venv + caches only (no config/ or
+# custom_components/ symlinks — the gate does not need them, and an
+# unignored third-party component would make every scratch dirty).
+if [ "$MODE" != integration ]; then
 # P2: Symlink config contents using derived basename
 # config/ may already exist as a directory (git creates it for tracked files like configuration.yaml).
 # Symlink each non-git item inside config/ individually, same pattern as custom_components/.
@@ -314,6 +408,7 @@ if [ -d "${MAIN_DIR}/custom_components" ]; then
         fi
     done
 fi
+fi  # QS-400: end of the config/custom_components seeding (not integration)
 
 # QS-276: seed cold-start caches from the main worktree so the first
 # inner-loop run is fast. COPY (never symlink) — both are written during
@@ -375,6 +470,8 @@ done
 # session (e.g. Claude Desktop auto-isolation) that creates its own
 # worktree on top of this one inherits HEAD — if HEAD is wrong here, the
 # user ends up needing to "change the branch" manually after opening.
+# QS-400: the integration scratch is detached by design — no HEAD check.
+if [ "$MODE" != integration ]; then
 ACTUAL_BRANCH="$(git -C "$WORKTREE_DIR" rev-parse --abbrev-ref HEAD)"
 if [ "$ACTUAL_BRANCH" != "$BRANCH" ]; then
     echo "Error: worktree HEAD is on '${ACTUAL_BRANCH}', expected '${BRANCH}'"
@@ -389,6 +486,11 @@ if [ "$ACTUAL_BRANCH" != "$BRANCH" ]; then
         exit 1
     fi
 fi
+fi  # QS-400: end of the HEAD check (not integration)
+
+# QS-400: only a task branch is published. Items stay local (D2) and the
+# integration scratch is detached — no ls-remote, no divergence check, no push.
+if [ "$MODE" = task ]; then
 
 # Detect non-fast-forward divergence BEFORE attempting `push -u`. Without
 # this, a relaxed re-run after a failed push against a diverged
@@ -542,8 +644,18 @@ if ! git -C "$WORKTREE_DIR" push -u origin "${BRANCH}"; then
     echo "(slower, but harmless if you prefer that)."
     exit 1
 fi
+fi  # QS-400: end of the task-only publish block
 
 echo ""
-echo "Worktree ready: ${WORKTREE_DIR}"
-echo "Branch: ${BRANCH} (HEAD verified)"
-echo "To start working: cd ${WORKTREE_DIR} && source venv/bin/activate"
+if [ "$MODE" = integration ]; then
+    echo "Worktree ready: ${WORKTREE_DIR}"
+    echo "Ready: integration scratch, detached at QS_${ISSUE} (item ${BRANCH}; no branch, not published)"
+elif [ "$MODE" = item ]; then
+    echo "Worktree ready: ${WORKTREE_DIR}"
+    echo "Branch: ${BRANCH} (HEAD verified; local branch, not published)"
+    echo "To start working: cd ${WORKTREE_DIR} && source venv/bin/activate"
+else
+    echo "Worktree ready: ${WORKTREE_DIR}"
+    echo "Branch: ${BRANCH} (HEAD verified)"
+    echo "To start working: cd ${WORKTREE_DIR} && source venv/bin/activate"
+fi

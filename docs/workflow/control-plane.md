@@ -238,12 +238,89 @@ A probe that cannot tell (a failed or unparseable `gh` listing or `gh pr view`) 
 | `pr-create` (`title`, `summary_file`) | run, or node (own task) | worktree | — | the marker in the PR bodies of the branch |
 | `push` | run, or node (own task) | worktree | — | `git ls-remote` equals `HEAD` |
 | `merge` | run | `<MAIN>` | `integration:<branch>`, `main-merge` | `gh pr view` shows `MERGED` (a failed or unparseable view is `BUSY`) |
+| `item-create` (#400) | run | `<MAIN>` | `main-checkout` | none; `setup_task.py <N> --item <k>` is idempotent. Sets the item's `worktree` and `branch` |
+| `item-cleanup` (`delete_branch`, `discard_unintegrated`, `force`) (#400) | run | `<MAIN>` | `integration:QS_<N>` (process-held; omitted for a NULL `branch`), `main-checkout` | none: `integrate_item.py drop`, then `cleanup_worktree.py --item`; any state. Clears `worktree` only — a cleaned item keeps its `branch` |
+| `integrate-start` (#400) | run, or node (own task) | `<MAIN>` | `integration:QS_<N>` (co-held: the caller's **session** must hold it), `main-checkout` | the session check only (`POLICY_REFUSED` otherwise, before any wait) |
+| `integrate-finish` (#400) | run, or node (own task) | `<MAIN>` | `integration:QS_<N>` (co-held), `gates` slot | the session check only |
+| `integrate-drop` (#400) | run, or node (own task) | `<MAIN>` | `integration:QS_<N>` (co-held), `main-checkout` | the session check only; any state |
 
 Notes:
 
 - Every built-in tool except `worktree-cleanup` refuses a terminal task with `INVALID_STATE`, recorded `failed`.
 - `merge` also requires the task to be `ready_to_merge`, unless the PR is already merged. Once the PR is merged, `merge_sha` is recorded when known (a missing `mergeCommit` is read once more, after `MERGE_SHA_RETRY_S`; an unknown sha never overwrites a recorded one). A task already `merged` is a noop success (`noop: true`). If the task left `ready_to_merge` for any other state meanwhile, the call still succeeds, with `state_conflict: {"expected": "ready_to_merge", "actual": …}`, for the orchestrator or the maintainer to reconcile; it is also recorded as a `hook_events` `alert` (hook `tool:merge`), so `snapshot` shows it.
 - `merge` is refused by the default merge policy until child 7 installs one (`merge_policy.install`).
+
+### Work items and integration (#400)
+
+A deliverable `QS_<N>` (one GitHub issue, one PR) is split into work items
+`QS_<N>_<k>` (`k` from `task add --item-of`), each in its own worktree
+`<repo>-worktrees/QS_<N>_<k>`, cut from the **local** `QS_<N>` and **never
+pushed** (no upstream; `pre-push` refuses the ref). The git mechanics are
+plain scripts outside this package — `setup_task.py --item`,
+`cleanup_worktree.py --item` and `integrate_item.py` — and the five tools
+above add the locks, the fencing, the gate slot and the `integrations` rows.
+Full design: `docs/stories/QS-400.story.md` §7–§9.
+
+The integration flow (the caller is the item's own node, or the
+orchestrator; child 6b decides when):
+
+```text
+cp.py lock acquire --name integration:QS_<N> --purpose "integrate item <k>" --token T
+cp.py tool integrate-start  --task <item> --key item:<id>:start:<tip>.1    --token T
+  outcome conflicts → resolve in <repo>-worktrees/QS_<N>_<k>_integration, git add, git commit
+cp.py tool integrate-finish --task <item> --key item:<id>:finish:<head>.1  --token T
+  outcome gate_red → fix in the scratch and commit (new head), or retry a flaky gate (.2)
+cp.py tool integrate-drop   --task <item> --key item:<id>:drop:1           --token T
+cp.py lock release --name integration:QS_<N> --token T
+```
+
+- `integrate-start` merges the item tip into a per-item scratch worktree
+  `QS_<N>_<k>_integration`, detached at `QS_<N>` (`--no-ff`, so the item tip
+  stays an ancestor of `QS_<N>`). `.result.outcome` is `merged`,
+  `conflicts` (+ `files`, `scratch`) or `already-integrated`.
+- `integrate-finish` checks the scratch (no merge in progress, clean, no
+  conflict markers left in the conflicted files, `QS_<N>` unmoved), runs
+  `quality_gate.py --impacted` on the exact scratch `HEAD`, and only if green
+  moves the local `QS_<N>` by compare-and-swap (`update-ref <new> <old>`, or
+  `merge --ff-only` in the worktree holding `QS_<N>`). **No push** — the
+  deliverable's node pushes through `tool push` when it wants CI.
+  `.result.outcome` is `ok` (+ `merge_commit`) or `gate_red` (+ `tail`). A
+  successful call means "integrated" only when `outcome == "ok"`.
+- `integrate-drop` removes the scratch and reports the undo points
+  (`dropped_head`, and `discarded_snapshot` — a commit of the whole tree —
+  when it was dirty).
+- Records: a `conflict` / `noop` row per answered start, a `gate_red` row per
+  red finish, and one `ok` row per (item, `merge_commit`), deduplicated in
+  the same transaction. `ok` is the only row consumers read as "integrated".
+
+**Keys — the one rule.** Every step is content-idempotent (the git state and
+the DB decide, not the key), and `integrate_item.py` refuses a concurrent
+duplicate with a per-item file lock (`scratch-busy`). So:
+
+- the **same key** only when the call got **no answer** (a crash, a kill, a
+  timeout of the caller's shell, or `BUSY` before any effect);
+- a **new key** after any other answer (`succeeded`, `failed`, or a code
+  raised after an effect). A new key is always safe; a caller that lost its
+  counters picks a new suffix.
+
+`stale-scratch`, `deliverable-moved` or `deliverable-worktree-busy`:
+`integrate-drop`, then `integrate-start` again. `scratch-busy`: a gate is
+still running (its watchdog holds the item's file lock until the gate ends
+or is killed at its deadline) — wait up to the reported `max_wait_s`, then
+retry with a new key. A terminal deliverable's session lock is dead, so the
+leftovers are cleaned by `item-cleanup`, item by item.
+
+**Dependencies for child 6b / 6c:**
+
+- the integrating session writes in the sibling directory
+  `QS_<N>_<k>_integration`, so it needs that path allowed (e.g. `--add-dir`
+  at spawn);
+- run `integrate-finish` in the background and wait for its answer — the
+  gate can take up to an hour, past a shell tool's timeout (Claude Code's
+  Bash caps at 10 min);
+- while `integration:QS_<N>` is held, the deliverable's node must not commit
+  on `QS_<N>` and must keep its worktree clean when `move` runs. The lock
+  does not enforce this.
 
 **Outcomes.**
 

@@ -863,7 +863,7 @@ class TestApi:
         assert "dummy" not in tools.REGISTRY and "spawn" in tools.REGISTRY
 
     def test_every_registered_tool_takes_its_locks_in_order(self) -> None:
-        task = {"id": "T1", "branch": "QS_1", "pr_number": 1, "issue_number": 1, "worktree": "/w", "run_id": "R1"}
+        task = {"id": "T1", "branch": "QS_1_1", "pr_number": 1, "issue_number": 1, "worktree": "/w", "run_id": "R1"}
         for spec in tools.REGISTRY.values():
             locks.assert_sorted(list(spec.locks(task, {})))  # type: ignore[arg-type]
 

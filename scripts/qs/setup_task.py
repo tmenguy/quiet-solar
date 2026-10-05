@@ -5,6 +5,11 @@ Usage::
 
     python scripts/qs/setup_task.py <issue_number> --title "..."
         [--no-worktree] [--harness HARNESS] [--next-cmd "/create-plan"]
+    python scripts/qs/setup_task.py <issue_number> --item K [--harness HARNESS]
+
+``--item K`` (QS-400) cuts the work-item worktree ``QS_<N>_<K>`` from the
+local deliverable branch ``QS_<N>``: no fetch, no push, an unbound agent
+render (no task facts) and no launcher payload or pin.
 
 Output: JSON containing worktree path, branch, and a harness-specific
 launcher payload (``new_context`` is the shell command or instructions
@@ -30,8 +35,10 @@ from utils import (  # type: ignore[import-not-found]
     get_main_worktree,
     get_worktree_dir,
     output_json,
+    positive_int,
     run_gh,
     run_git,
+    task_branch_name,
 )
 
 
@@ -191,14 +198,24 @@ LAUNCHERS = {
 }
 
 
-def _fail_render(exc: Exception, work_dir: str, issue: int, title: str, next_cmd: str) -> None:
+def _fail_render(
+    exc: Exception, work_dir: str, issue: int, title: str, next_cmd: str, *, item: bool = False
+) -> None:
     """Emit the JSON render-failure error and exit 1 (QS-357).
 
     The branch/worktree already exist, so the remedy is to render by hand
     and then rebuild the launcher payload from the existing worktree — the
     ``detail`` names both commands verbatim, with the real next phase
     (QS-340: one leading ``/`` stripped, as ``next_step.py`` expects).
+    ``item=True`` (QS-400): an item worktree has no launcher payload, so the
+    remedy names only the render.
     """
+    if item:
+        output_json({
+            "error": "agent render failed",
+            "detail": f"{exc}. Remedy: python scripts/qs/render_agents.py --work-dir {work_dir}",
+        })
+        sys.exit(1)
     phase = _phase(next_cmd)
     output_json({
         "error": "agent render failed",
@@ -237,9 +254,21 @@ def main() -> None:
         default=None,
         help="Optional preload prompt for the new session.",
     )
+    parser.add_argument(
+        "--item",
+        type=positive_int,
+        default=None,
+        help="Cut work item K of the deliverable (QS_<N>_<K>, local only; QS-400).",
+    )
     args = parser.parse_args()
 
     issue = args.issue_number
+    if args.item is not None:
+        if args.no_worktree:
+            output_json({"error": "--item cannot be combined with --no-worktree"})
+            sys.exit(1)
+        _setup_item(issue, args.item, args.harness)
+        return
     branch = f"QS_{issue}"
 
     # QS-332 B2: an issue must be born in exactly one lane; refuse an
@@ -328,6 +357,55 @@ def main() -> None:
         "no_worktree": args.no_worktree,
         "harness": harness,
         **launcher_payload,
+    })
+
+
+def _setup_item(issue: int, item: int, harness_arg: str | None) -> None:
+    """Cut work item ``item`` of deliverable ``issue`` (QS-400 D3/D4).
+
+    The declaration guards run unchanged, with the default next command so
+    every epic is refused (an epic has no items). Then ``worktree-setup.sh N
+    K`` from the main checkout — it branches from the local ``QS_<N>``, with
+    no fetch and no push — and an unbound render. No launcher payload, no pin.
+    """
+    labels = check_declaration(issue)
+    refuse_if_epic(issue, labels)
+    refuse_decompose_epic_for_wrong_lane(issue, labels)
+
+    main_dir = get_main_worktree()
+    setup_script = main_dir / "scripts" / "worktree-setup.sh"
+    result = subprocess.run(
+        ["bash", str(setup_script), str(issue), str(item)],
+        capture_output=True,
+        text=True,
+        cwd=str(main_dir),
+    )
+    if result.returncode != 0:
+        output_json({
+            "error": "Worktree setup failed",
+            "detail": result.stderr.strip() or result.stdout.strip(),
+        })
+        sys.exit(1)
+    work_dir = str(get_worktree_dir(issue, item=item))
+
+    try:
+        import render_agents  # noqa: PLC0415 — local so a missing jinja2 is caught here
+
+        render_context = render_agents.build_render_context(work_dir, bound=False)
+        render_agents.render_all(work_dir, context=render_context)
+    except ImportError as exc:
+        _fail_render(exc, work_dir, issue, "", "", item=True)
+    except render_agents.RenderError as exc:
+        _fail_render(exc, work_dir, issue, "", "", item=True)
+
+    harness = canonicalize_harness(harness_arg) if harness_arg else detect_harness()
+    output_json({
+        "issue_number": issue,
+        "item": item,
+        "branch": task_branch_name(issue, item),
+        "worktree_path": work_dir,
+        "no_worktree": False,
+        "harness": harness,
     })
 
 
