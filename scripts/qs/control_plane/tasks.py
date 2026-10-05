@@ -145,6 +145,8 @@ def add(
 ) -> dict[str, Any]:
     if kind not in KINDS:
         raise errors.CpError("USAGE", f"--kind must be one of {', '.join(KINDS)}")
+    if item_of is not None and (deliverable or issue is not None):
+        raise errors.CpError("USAGE", ITEM_NOT_DELIVERABLE)
     with db.write(conn):
         who = tokens.require(conn, token, kinds={"run"})
         run_id = _run_scope(conn, who, run_ref)
@@ -171,6 +173,16 @@ def add(
     return {"task_id": task_id, "item_k": item_k, "run_id": run_id}
 
 
+# QS-400: a work item lands in its deliverable's PR (branch `QS_<N>_<k>`); a deliverable is its own
+# issue `M` (branch `QS_<M>`, its own PR). One task is never both.
+ITEM_NOT_DELIVERABLE = (
+    "a work item is part of its deliverable's PR (branch QS_<N>_<k>): it has no --deliverable flag and no "
+    "--issue — a deliverable is its own issue (branch QS_<M>); add it without --item-of"
+)
+
+# The columns only a deliverable carries (QS-400): an item has its deliverable's issue and PR.
+DELIVERABLE_FIELDS = ("issue_number", "pr_number", "pr_url")
+
 SETTABLE = ("issue_number", "worktree", "branch", "pr_number", "pr_url", "ci_state", "ci_sha", "merge_sha")
 
 
@@ -181,6 +193,14 @@ def update_fields(conn: sqlite3.Connection, clock: clock_mod.Clock, task_id: str
         raise errors.CpError("USAGE", f"not settable: {', '.join(sorted(unknown))}")
     if not fields:
         return
+    # A NULL write is allowed: it repairs a malformed item, never makes one.
+    deliverable_fields = sorted(k for k in set(fields) & set(DELIVERABLE_FIELDS) if fields[k] is not None)
+    if deliverable_fields:
+        row = conn.execute("SELECT deliverable_id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        if row is not None and row["deliverable_id"] is not None:
+            raise errors.CpError(
+                "INVALID_STATE", f"task {task_id} ({', '.join(deliverable_fields)}): {ITEM_NOT_DELIVERABLE}"
+            )
     assignments = ", ".join(f"{k} = ?" for k in fields)
     conn.execute(
         f"UPDATE tasks SET {assignments}, updated_at = ? WHERE id = ?",
@@ -198,7 +218,7 @@ def set_fields(
     with db.write(conn):
         tokens.require(conn, token, kinds={"run"}, task_id=task_id)
         get(conn, task_id)
-        update_fields(conn, clock, task_id, fields)
+        update_fields(conn, clock, task_id, fields)  # refuses a deliverable field on an item (QS-400)
     return {"task_id": task_id, "updated": sorted(fields)}
 
 

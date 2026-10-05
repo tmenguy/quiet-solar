@@ -8786,7 +8786,12 @@ class TestLaneCheckSubcommand:
 class TestResolveLaneIssueUnderscore:
     """Review-fix #01: `int()` accepts underscore digit-grouping, so a
     branch `QS_332_2` parsed as issue #3322 and the gate enforced the
-    wrong issue's declaration."""
+    wrong issue's declaration.
+
+    QS-400: `QS_<N>_<k>` is now a work-item branch that names its
+    deliverable, so it resolves to `N` (one regex, `utils.parse_task_branch`)
+    — the item is checked against its deliverable's declaration. The forms
+    that are not items (`QS_1_000`, `QS_`, `QS_x2`) still resolve to None."""
 
     def _patch_branch(self, branch: str):
         def fake_run(cmd, **kwargs):
@@ -8795,14 +8800,26 @@ class TestResolveLaneIssueUnderscore:
 
         return patch.object(quality_gate, "_run", side_effect=fake_run)
 
-    @pytest.mark.parametrize("branch", ["QS_332_2", "QS_1_000", "QS_", "QS_x2"])
+    @pytest.mark.parametrize("branch", ["QS_1_000", "QS_", "QS_x2"])
     def test_non_pure_digit_suffix_resolves_to_none(self, branch: str) -> None:
         with self._patch_branch(branch):
             assert _REAL_RESOLVE_LANE_ISSUE(None) is None
 
+    @pytest.mark.parametrize(
+        ("branch", "expected"),
+        [("QS_332_2", (332, "QS_332_2")), ("QS_45_2", (45, "QS_45_2")), ("QS_45", (45, "QS_45"))],
+    )
+    def test_item_branch_resolves_to_its_deliverable(self, branch: str, expected: tuple[int, str]) -> None:
+        with self._patch_branch(branch):
+            assert _REAL_RESOLVE_LANE_ISSUE(None) == expected
+
     def test_ci_override_with_underscore_grouping_is_rejected_too(self) -> None:
         with self._patch_branch(""), patch.object(quality_gate, "_is_ci", return_value=True):
-            assert _REAL_RESOLVE_LANE_ISSUE("QS_332_2") is None
+            assert _REAL_RESOLVE_LANE_ISSUE("QS_1_000") is None
+
+    def test_ci_override_item_branch_resolves_to_its_deliverable(self) -> None:
+        with self._patch_branch(""), patch.object(quality_gate, "_is_ci", return_value=True):
+            assert _REAL_RESOLVE_LANE_ISSUE("QS_332_2") == (332, "QS_332_2")
 
 
 class TestFetchLaneLabelsTimeout:

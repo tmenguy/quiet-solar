@@ -46,8 +46,10 @@ from utils import (
     get_current_branch,
     get_issue_from_branch,
     output_json,
+    parse_task_branch,
     run_gh,
     run_git,
+    task_branch_name,
 )
 
 
@@ -112,6 +114,15 @@ def main() -> None:
     args = parser.parse_args()
 
     branch = get_current_branch()
+    # QS-400 D2: a work-item branch stays local and is integrated into its
+    # deliverable — refuse it before any lookup, push or `gh` call.
+    parsed = parse_task_branch(branch)
+    if parsed is not None and parsed[1] is not None:
+        deliverable = task_branch_name(parsed[0])
+        output_json({
+            "error": f"item branch {branch}: items are integrated into {deliverable}, never PR'd",
+        })
+        sys.exit(1)
     issue = args.issue or get_issue_from_branch(branch)
 
     # QS-340: fetched BEFORE the PR lookup and the push — an epic must be

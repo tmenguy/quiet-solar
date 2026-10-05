@@ -1178,3 +1178,737 @@ def test_removal_error_with_dir_gone_reports_removed_task_path(
     # the stale registration was pruned
     listing = _git(main, "worktree", "list", "--porcelain")
     assert str(work) not in listing
+
+
+# --- QS-400 D5: item cleanup (``--item K``) ---------------------------------
+
+
+@pytest.fixture
+def main_and_item(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """A repo with a ``QS_77`` branch (no worktree) and the item worktree
+    ``repo-worktrees/QS_77_1`` on ``QS_77_1``, forked from ``refs/heads/QS_77``."""
+    cfg = tmp_path / "gitconfig"
+    cfg.write_text("[user]\n\tname = T\n\temail = t@example.invalid\n[init]\n\tdefaultBranch = main\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(cfg))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    main = tmp_path / "repo"
+    main.mkdir()
+    _git(main, "init", "-q", "-b", "main")
+    (main / "README.md").write_text("x\n")
+    _git(main, "add", ".")
+    _git(main, "commit", "-q", "-m", "init")
+    _git(main, "branch", "QS_77")
+    item = tmp_path / "repo-worktrees" / "QS_77_1"
+    _git(main, "worktree", "add", "-q", "-b", "QS_77_1", str(item), "refs/heads/QS_77")
+    monkeypatch.chdir(main)
+    return main, item
+
+
+def _commit_on_item(item: Path, name: str = "work.txt") -> None:
+    (item / name).write_text(f"{name}\n")
+    _git(item, "add", name)
+    _git(item, "commit", "-q", "-m", f"item: {name}")
+
+
+def _merge_item_into_deliverable(main: Path) -> None:
+    """A real merge commit ``QS_77 <- QS_77_1`` built without a worktree on QS_77."""
+    tree = _git(main, "rev-parse", "refs/heads/QS_77_1^{tree}").strip()
+    merge = _git(
+        main, "commit-tree", tree, "-p", "refs/heads/QS_77", "-p", "refs/heads/QS_77_1", "-m", "merge QS_77_1"
+    ).strip()
+    _git(main, "update-ref", "refs/heads/QS_77", merge)
+
+
+def _tip(main: Path, branch: str) -> str | None:
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+        cwd=main,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _item_argv(work: Path, *flags: str) -> list[str]:
+    return ["--work-dir", str(work), "--issue", "77", "--item", "1", *flags]
+
+
+_ITEM_KEYS = {
+    "status",
+    "message",
+    "worktree_path",
+    "worktree_removed",
+    "worktree_absent",
+    "worktree_remove_error",
+    "stale_directory",
+    "branch",
+    "branch_deleted",
+    "branch_absent",
+    "branch_kept_reason",
+    "branch_delete_error",
+    "unintegrated_commits",
+    "deleted_tip",
+    "uncommitted_files",
+    "detached",
+    "detached_head",
+    "options",
+}
+
+
+def _run_item(monkeypatch: pytest.MonkeyPatch, capsys, work: Path, *flags: str) -> dict:
+    out = _run_main(monkeypatch, capsys, _item_argv(work, *flags))
+    assert set(out) == _ITEM_KEYS, out
+    assert out["branch"] == "QS_77_1"
+    return out
+
+
+_OWNERSHIP_FLAGS = [
+    pytest.param((), id="no-flags"),
+    pytest.param(("--force",), id="force"),
+    pytest.param(("--force", "--delete-branch", "--discard-unintegrated"), id="force-delete-discard"),
+]
+
+
+def _ownership_target(kind: str, main: Path, tmp_path: Path) -> Path:
+    if kind == "deliverable-worktree":
+        target = tmp_path / "repo-worktrees" / "QS_77"
+        _git(main, "worktree", "add", "-q", str(target), "QS_77")
+    elif kind == "other-branch":
+        target = tmp_path / "repo-worktrees" / "QS_88_1"
+        _git(main, "worktree", "add", "-q", "-b", "QS_88_1", str(target))
+    elif kind == "detached-other-name":
+        target = tmp_path / "repo-worktrees" / "QS_77_2"
+        _git(main, "worktree", "add", "-q", "--detach", str(target))
+    elif kind == "main-checkout":
+        target = main
+    else:  # unregistered directory with another name
+        target = tmp_path / "somewhere" / "QS_77_9"
+        target.mkdir(parents=True)
+    return target.resolve()
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["deliverable-worktree", "other-branch", "detached-other-name", "main-checkout", "unregistered-other-name"],
+)
+@pytest.mark.parametrize("flags", _OWNERSHIP_FLAGS)
+def test_item_ownership_refusals_touch_nothing(
+    main_and_item, tmp_path, monkeypatch, capsys, kind: str, flags: tuple[str, ...]
+) -> None:
+    main, item = main_and_item
+    _commit_on_item(item)
+    target = _ownership_target(kind, main, tmp_path)
+    before = (_tip(main, "QS_77"), _tip(main, "QS_77_1"))
+    out = _run_item(monkeypatch, capsys, target, *flags)
+    assert out["status"] == "error", out
+    assert out["worktree_removed"] is False
+    assert out["branch_deleted"] is False
+    assert target.exists()
+    assert item.exists()
+    assert (_tip(main, "QS_77"), _tip(main, "QS_77_1")) == before
+
+
+def test_item_ownership_error_names_the_registration(main_and_item, tmp_path, monkeypatch, capsys) -> None:
+    main, _item = main_and_item
+    target = _ownership_target("deliverable-worktree", main, tmp_path)
+    out = _run_item(monkeypatch, capsys, target, "--force")
+    assert "QS_77" in out["message"]
+    assert "nothing was touched" in out["message"]
+
+
+def test_item_unreadable_registration_is_refused(main_and_item, monkeypatch, capsys) -> None:
+    import cleanup_worktree
+
+    main, item = main_and_item
+    monkeypatch.setattr(cleanup_worktree, "_registered_branch", lambda m, w: ("unreadable", None))
+    out = _run_item(monkeypatch, capsys, item, "--force")
+    assert out["status"] == "error"
+    assert "unreadable" in out["message"]
+    assert item.exists() and _tip(main, "QS_77_1") is not None
+
+
+@pytest.mark.parametrize("flags", [(), ("--delete-branch",)])
+def test_item_work_dir_absent_but_checked_out_elsewhere_is_an_error(
+    main_and_item, tmp_path, monkeypatch, capsys, flags: tuple[str, ...]
+) -> None:
+    main, item = main_and_item
+    typo = tmp_path / "elsewhere" / "QS_77_1"
+    out = _run_item(monkeypatch, capsys, typo, *flags)
+    assert out["status"] == "error"
+    assert str(item.resolve()) in out["message"]
+    assert out["worktree_absent"] is False
+    assert out["branch_deleted"] is False
+    assert item.exists() and _tip(main, "QS_77_1") is not None
+
+
+def test_item_main_worktree_lookup_failure_is_an_error(main_and_item, monkeypatch, capsys) -> None:
+    import cleanup_worktree
+
+    main, item = main_and_item
+
+    def boom() -> Path:
+        raise RuntimeError("No git worktrees found")
+
+    monkeypatch.setattr(cleanup_worktree, "_main_worktree_or_fallback", boom)
+    out = _run_item(monkeypatch, capsys, item, "--force", "--delete-branch")
+    assert out["status"] == "error"
+    assert "No git worktrees found" in out["message"]
+    assert item.exists() and _tip(main, "QS_77_1") is not None
+
+
+def test_item_clean_worktree_is_removed_without_force(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    out = _run_item(monkeypatch, capsys, item)
+    assert out["status"] == "removed"
+    assert out["worktree_removed"] is True
+    assert out["worktree_absent"] is False
+    assert out["detached"] is False
+    assert out["detached_head"] is None
+    assert out["options"] == {}
+    assert not item.exists()
+    assert _tip(main, "QS_77_1") is not None
+
+
+def test_item_unintegrated_without_delete_branch_keeps_the_branch_silently(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    _commit_on_item(item)
+    tip = _tip(main, "QS_77_1")
+    out = _run_item(monkeypatch, capsys, item)
+    assert out["status"] == "removed"
+    assert out["worktree_removed"] is True
+    assert out["branch_kept_reason"] is None
+    assert out["unintegrated_commits"] is None
+    assert not item.exists()
+    assert _tip(main, "QS_77_1") == tip
+
+
+def test_item_uncommitted_files_require_force(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    (item / "scratch.txt").write_text("wip\n")
+    out = _run_item(monkeypatch, capsys, item)
+    assert out["status"] == "action_required"
+    assert "--force" in out["options"]
+    assert any("scratch.txt" in f for f in out["uncommitted_files"])
+    assert out["worktree_removed"] is False
+    assert item.exists()
+
+
+def test_item_uncommitted_files_with_force_are_removed(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    (item / "scratch.txt").write_text("wip\n")
+    out = _run_item(monkeypatch, capsys, item, "--force")
+    assert out["status"] == "removed"
+    assert out["worktree_removed"] is True
+    assert not item.exists()
+    assert _tip(main, "QS_77_1") is not None  # --force never deletes the branch
+
+
+def test_item_uncommitted_files_with_delete_branch_stop_before_the_branch(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    (item / "scratch.txt").write_text("wip\n")
+    tip = _tip(main, "QS_77_1")
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "action_required"
+    assert out["branch_deleted"] is False
+    assert out["deleted_tip"] is None
+    assert item.exists()
+    assert _tip(main, "QS_77_1") == tip
+
+
+def test_item_detached_requires_force(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    _git(item, "checkout", "-q", "--detach")
+    out = _run_item(monkeypatch, capsys, item)
+    assert out["status"] == "action_required"
+    assert out["detached"] is True
+    assert out["detached_head"] is None  # nothing removed
+    assert "--force" in out["options"]
+    assert item.exists()
+
+
+def test_item_detached_with_force_is_removed(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    _git(item, "checkout", "-q", "--detach")
+    _commit_on_item(item, "detached.txt")  # a commit only the detached HEAD reaches
+    head = _git(item, "rev-parse", "HEAD").strip()
+    out = _run_item(monkeypatch, capsys, item, "--force")
+    assert out["status"] == "removed"
+    assert out["worktree_removed"] is True
+    assert out["detached_head"] == head  # the undo point, read before the removal
+    assert f"git branch <name> {head}" in out["message"]
+    assert not item.exists()
+    assert _tip(main, "QS_77_1") is not None and _tip(main, "QS_77_1") != head
+
+
+def test_item_detached_removal_failure_records_no_detached_head(main_and_item, monkeypatch, capsys) -> None:
+    import cleanup_worktree
+
+    main, item = main_and_item
+    _git(item, "checkout", "-q", "--detach")
+    monkeypatch.setattr(cleanup_worktree, "remove_worktree", lambda wd: "boom removing")
+    out = _run_item(monkeypatch, capsys, item, "--force")
+    assert out["status"] == "error"
+    assert out["detached_head"] is None
+    assert item.exists()
+
+
+def test_item_status_failure_is_an_error(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    (item / ".git").write_text("gitdir: /nonexistent/for/sure\n")
+    out = _run_item(monkeypatch, capsys, item)
+    assert out["status"] == "error"
+    assert item.exists() and _tip(main, "QS_77_1") is not None
+
+
+def test_item_removal_failure_with_dir_present_is_an_error(main_and_item, monkeypatch, capsys) -> None:
+    import cleanup_worktree
+
+    main, item = main_and_item
+    monkeypatch.setattr(cleanup_worktree, "remove_worktree", lambda wd: "boom removing")
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "error"
+    assert out["worktree_remove_error"] == "boom removing"
+    assert out["branch_deleted"] is False
+    assert _tip(main, "QS_77_1") is not None
+
+
+def test_item_removal_error_with_dir_gone_prunes_and_continues(main_and_item, monkeypatch, capsys) -> None:
+    import shutil
+
+    import cleanup_worktree
+
+    main, item = main_and_item
+
+    def fake_remove(wd: Path) -> str:
+        shutil.rmtree(wd)
+        return "git worktree remove hiccup"
+
+    monkeypatch.setattr(cleanup_worktree, "remove_worktree", fake_remove)
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "removed"
+    assert out["worktree_removed"] is True
+    assert out["worktree_remove_error"] == "git worktree remove hiccup"
+    assert out["branch_deleted"] is True  # the prune cleared the registration
+    assert _tip(main, "QS_77_1") is None
+
+
+# --- --delete-branch outcomes -------------------------------------------------
+
+
+def test_item_integrated_branch_is_deleted(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    _commit_on_item(item)
+    _merge_item_into_deliverable(main)
+    tip = _tip(main, "QS_77_1")
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "removed"
+    assert out["worktree_removed"] is True
+    assert out["branch_deleted"] is True
+    assert out["deleted_tip"] == tip
+    assert out["unintegrated_commits"] == 0
+    assert out["branch_kept_reason"] is None
+    assert _tip(main, "QS_77_1") is None
+    assert _tip(main, "QS_77") is not None
+
+
+def test_item_unintegrated_branch_is_kept(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    _commit_on_item(item, "a.txt")
+    _commit_on_item(item, "b.txt")
+    tip = _tip(main, "QS_77_1")
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "removed-branch-kept"
+    assert out["worktree_removed"] is True
+    assert out["branch_kept_reason"] == "unintegrated"
+    assert out["unintegrated_commits"] == 2
+    assert out["branch_deleted"] is False
+    assert out["deleted_tip"] is None
+    assert out["message"].endswith("; branch kept")
+    assert not item.exists()
+    assert _tip(main, "QS_77_1") == tip
+
+
+def test_item_unintegrated_branch_with_discard_is_deleted(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    _commit_on_item(item, "a.txt")
+    _commit_on_item(item, "b.txt")
+    tip = _tip(main, "QS_77_1")
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch", "--discard-unintegrated")
+    assert out["status"] == "removed"
+    assert out["branch_deleted"] is True
+    assert out["deleted_tip"] == tip
+    assert out["unintegrated_commits"] == 2
+    assert out["branch_kept_reason"] is None
+    assert _tip(main, "QS_77_1") is None
+
+
+def test_item_deliverable_missing_keeps_the_branch(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    _git(main, "branch", "-D", "QS_77")
+    tip = _tip(main, "QS_77_1")
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "removed-branch-kept"
+    assert out["branch_kept_reason"] == "deliverable-missing"
+    assert out["unintegrated_commits"] is None
+    assert out["message"].endswith("; branch kept")
+    assert _tip(main, "QS_77_1") == tip
+
+
+def test_item_deliverable_missing_with_discard_deletes(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    _git(main, "branch", "-D", "QS_77")
+    tip = _tip(main, "QS_77_1")
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch", "--discard-unintegrated")
+    assert out["status"] == "removed"
+    assert out["branch_deleted"] is True
+    assert out["deleted_tip"] == tip
+    assert _tip(main, "QS_77_1") is None
+
+
+def test_item_count_failure_keeps_the_branch(main_and_item, monkeypatch, capsys) -> None:
+    import cleanup_worktree
+
+    main, item = main_and_item
+    monkeypatch.setattr(cleanup_worktree, "_unintegrated_count", lambda g, d, tip: -1)
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "removed-branch-kept"
+    assert out["branch_kept_reason"] == "count-failed"
+    assert out["unintegrated_commits"] is None
+    assert out["message"].endswith("; branch kept")
+    assert _tip(main, "QS_77_1") is not None
+
+
+def test_item_counts_the_tip_read_before_the_count_and_reports_it(main_and_item, monkeypatch, capsys) -> None:
+    """The tip is read first; the count runs on that sha, so ``deleted_tip`` is the commit proven integrated."""
+    import cleanup_worktree
+
+    main, item = main_and_item
+    _commit_on_item(item)
+    _merge_item_into_deliverable(main)
+    tip = _tip(main, "QS_77_1")
+    real = cleanup_worktree._unintegrated_count
+    seen: list[tuple[str, str | None]] = []
+
+    def spy(git_dir: Path, deliverable: str, item_tip: str | None) -> int:
+        seen.append((deliverable, item_tip))
+        n = real(git_dir, deliverable, item_tip)
+        _git(main, "update-ref", "refs/heads/QS_77_1", "refs/heads/main")  # the branch moves after the count
+        return n
+
+    monkeypatch.setattr(cleanup_worktree, "_unintegrated_count", spy)
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert seen == [("QS_77", tip)]
+    assert out["unintegrated_commits"] == 0
+    # Review fix #02 E: the delete is a compare-and-swap on the proven tip — a
+    # branch that moved after the count is kept, never deleted unproven.
+    assert out["status"] == "removed-branch-kept"
+    assert out["branch_kept_reason"] == "delete-failed"
+    assert out["branch_deleted"] is False
+    assert _tip(main, "QS_77_1") == _tip(main, "main")
+
+
+def test_item_integrated_delete_reports_the_undo_point(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    _commit_on_item(item)
+    _merge_item_into_deliverable(main)
+    tip = _tip(main, "QS_77_1")
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "removed" and out["branch_deleted"] is True
+    assert out["deleted_tip"] == tip
+    assert f"git branch QS_77_1 {tip}" in out["message"]
+    assert _tip(main, "QS_77_1") is None
+
+
+def test_item_unreadable_tip_keeps_the_branch(main_and_item, monkeypatch, capsys) -> None:
+    import cleanup_worktree
+
+    main, item = main_and_item
+    monkeypatch.setattr(cleanup_worktree, "_branch_tip", lambda g, b: None)
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "removed-branch-kept"
+    assert out["branch_kept_reason"] == "count-failed"
+    assert out["deleted_tip"] is None
+    assert _tip(main, "QS_77_1") is not None
+
+
+def test_item_delete_failure_keeps_the_branch(main_and_item, monkeypatch, capsys) -> None:
+    """The item stays checked out (a locked registration survives the prune) at its
+    default path, and ``--work-dir`` is that path, missing: the CAS delete's listing check refuses."""
+    import shutil
+
+    main, item = main_and_item
+    _git(main, "worktree", "lock", str(item))
+    shutil.rmtree(item)
+    tip = _tip(main, "QS_77_1")
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "removed-branch-kept"
+    assert out["worktree_absent"] is True
+    assert out["branch_kept_reason"] == "delete-failed"
+    assert out["branch_deleted"] is False
+    assert "QS_77_1" in out["branch_delete_error"]
+    assert out["deleted_tip"] == tip  # recorded before the attempt
+    assert out["message"].endswith("; branch kept")
+    assert _tip(main, "QS_77_1") == tip
+
+
+# --- worktree already gone ----------------------------------------------------
+
+
+def _remove_item_registration(main: Path, item: Path) -> None:
+    _git(main, "worktree", "remove", "--force", str(item))
+
+
+def test_item_pruned_worktree_integrated_branch_is_deleted(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    _commit_on_item(item)
+    _merge_item_into_deliverable(main)
+    _remove_item_registration(main, item)
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "removed"
+    assert out["worktree_absent"] is True
+    assert out["worktree_removed"] is False
+    assert out["branch_deleted"] is True
+    assert _tip(main, "QS_77_1") is None
+
+
+def test_item_pruned_worktree_unintegrated_branch_is_kept(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    _commit_on_item(item)
+    _remove_item_registration(main, item)
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "removed-branch-kept"
+    assert out["worktree_absent"] is True
+    assert out["branch_kept_reason"] == "unintegrated"
+    assert out["unintegrated_commits"] == 1
+    assert _tip(main, "QS_77_1") is not None
+
+
+def test_item_pruned_worktree_unintegrated_with_discard_is_deleted(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    _commit_on_item(item)
+    _remove_item_registration(main, item)
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch", "--discard-unintegrated")
+    assert out["status"] == "removed"
+    assert out["branch_deleted"] is True
+    assert out["unintegrated_commits"] == 1
+    assert _tip(main, "QS_77_1") is None
+
+
+def test_item_rm_rf_worktree_with_kept_registration_integrated_is_deleted(main_and_item, monkeypatch, capsys) -> None:
+    import shutil
+
+    main, item = main_and_item
+    _commit_on_item(item)
+    _merge_item_into_deliverable(main)
+    shutil.rmtree(item)
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "removed"
+    assert out["worktree_absent"] is True
+    assert out["branch_deleted"] is True
+    assert out["branch_kept_reason"] is None
+    assert _tip(main, "QS_77_1") is None
+    assert str(item) not in _git(main, "worktree", "list", "--porcelain")
+
+
+def test_item_dir_gone_without_delete_branch_is_removed(main_and_item, monkeypatch, capsys) -> None:
+    import shutil
+
+    main, item = main_and_item
+    shutil.rmtree(item)
+    out = _run_item(monkeypatch, capsys, item)
+    assert out["status"] == "removed"
+    assert out["worktree_absent"] is True
+    assert out["worktree_removed"] is False
+    assert out["branch_deleted"] is False
+    assert _tip(main, "QS_77_1") is not None
+    assert str(item) not in _git(main, "worktree", "list", "--porcelain")
+
+
+def test_item_stale_leftover_is_left_and_the_branch_deleted(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    _remove_item_registration(main, item)
+    item.mkdir(parents=True)
+    (item / "leftover.txt").write_text("x\n")
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "removed"
+    assert out["stale_directory"] == str(item.resolve())
+    assert out["worktree_removed"] is False
+    assert out["branch_deleted"] is True
+    assert (item / "leftover.txt").exists()
+    assert _tip(main, "QS_77_1") is None
+
+
+def test_item_unregistered_named_dir_while_item_checked_out_elsewhere_is_refused(
+    main_and_item, tmp_path, monkeypatch, capsys
+) -> None:
+    """A directory named ``QS_77_1`` is not a stale leftover while the item is
+    registered at another path: it is an unregistered directory → error."""
+    main, item = main_and_item
+    other = tmp_path / "elsewhere" / "QS_77_1"
+    other.mkdir(parents=True)
+    out = _run_item(monkeypatch, capsys, other, "--delete-branch", "--discard-unintegrated", "--force")
+    assert out["status"] == "error"
+    assert other.exists() and item.exists()
+    assert _tip(main, "QS_77_1") is not None
+
+
+def test_item_unregistered_dir_with_another_name_is_refused_when_item_unregistered(
+    main_and_item, tmp_path, monkeypatch, capsys
+) -> None:
+    """With no worktree on the item at all, an unregistered directory with another
+    name is still refused: only a directory named ``QS_77_1`` is a stale leftover."""
+    main, item = main_and_item
+    _remove_item_registration(main, item)
+    other = tmp_path / "somewhere" / "QS_77_9"
+    other.mkdir(parents=True)
+    out = _run_item(monkeypatch, capsys, other, "--delete-branch", "--discard-unintegrated", "--force")
+    assert out["status"] == "error"
+    assert "not a registered worktree" in out["message"]
+    assert other.exists()
+    assert _tip(main, "QS_77_1") is not None
+
+
+def test_item_ref_already_gone_is_removed(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    _remove_item_registration(main, item)
+    _git(main, "branch", "-D", "QS_77_1")
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["status"] == "removed"
+    assert out["branch_absent"] is True
+    assert out["branch_deleted"] is False
+    assert out["worktree_absent"] is True
+
+
+# --- misuse and dry run -------------------------------------------------------
+
+
+@pytest.mark.parametrize("dry", [(), ("--dry-run",)])
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param(["--item", "1", "--push-first"], id="push-first-with-item"),
+        pytest.param(["--item", "1", "--discard-unintegrated"], id="discard-without-delete-branch"),
+        pytest.param(["--delete-branch", "--discard-unintegrated"], id="discard-without-item"),
+        pytest.param(["--discard-unintegrated"], id="discard-alone"),
+    ],
+)
+def test_item_misuse_is_refused(main_and_item, monkeypatch, capsys, argv: list[str], dry: tuple[str, ...]) -> None:
+    main, item = main_and_item
+    before = (_tip(main, "QS_77"), _tip(main, "QS_77_1"))
+    out = _run_main(monkeypatch, capsys, ["--work-dir", str(item), "--issue", "77", *argv, *dry])
+    assert out["status"] == "error"
+    assert item.exists()
+    assert (_tip(main, "QS_77"), _tip(main, "QS_77_1")) == before
+
+
+def test_item_dry_run_announces_the_item_branch(main_and_item, monkeypatch, capsys) -> None:
+    main, item = main_and_item
+    out = _run_main(monkeypatch, capsys, _item_argv(item, "--dry-run", "--delete-branch"))
+    assert out["status"] == "dry_run"
+    assert out["would_delete_branch"] == "QS_77_1"
+    assert out["item"] == 1
+    assert item.exists() and _tip(main, "QS_77_1") is not None
+
+
+def test_task_dry_run_has_no_item_key(main_and_worktree, monkeypatch, capsys) -> None:
+    main, work = main_and_worktree
+    monkeypatch.chdir(main)
+    out = _run_main(monkeypatch, capsys, ["--work-dir", str(work), "--issue", "77", "--dry-run"])
+    assert "item" not in out
+
+
+@pytest.mark.parametrize("raw", ["0", "01", "x"])
+def test_item_rejects_a_non_positive_integer(main_and_item, monkeypatch, raw: str) -> None:
+    import cleanup_worktree
+
+    _main, item = main_and_item
+    monkeypatch.setattr("sys.argv", ["cleanup_worktree.py", "--work-dir", str(item), "--issue", "77", "--item", raw])
+    with pytest.raises(SystemExit):
+        cleanup_worktree.main()
+
+
+# --- helpers ------------------------------------------------------------------
+
+
+def test_unintegrated_count_counts_and_fails_on_a_missing_ref(main_and_item) -> None:
+    import cleanup_worktree
+
+    main, item = main_and_item
+    assert cleanup_worktree._unintegrated_count(main, "QS_77", _tip(main, "QS_77_1")) == 0
+    _commit_on_item(item)
+    tip = _tip(main, "QS_77_1")
+    assert cleanup_worktree._unintegrated_count(main, "QS_77", tip) == 1
+    assert cleanup_worktree._unintegrated_count(main, "QS_77", "f" * 40) == -1
+    assert cleanup_worktree._unintegrated_count(main, "QS_77", None) == -1
+    assert cleanup_worktree._unintegrated_count(main, "QS_404", tip) == -1
+
+
+def test_branch_tip_reads_the_sha_or_none(main_and_item) -> None:
+    import cleanup_worktree
+
+    main, _item = main_and_item
+    assert cleanup_worktree._branch_tip(main, "QS_77_1") == _tip(main, "QS_77_1")
+    assert cleanup_worktree._branch_tip(main, "QS_77_404") is None
+
+
+def test_unintegrated_count_is_minus_one_on_unparsable_output(main_and_item, monkeypatch) -> None:
+    import cleanup_worktree
+
+    main, _item = main_and_item
+    fake = subprocess.CompletedProcess(args=[], returncode=0, stdout="not a number\n", stderr="")
+    monkeypatch.setattr(cleanup_worktree.subprocess, "run", lambda *a, **k: fake)
+    assert cleanup_worktree._unintegrated_count(main, "QS_77", "f" * 40) == -1
+
+
+def test_item_registration_finds_the_item_worktree(main_and_item, tmp_path) -> None:
+    import cleanup_worktree
+
+    main, item = main_and_item
+    assert cleanup_worktree._item_registration(main, "QS_77_1") == item.resolve()
+    assert cleanup_worktree._item_registration(main, "QS_77_2") is None
+    not_a_repo = tmp_path / "plain"
+    not_a_repo.mkdir()
+    assert cleanup_worktree._item_registration(not_a_repo, "QS_77_1") is None
+
+
+def test_item_unreadable_tip_with_discard_falls_back_to_branch_d(main_and_item, monkeypatch, capsys) -> None:
+    """Review fix #02 E: no readable tip → no CAS possible; ``--discard-unintegrated`` uses ``git branch -D``."""
+    import cleanup_worktree
+
+    main, item = main_and_item
+    monkeypatch.setattr(cleanup_worktree, "_branch_tip", lambda g, b: None)
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch", "--discard-unintegrated")
+    assert out["status"] == "removed" and out["branch_deleted"] is True
+    assert _tip(main, "QS_77_1") is None
+
+
+def test_cas_delete_refuses_when_the_listing_fails(main_and_item, monkeypatch) -> None:
+    import cleanup_worktree
+
+    main, _item = main_and_item
+    real_run = cleanup_worktree.subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        if "worktree" in cmd and "list" in cmd:
+            return subprocess.CompletedProcess(cmd, 1, "", "boom")
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(cleanup_worktree.subprocess, "run", fake_run)
+    ok, error = cleanup_worktree._cas_delete_branch(main, "QS_77_1", _tip(main, "QS_77_1"))
+    assert ok is False and "boom" in (error or "")
+    assert _tip(main, "QS_77_1") is not None
+
+
+def test_item_cas_delete_drops_the_branch_config_section(main_and_item, monkeypatch, capsys) -> None:
+    """Review fix #03: like ``git branch -D``, the CAS delete removes ``branch.<item>.*``."""
+    main, item = main_and_item
+    _commit_on_item(item)
+    _merge_item_into_deliverable(main)
+    _git(main, "config", "branch.QS_77_1.description", "item one")
+    out = _run_item(monkeypatch, capsys, item, "--delete-branch")
+    assert out["branch_deleted"] is True
+    res = subprocess.run(
+        ["git", "-C", str(main), "config", "--get", "branch.QS_77_1.description"], capture_output=True, check=False
+    )
+    assert res.returncode == 1

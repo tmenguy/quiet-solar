@@ -91,6 +91,10 @@ from typing import Any, NamedTuple
 # classification + the declaration truth table); the gate only wires it.
 import targets
 
+# QS-400: the one task-branch grammar (`QS_<N>` / `QS_<N>_<k>`), shared with
+# the other scripts. `utils` imports only the stdlib — no cycle.
+from utils import parse_task_branch
+
 # Resolve paths relative to repo root
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
@@ -1970,12 +1974,14 @@ def _resolve_lane_issue(branch_override: str | None = None) -> tuple[int, str] |
     if not branch and _is_ci() and branch_override:
         branch = branch_override.strip()
     # Pure digits only (review-fix #01): `int()` accepts underscore
-    # digit-grouping, so `QS_332_2` (a plausible "second attempt" branch)
-    # parsed as issue #3322 and the gate enforced the WRONG issue's
-    # declaration. `isdigit()` also rejects the empty suffix.
-    if not branch.startswith("QS_") or not branch[3:].isdigit():
+    # digit-grouping, so `QS_332_2` once parsed as issue #3322. QS-400:
+    # `QS_<N>_<k>` is a work item and names its deliverable `N`, so the
+    # item is checked against the deliverable's declaration; every other
+    # form (`QS_1_000`, `QS_`, `QS_x2`) still skips the check.
+    parsed = parse_task_branch(branch)
+    if parsed is None:
         return None
-    return int(branch[3:]), branch
+    return parsed[0], branch
 
 
 def _read_lane_label_cache(issue: int, branch: str) -> list[str] | None:

@@ -28,6 +28,7 @@ from . import (
     errors,
     export,
     hooks,
+    items,
     liveness,
     locks,
     messages,
@@ -44,6 +45,8 @@ from . import (
     tools,
     wait,
 )
+
+items.register_item_tools()  # #400's tools: the parser and the parametrized tests read REGISTRY at import
 
 
 @dataclass(frozen=True)
@@ -853,6 +856,7 @@ def _emit(out: TextIO, payload: dict[str, Any]) -> None:
 
 
 def main(argv: Sequence[str] | None = None, *, stdin: TextIO | None = None, stdout: TextIO | None = None) -> int:
+    items.register_item_tools()  # cheap, and keeps a reset registry whole before build_parser()
     io = Io(stdin=stdin or sys.stdin, stdout=stdout or sys.stdout, deps=make_deps())
     argv = list(sys.argv[1:] if argv is None else argv)
     try:

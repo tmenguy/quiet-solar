@@ -30,6 +30,11 @@ TOOL_ARGS: dict[str, dict[str, Any]] = {
     "pr-create": {"title": "t", "summary_file": "@prompt"},
     "push": {},
     "merge": {},
+    "item-create": {},
+    "item-cleanup": {},
+    "integrate-start": {},
+    "integrate-finish": {},
+    "integrate-drop": {},
 }
 
 
@@ -100,6 +105,9 @@ NODE_OK = {
     "tool gate",
     "tool push",
     "tool pr-create",
+    "tool integrate-start",
+    "tool integrate-finish",
+    "tool integrate-drop",
 }
 # The node-token variant of a sample (own queue, own session), and an out-of-bounds variant (another task).
 NODE_OWN = {

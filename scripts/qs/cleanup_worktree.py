@@ -22,6 +22,11 @@ Usage::
     # Also delete the local QS_<N> branch (QS-340 — the epic × factory
     # lane, so a re-entry starts fresh from origin/main)
     python scripts/qs/cleanup_worktree.py --work-dir /path --issue 42 --force --delete-branch
+
+    # Clean a work item's worktree QS_<N>_<k> (QS-400 D5); with --delete-branch
+    # the item branch goes only when fully integrated into QS_<N>, unless
+    # --discard-unintegrated
+    python scripts/qs/cleanup_worktree.py --work-dir /path --issue 42 --item 3 --delete-branch
 """
 
 from __future__ import annotations
@@ -32,7 +37,12 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from utils import get_main_worktree, output_json  # type: ignore[import-not-found]
+from utils import (  # type: ignore[import-not-found]
+    get_main_worktree,
+    output_json,
+    positive_int,
+    task_branch_name,
+)
 
 
 def check_worktree_status(work_dir: Path) -> dict:
@@ -497,19 +507,51 @@ def main() -> None:  # noqa: C901
         action="store_true",
         help="Also delete the local QS_<N> branch after removing the worktree.",
     )
+    parser.add_argument(
+        "--item",
+        type=positive_int,
+        default=None,
+        help="Clean the work item QS_<N>_<K>'s worktree instead of the task's (QS-400).",
+    )
+    parser.add_argument(
+        "--discard-unintegrated",
+        action="store_true",
+        help="With --item --delete-branch: delete the item branch even if not integrated into QS_<N>.",
+    )
     args = parser.parse_args()
     branch_name = f"QS_{args.issue}"
 
     work_dir = Path(args.work_dir).resolve()
 
+    if args.item is not None and args.push_first:
+        output_json({"status": "error", "message": "--push-first is not supported with --item"})
+        return
+    if args.discard_unintegrated and (args.item is None or not args.delete_branch):
+        output_json({"status": "error", "message": "--discard-unintegrated requires --item and --delete-branch"})
+        return
+
     if args.dry_run:
-        output_json({
+        dry: dict = {
             "status": "dry_run",
             "would_remove_worktree": str(work_dir),
             "would_push": bool(args.push_first),
-            "would_delete_branch": branch_name if args.delete_branch else None,
+            "would_delete_branch": task_branch_name(args.issue, args.item) if args.delete_branch else None,
             "issue": args.issue,
-        })
+        }
+        if args.item is not None:
+            dry["item"] = args.item
+        output_json(dry)
+        return
+
+    if args.item is not None:
+        _cleanup_item(
+            work_dir,
+            args.issue,
+            args.item,
+            force=args.force,
+            delete_branch=args.delete_branch,
+            discard=args.discard_unintegrated,
+        )
         return
 
     if not work_dir.exists():
@@ -748,6 +790,324 @@ def _cleanup_with_branch(work_dir: Path, issue: int, branch_name: str) -> None: 
         status = "removed-branch-kept"
         message = f"Worktree QS_{issue} removed; branch {branch_name} kept: {result['branch_delete_error']}"
     _emit(work_dir, status=status, wt_error=wt_error, fields=result, message=message)
+
+
+# --- QS-400 D5: work-item cleanup -------------------------------------------
+
+
+def _branch_tip(git_dir: Path, branch: str) -> str | None:
+    """The sha of ``refs/heads/<branch>``, or ``None`` when it cannot be read."""
+    result = subprocess.run(
+        ["git", "-C", str(git_dir), "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+        capture_output=True,
+        text=True,
+        cwd=str(git_dir),
+        check=False,
+    )
+    return (result.stdout.strip() or None) if result.returncode == 0 else None
+
+
+def _unintegrated_count(git_dir: Path, deliverable: str, tip: str | None) -> int:
+    """Commits reachable from ``tip`` (the item's tip sha) not reachable from ``deliverable`` (merges included).
+
+    ``git rev-list --count refs/heads/<deliverable>..<tip>``; ``-1`` on no tip,
+    a missing ref or any git failure. Module-level so tests can patch it.
+    """
+    if tip is None:
+        return -1
+    result = subprocess.run(
+        ["git", "-C", str(git_dir), "rev-list", "--count", f"refs/heads/{deliverable}..{tip}"],
+        capture_output=True,
+        text=True,
+        cwd=str(git_dir),
+        check=False,
+    )
+    if result.returncode != 0:
+        return -1
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return -1
+
+
+def _cas_delete_branch(main_wt: Path, branch: str, tip: str | None) -> tuple[bool, str | None]:
+    """Delete ``refs/heads/<branch>`` only if it still points at ``tip`` (review fix #02 E).
+
+    ``git update-ref -d <ref> <tip>`` is a compare-and-swap: a branch that moved
+    since its integration was proven is kept. Unlike ``git branch -D`` it does
+    not refuse a checked-out branch, so that check is made first, from the
+    worktree listing (a failed listing refuses too). With no readable ``tip``
+    (only reachable with ``--discard-unintegrated``) it falls back to
+    ``delete_local_branch``.
+    """
+    if tip is None:
+        return delete_local_branch(main_wt, branch)
+    listing = subprocess.run(
+        ["git", "-C", str(main_wt), "worktree", "list", "--porcelain"],
+        capture_output=True,
+        text=True,
+        cwd=str(main_wt),
+        check=False,
+    )
+    if listing.returncode != 0:
+        return False, f"cannot list worktrees to check that {branch} is not checked out: {listing.stderr.strip()}"
+    if f"branch refs/heads/{branch}" in listing.stdout.splitlines():
+        return False, f"{branch} is checked out in a worktree (git worktree list)"
+    result = subprocess.run(
+        ["git", "-C", str(main_wt), "update-ref", "-d", f"refs/heads/{branch}", tip],
+        capture_output=True,
+        text=True,
+        cwd=str(main_wt),
+        check=False,
+    )
+    if result.returncode != 0:
+        return False, f"update-ref -d {branch} {tip} failed (branch moved, or ref locked): {result.stderr.strip()}"
+    # `update-ref -d` drops only the ref; `git branch -D` would also drop the
+    # `branch.<name>.*` config section (exit 128 = no such section — fine;
+    # best-effort, like the rest of the section's lifecycle).
+    subprocess.run(
+        ["git", "-C", str(main_wt), "config", "--remove-section", f"branch.{branch}"],
+        capture_output=True,
+        text=True,
+        cwd=str(main_wt),
+        check=False,
+    )
+    # The listing and the delete are not atomic, but both run under the
+    # Control Plane's `main-checkout` lock, which every worktree add takes.
+    return True, None
+
+
+def _item_registration(main_wt: Path, item_branch: str) -> Path | None:
+    """The (resolved) path of the worktree checking out ``refs/heads/<item_branch>``.
+
+    ``None`` when no worktree has it checked out, or when the listing fails.
+    """
+    result = subprocess.run(
+        ["git", "-C", str(main_wt), "worktree", "list", "--porcelain"],
+        capture_output=True,
+        text=True,
+        cwd=str(main_wt),
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    current: Path | None = None
+    for line in result.stdout.splitlines():
+        if line.startswith("worktree "):
+            current = Path(line[len("worktree ") :])
+        elif line == f"branch refs/heads/{item_branch}" and current is not None:
+            return current.resolve()
+    return None
+
+
+_ITEM_FORCE_OPTION = {
+    "--force": "discard uncommitted files / the detached HEAD's commits; the branch is never deleted by --force"
+}
+
+
+def _cleanup_item(  # noqa: C901
+    work_dir: Path,
+    issue: int,
+    item: int,
+    *,
+    force: bool,
+    delete_branch: bool,
+    discard: bool,
+) -> None:
+    """Remove a work item's worktree, then (``--delete-branch``) its branch (D5).
+
+    Two independent steps, each with its own proof:
+
+    1. the worktree step removes ``work_dir`` only when its registration proves
+       it belongs to the item (on ``QS_<N>_<k>``, or detached in a directory
+       named ``QS_<N>_<k>``) — never bypassed, whatever the flags — and only
+       when it is clean and not detached, unless ``--force``;
+    2. the branch step deletes ``QS_<N>_<k>`` only when fully integrated into
+       ``QS_<N>`` (``rev-list --count`` is 0), unless ``discard``.
+
+    A detached worktree removed with ``--force`` reports its HEAD as
+    ``detached_head`` (the undo point). ``error`` / ``action_required`` stop
+    the call before the branch step. Emits one JSON object with every key
+    always present.
+    """
+    item_branch = task_branch_name(issue, item)
+    deliverable = task_branch_name(issue)
+    out: dict = {
+        "status": "removed",
+        "message": "",
+        "worktree_path": str(work_dir),
+        "worktree_removed": False,
+        "worktree_absent": False,
+        "worktree_remove_error": None,
+        "stale_directory": None,
+        "branch": item_branch,
+        "branch_deleted": False,
+        "branch_absent": False,
+        "branch_kept_reason": None,
+        "branch_delete_error": None,
+        "unintegrated_commits": None,
+        "deleted_tip": None,
+        "uncommitted_files": [],
+        "detached": False,
+        "detached_head": None,
+        "options": {},
+    }
+
+    def finish(status: str, message: str) -> None:
+        out["status"] = status
+        out["message"] = message
+        output_json(out)
+
+    # 1. Main worktree and the item's registration.
+    try:
+        main_wt = _main_worktree_or_fallback().resolve()
+    except (RuntimeError, subprocess.CalledProcessError, OSError) as exc:
+        finish("error", f"Refusing to touch {work_dir}: could not determine main worktree: {exc}")
+        return
+    reg_path = _item_registration(main_wt, item_branch)
+
+    if work_dir.exists():
+        # 2. Worktree step — ownership first, never bypassed.
+        if work_dir == main_wt:
+            finish("error", f"Refusing to touch {work_dir}: it is the main checkout — nothing was touched")
+            return
+        kind, registered = _registered_branch(main_wt, work_dir)
+        owned = (kind == "branch" and registered == item_branch) or (
+            kind == "detached" and work_dir.name == item_branch
+        )
+        if owned:
+            out["detached"] = kind == "detached"
+            if not force:
+                status_result = subprocess.run(
+                    ["git", "-C", str(work_dir), "status", "--porcelain"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if status_result.returncode != 0:
+                    detail = status_result.stderr.strip() or f"git status exited {status_result.returncode}"
+                    finish("error", f"Could not read the status of {work_dir}: {detail} — nothing was touched")
+                    return
+                uncommitted = [ln.strip() for ln in status_result.stdout.splitlines() if ln.strip()]
+                if uncommitted or kind == "detached":
+                    out["uncommitted_files"] = uncommitted
+                    out["options"] = dict(_ITEM_FORCE_OPTION)
+                    reasons = []
+                    if uncommitted:
+                        reasons.append(f"{len(uncommitted)} uncommitted file(s)")
+                    if kind == "detached":
+                        reasons.append(f"a detached HEAD (not on {item_branch})")
+                    finish(
+                        "action_required",
+                        f"Item worktree {work_dir} has {' and '.join(reasons)}; re-run with --force to discard.",
+                    )
+                    return
+            detached_head = None
+            if kind == "detached":  # the undo point of the discarded HEAD, read before it goes
+                head_result = subprocess.run(
+                    ["git", "-C", str(work_dir), "rev-parse", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                detached_head = (head_result.stdout.strip() or None) if head_result.returncode == 0 else None
+            wt_error = remove_worktree(work_dir)
+            if wt_error and work_dir.exists():
+                out["worktree_remove_error"] = wt_error
+                finish("error", f"Item worktree removal failed: {wt_error}")
+                return
+            out["worktree_removed"] = True
+            out["detached_head"] = detached_head
+            out["worktree_remove_error"] = wt_error
+            if wt_error:
+                _prune_worktrees(main_wt)  # N2: the dir is gone, clear the stale registration
+        elif kind == "absent" and work_dir.name == item_branch and reg_path is None:
+            out["stale_directory"] = str(work_dir)
+        else:
+            if kind == "branch":
+                desc = f"registered on {registered!r}, not {item_branch}"
+            elif kind == "detached":
+                desc = f"a detached worktree whose directory name {work_dir.name!r} is not {item_branch}"
+            elif kind == "unreadable":
+                desc = "its registration is unreadable"
+            elif reg_path is not None:
+                desc = f"not a registered worktree ({item_branch} is checked out at {reg_path})"
+            else:
+                desc = f"not a registered worktree, and its directory name is not {item_branch}"
+            finish("error", f"Refusing to touch {work_dir}: {desc} — nothing was touched")
+            return
+    else:
+        # 3. The directory is gone.
+        if reg_path is not None and reg_path != work_dir:
+            finish(
+                "error",
+                f"{item_branch} is checked out at {reg_path}, not at {work_dir} — nothing was touched",
+            )
+            return
+        out["worktree_absent"] = True
+        _prune_worktrees(main_wt)
+
+    if out["worktree_removed"]:
+        wt_part = f"Item worktree {work_dir} removed"
+        if out["detached_head"]:
+            head = out["detached_head"]
+            wt_part += f" (its detached HEAD was {head}; undo: git branch <name> {head})"
+    elif out["stale_directory"]:
+        wt_part = (
+            f"{work_dir} is a stale unregistered leftover, left on disk (remove it by hand, or "
+            f"`worktree-setup.sh {issue} {item}` recovers it)"
+        )
+    else:
+        wt_part = f"Item worktree {work_dir} already gone"
+
+    if not delete_branch:
+        finish("removed", f"{wt_part}; branch {item_branch} not requested for deletion.")
+        return
+
+    # 4. Branch step.
+    if not _branch_exists(main_wt, item_branch):
+        out["branch_absent"] = True
+        finish("removed", f"{wt_part}; branch {item_branch} already absent.")
+        return
+    deliverable_missing = not _branch_exists(main_wt, deliverable)
+    # The tip first, then the count on that sha: the deleted tip is the commit proven integrated.
+    tip = _branch_tip(main_wt, item_branch)
+    n = _unintegrated_count(main_wt, deliverable, tip)
+    if n >= 0:
+        out["unintegrated_commits"] = n
+
+    if not discard:
+        if deliverable_missing:
+            out["branch_kept_reason"] = "deliverable-missing"
+            finish("removed-branch-kept", f"{wt_part}; {deliverable} is gone, cannot prove integration; branch kept")
+            return
+        if n > 0:
+            out["branch_kept_reason"] = "unintegrated"
+            finish(
+                "removed-branch-kept",
+                f"{wt_part}; {item_branch} has {n} commit(s) not in {deliverable}; branch kept",
+            )
+            return
+        if n == -1:
+            out["branch_kept_reason"] = "count-failed"
+            finish(
+                "removed-branch-kept",
+                f"{wt_part}; could not count {item_branch}'s commits not in {deliverable}; branch kept",
+            )
+            return
+
+    out["deleted_tip"] = tip
+    deleted, error = _cas_delete_branch(main_wt, item_branch, tip)
+    if not deleted:
+        out["branch_kept_reason"] = "delete-failed"
+        out["branch_delete_error"] = error
+        finish("removed-branch-kept", f"{wt_part}; deleting {item_branch} failed: {error}; branch kept")
+        return
+    out["branch_deleted"] = True
+    finish(
+        "removed",
+        f"{wt_part}; branch {item_branch} deleted (undo: git branch {item_branch} {out['deleted_tip']}).",
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

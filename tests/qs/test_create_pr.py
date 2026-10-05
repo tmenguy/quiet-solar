@@ -32,6 +32,7 @@ def _make_fake_run(
     changed_files: list[str] | None = None,
     issue_view_rc: int = 0,
     null_labels: bool = False,
+    branch: str = "QS_42",
 ):
     """Return ``(fake_run, seen)``; ``seen`` records every command.
 
@@ -45,7 +46,7 @@ def _make_fake_run(
         seen.append(list(cmd))
         head = cmd[:3]
         if head == GIT_BRANCH:
-            return subprocess.CompletedProcess(cmd, 0, stdout="QS_42\n", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout=f"{branch}\n", stderr="")
         if head == GH_PR_LIST:
             return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
         if head == GIT_PUSH:
@@ -293,3 +294,37 @@ def test_issue_lookup_happens_once_even_for_a_task(
     heads = [c[:3] for c in seen]
     assert heads.index(GH_ISSUE_VIEW) < heads.index(GH_PR_LIST) < heads.index(GIT_PUSH)
     assert "\nFixes #42\nRefs #321\n" in _created_body(seen)
+
+
+# ---------------------------------------------------------------------------
+# QS-400: an item branch is integrated into QS_<N>, never pushed or PR'd
+# ---------------------------------------------------------------------------
+
+
+def test_item_branch_is_refused_before_any_push_or_gh(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_run, seen = _make_fake_run(branch="QS_7_1")
+    with pytest.raises(SystemExit) as exc:
+        _run_main(monkeypatch, fake_run)
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert "QS_7_1" in out["error"]
+    assert "QS_7" in out["error"]
+    assert seen == [GIT_BRANCH]
+
+
+def test_item_branch_refused_even_with_explicit_issue(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_run, seen = _make_fake_run(branch="QS_7_1")
+    with pytest.raises(SystemExit):
+        _run_main(monkeypatch, fake_run, ["--issue", "7"])
+    assert seen == [GIT_BRANCH]
+
+
+def test_deliverable_branch_still_pushes_and_opens_the_pr(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_run, seen = _make_fake_run(branch="QS_7")
+    _run_main(monkeypatch, fake_run)
+    assert any(cmd[:3] == GIT_PUSH for cmd in seen)
+    assert "Fixes #7" in _created_body(seen)
