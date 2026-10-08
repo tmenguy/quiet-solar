@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from pathlib import Path
@@ -206,6 +207,188 @@ def test_cli_renders_then_checks(tmp_path: Path, capsys: pytest.CaptureFixture[s
     md.write_text('```mermaid\nflowchart TB\n    a["A"]\n    %% @out x.svg\n```\n')
     assert mermaid_svg.main(["render", str(md)]) == 1
     assert json.loads(capsys.readouterr().out)["status"] == "error"
+
+
+def _module_names(node: ast.Import | ast.ImportFrom) -> list[str]:
+    if isinstance(node, ast.Import):
+        return [alias.name for alias in node.names]
+    assert node.level == 0, "a relative import is not stdlib"
+    return [node.module or ""]
+
+
+def _is_main_guard(node: ast.stmt) -> bool:
+    return (
+        isinstance(node, ast.If)
+        and isinstance(node.test, ast.Compare)
+        and isinstance(node.test.left, ast.Name)
+        and node.test.left.id == "__name__"
+        and len(node.test.comparators) == 1
+        and isinstance(node.test.comparators[0], ast.Constant)
+        and node.test.comparators[0].value == "__main__"
+    )
+
+
+def test_import_contract_lets_epic_doc_load_mains_renderer() -> None:
+    """QS-404 AC 12: ``epic_doc.py land`` execs ``origin/main``'s renderer source.
+
+    That is only safe while the module imports only stdlib modules, never
+    reads ``__file__`` / ``__spec__`` / a data file, and does nothing at
+    import beyond defining names. Checked on the AST, so a docstring or a
+    comment that mentions one of these names never trips the pin.
+    """
+    source = (REPO_ROOT / "scripts" / "qs" / "mermaid_svg.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for name in _module_names(node):
+                assert name.split(".")[0] in sys.stdlib_module_names, name
+        if isinstance(node, ast.Name):
+            assert node.id not in ("__file__", "__spec__"), node.id
+        if isinstance(node, ast.Attribute):
+            assert node.attr not in ("__file__", "__spec__"), node.attr
+        if isinstance(node, ast.Call):
+            func = node.func
+            assert not (isinstance(func, ast.Name) and func.id == "open"), "open() call"
+            assert not (
+                isinstance(func, ast.Attribute)
+                and func.attr == "open"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "io"
+            ), "io.open() call"
+    allowed = (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.ClassDef, ast.Assign, ast.AnnAssign)
+    for index, stmt in enumerate(tree.body):
+        if index == 0 and isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+            continue  # the module docstring
+        assert isinstance(stmt, allowed) or _is_main_guard(stmt), ast.dump(stmt)[:120]
+        if isinstance(stmt, (ast.Assign, ast.AnnAssign)) and stmt.value is not None:
+            # An assignment runs at import: it may only compile a regex.
+            for call in (n for n in ast.walk(stmt.value) if isinstance(n, ast.Call)):
+                assert _is_re_compile(call), ast.dump(call)[:120]
+
+
+def _is_re_compile(call: ast.Call) -> bool:
+    func = call.func
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == "compile"
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "re"
+    )
+
+
+def test_import_contract_pin_flags_a_call_at_import() -> None:
+    """The pin's own guard: a module-level assignment calling anything but ``re.compile``."""
+    (stmt,) = ast.parse("X = open('f')\n").body
+    assert isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Call)
+    assert not _is_re_compile(stmt.value)
+    (stmt,) = ast.parse("X = re.compile('x')\n").body
+    assert isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Call)
+    assert _is_re_compile(stmt.value)
+
+
+def test_outputs_from_text_matches_outputs(tmp_path: Path) -> None:
+    """QS-404 AC 13: ``outputs()`` is ``outputs_from_text`` over the file's text and directory."""
+    text = f"```mermaid\n{BLOCK}```\n"
+    md = tmp_path / "doc.md"
+    md.write_text(text, encoding="utf-8")
+    from_text = mermaid_svg.outputs_from_text(text, tmp_path)
+    assert from_text == mermaid_svg.outputs(md)
+    assert from_text == [((tmp_path / "img" / "run.svg").resolve(), mermaid_svg.render_block(BLOCK)[1])]
+
+
+def test_outputs_from_text_refuses_a_duplicate_out(tmp_path: Path) -> None:
+    """QS-404 AC 13: two blocks writing one SVG would silently overwrite each other."""
+    text = f"```mermaid\n{BLOCK}```\n\n```mermaid\n{BLOCK}```\n"
+    with pytest.raises(mermaid_svg.MermaidSvgError, match="duplicate @out"):
+        mermaid_svg.outputs_from_text(text, tmp_path)
+
+
+def test_outputs_from_text_refuses_a_case_only_duplicate(tmp_path: Path) -> None:
+    """Review fix #01 F6: on a case-insensitive file system both blocks would write one file."""
+    lower = BLOCK.replace("img/run.svg", "img/view.svg")
+    upper = BLOCK.replace("img/run.svg", "img/View.svg")
+    text = f"```mermaid\n{lower}```\n\n```mermaid\n{upper}```\n"
+    with pytest.raises(mermaid_svg.MermaidSvgError, match="duplicate @out"):
+        mermaid_svg.outputs_from_text(text, tmp_path)
+
+
+_BAD_HINT_BLOCKS = [
+    'flowchart TB\n    a["A"]\n    %% @out x.svg\n    %% @canvas 10 10\n    %% @node a at=1 size=1,1\n',
+    'flowchart TB\n    a["A<br/>body"]\n    %% @out x.svg\n    %% @canvas 10 10\n    %% @node a at=0,0 size=100,50 fs=0\n',
+    'flowchart TB\n    a["A"]\n    %% @\n',
+    'flowchart TB\n    a["A"]\n    %% @canvas 100\n',
+    'flowchart TB\n    a["A"]\n    %% @canvas 10 10 "unclosed\n',
+    (
+        'flowchart TB\n    a["A"]\n    b["B"]\n    a --> b\n    %% @canvas 400 400\n'
+        "    %% @node a at=0,0 size=10,10\n    %% @node b at=0,100 size=10,10\n    %% @edge a->b vhv y=5 x2=5\n"
+    ),
+]
+
+
+@pytest.mark.parametrize("block", _BAD_HINT_BLOCKS)
+def test_render_block_wraps_raw_exceptions(block: str) -> None:
+    """QS-404 AC 14: a malformed hint is a ``MermaidSvgError``, never a raw traceback."""
+    with pytest.raises(mermaid_svg.MermaidSvgError, match="bad Mermaid block or hint"):
+        mermaid_svg.render_block(block)
+
+
+def test_render_block_keeps_its_own_errors_unchanged() -> None:
+    with pytest.raises(mermaid_svg.MermaidSvgError) as info:
+        mermaid_svg.render_block('flowchart TB\n    a["A"]\n    %% @node a at=0,0 size=1,1\n')
+    assert str(info.value) == "missing @canvas hint"
+
+
+@pytest.mark.parametrize("block", _BAD_HINT_BLOCKS[:2])
+def test_run_reports_a_malformed_hint_as_an_error(tmp_path: Path, block: str) -> None:
+    md = tmp_path / "doc.md"
+    md.write_text(f"```mermaid\n{block}```\n", encoding="utf-8")
+    code, report = mermaid_svg.run([md], check=True)
+    assert code == 1
+    assert report["status"] == "error"
+    assert "bad Mermaid block or hint" in str(report["message"])
+
+
+def test_run_reports_a_non_utf8_svg_as_an_error(tmp_path: Path) -> None:
+    md = tmp_path / "doc.md"
+    md.write_text(f"```mermaid\n{BLOCK}```\n", encoding="utf-8")
+    (tmp_path / "img").mkdir()
+    (tmp_path / "img" / "run.svg").write_bytes(b"\xff\xfe\x00garbage")
+    code, report = mermaid_svg.run([md], check=True)
+    assert code == 1
+    assert report["status"] == "error"
+
+
+@pytest.mark.parametrize("check", [False, True], ids=["render", "check"])
+@pytest.mark.parametrize(
+    "out",
+    ["../escape.svg", "{tmp}/abs.svg", "img/notes.txt", "img/run.SVG.bak"],
+    ids=["parent", "absolute", "not-svg", "svg-suffix-inside"],
+)
+def test_run_refuses_an_out_outside_the_markdown_directory(tmp_path: Path, out: str, check: bool) -> None:
+    """Review fix #02 G2: ``render`` writes only ``.svg`` files under the Markdown file's directory."""
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    md = docs / "doc.md"
+    out = out.format(tmp=tmp_path)  # an absolute path, still inside the sandbox
+    md.write_text(f"```mermaid\n{BLOCK.replace('img/run.svg', out)}```\n", encoding="utf-8")
+    code, report = mermaid_svg.run([md], check=check)
+    assert code == 1
+    assert report["status"] == "error"
+    assert "@out must be an .svg under" in str(report["message"])
+    assert sorted(p.name for p in tmp_path.rglob("*") if p.is_file()) == ["doc.md"]
+
+
+def test_run_refuses_an_out_through_a_symlink_leaving_the_directory(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "img").symlink_to(outside, target_is_directory=True)
+    md = docs / "doc.md"
+    md.write_text(f"```mermaid\n{BLOCK}```\n", encoding="utf-8")
+    code, report = mermaid_svg.run([md], check=False)
+    assert code == 1 and report["status"] == "error"
+    assert list(outside.iterdir()) == []
 
 
 def test_every_svg_in_docs_is_up_to_date() -> None:

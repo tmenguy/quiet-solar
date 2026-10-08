@@ -11,7 +11,9 @@ Mermaid renderer ignores, so the Markdown stays the single source.
 A block is rendered only when it carries an ``@out`` hint. Hints, one per
 comment line (``%% @...``); coordinates are SVG pixels:
 
-- ``@out PATH`` — the SVG to write, relative to the Markdown file.
+- ``@out PATH`` — the SVG to write, relative to the Markdown file; it must
+  be an ``.svg`` file under the Markdown file's directory (symlinks
+  resolved), so ``render`` never writes anywhere else.
 - ``@canvas W H [origin=X,Y]`` — the drawing size and its top-left corner.
 - ``@group ID at=X,Y size=W,H [title=top|bottom] [badge=TEXT]``
 - ``@node ID at=X,Y size=W,H [fs=N] [tfs=N]`` — every node needs one.
@@ -41,6 +43,21 @@ Usage::
 Contract: JSON on stdout; exit 0 when every SVG was written (``render``)
 or is up to date (``--check``), exit 1 on a stale SVG or a refused block.
 No side effects at import.
+
+Two other callers (QS-404):
+
+- ``quality_gate.py --impacted`` imports this module and runs
+  :func:`run` with ``check=True`` over the changed ``docs/`` Markdown,
+  so a stale SVG fails before commit as it does in CI.
+- ``epic_doc.py land`` reads **origin/main's** copy of this file with
+  ``git show`` and execs it into a fresh module, then calls
+  :func:`outputs_from_text` on the epic document it lands, so the SVGs
+  it lands are the ones CI on ``main`` expects.
+
+Import contract (relied on by ``epic_doc.py land``, pinned by a test):
+stdlib-only imports; no use of the module's file, spec or any data file;
+no side effect at import — module level only imports, defines and
+assigns.
 """
 
 from __future__ import annotations
@@ -527,10 +544,22 @@ class Renderer:
 
 
 def render_block(block: str) -> tuple[str | None, str]:
-    """Render one block; return its ``@out`` path and the SVG text."""
-    graph = parse(block)
-    hints = parse_hints(graph.hints)
-    return hints.out, Renderer(graph, hints).render()
+    """Render one block; return its ``@out`` path and the SVG text.
+
+    Every failure is a :class:`MermaidSvgError`: a malformed hint
+    (``at=1``, a bare ``@``, an unclosed quote, ``fs=0``, a route missing a
+    coordinate) raises a raw ``ValueError`` / ``IndexError`` / ``KeyError``
+    / ``ZeroDivisionError`` deep in the parser or the drawing code, which is
+    reported here as a refusal instead of a traceback.
+    """
+    try:
+        graph = parse(block)
+        hints = parse_hints(graph.hints)
+        return hints.out, Renderer(graph, hints).render()
+    except MermaidSvgError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — any parse/draw failure is a refusal
+        raise MermaidSvgError(f"bad Mermaid block or hint: {exc}") from exc
 
 
 def mermaid_blocks(markdown: str) -> list[str]:
@@ -538,15 +567,31 @@ def mermaid_blocks(markdown: str) -> list[str]:
     return re.findall(r"^```mermaid\n(.*?)^```", markdown, re.S | re.M)
 
 
-def outputs(md_path: Path) -> list[tuple[Path, str]]:
-    """The ``(svg path, svg text)`` of every block of ``md_path`` with an ``@out`` hint."""
-    found = []
-    for block in mermaid_blocks(md_path.read_text(encoding="utf-8")):
+def outputs_from_text(markdown: str, base_dir: Path) -> list[tuple[Path, str]]:
+    """The ``(svg path, svg text)`` of every block of ``markdown`` with an ``@out`` hint.
+
+    ``@out`` paths resolve against ``base_dir`` (the Markdown file's
+    directory). Two blocks declaring the same output are refused —
+    compared case-insensitively, as a case-insensitive file system (APFS)
+    would write both to one file.
+    """
+    found: list[tuple[Path, str]] = []
+    seen: set[str] = set()
+    for block in mermaid_blocks(markdown):
         if not re.search(r"^\s*%%\s*@out\s", block, re.M):
             continue
         out, svg = render_block(block)
-        found.append(((md_path.parent / str(out)).resolve(), svg))
+        svg_path = (base_dir / str(out)).resolve()
+        if str(svg_path).casefold() in seen:
+            raise MermaidSvgError(f"duplicate @out: {out}")
+        seen.add(str(svg_path).casefold())
+        found.append((svg_path, svg))
     return found
+
+
+def outputs(md_path: Path) -> list[tuple[Path, str]]:
+    """The ``(svg path, svg text)`` of every block of ``md_path`` with an ``@out`` hint."""
+    return outputs_from_text(md_path.read_text(encoding="utf-8"), md_path.parent)
 
 
 def run(paths: list[Path], check: bool) -> tuple[int, dict[str, object]]:
@@ -554,7 +599,12 @@ def run(paths: list[Path], check: bool) -> tuple[int, dict[str, object]]:
     written, stale, fresh = [], [], []
     try:
         for md_path in paths:
+            home = md_path.parent.resolve()
             for svg_path, svg in outputs(md_path):
+                if svg_path.suffix != ".svg" or not svg_path.is_relative_to(home):
+                    # A document-controlled path is never followed outside its
+                    # directory: ``render`` is an allow-listed agent command.
+                    raise MermaidSvgError(f"@out must be an .svg under {home}: {svg_path}")
                 current = svg_path.read_text(encoding="utf-8") if svg_path.exists() else None
                 if current == svg:
                     fresh.append(str(svg_path))
@@ -564,7 +614,7 @@ def run(paths: list[Path], check: bool) -> tuple[int, dict[str, object]]:
                     svg_path.parent.mkdir(parents=True, exist_ok=True)
                     svg_path.write_text(svg, encoding="utf-8")
                     written.append(str(svg_path))
-    except (MermaidSvgError, OSError) as exc:
+    except (MermaidSvgError, OSError, UnicodeDecodeError) as exc:
         return 1, {"status": "error", "message": str(exc)}
     if stale:
         return 1, {"status": "stale", "stale": stale, "up_to_date": fresh}

@@ -71,6 +71,7 @@ import json
 import math
 import os
 import re
+import shlex
 import signal
 import sqlite3
 import subprocess
@@ -1902,8 +1903,61 @@ def _impacted_cheap_checks(paths: list[str] | None) -> list[str]:
     return failed
 
 
+def _impacted_diagram_check(paths: list[str] | None, root: Path | None = None) -> list[str]:
+    """QS-404: fail on a stale SVG diagram; return `["diagrams"]` on failure, else `[]`.
+
+    testmon fingerprints only `.py` files, so a Markdown-only change set takes
+    the non-`.py` early exit and a stale diagram would surface only in CI's
+    `tests/qs/test_mermaid_svg.py::test_every_svg_in_docs_is_up_to_date`. This
+    step renders, in `--check` mode with the WORKTREE's renderer (what CI on
+    the PR runs), every changed `docs/**/*.md` that still exists — the same
+    `docs/` scope as CI; a file without an `@out` block renders nothing and
+    passes. A `None` listing (git failure) checks every `docs/**/*.md` —
+    fail-closed. Deliberately not triggered: a hand-edited `.svg` without a
+    changed `.md` (left to CI), and `scripts/qs/mermaid_svg.py` itself
+    (testmon selects `tests/qs/test_mermaid_svg.py` for it). Not a fifth
+    cheap gate: the full gate already runs the every-SVG test in its pytest
+    pass. Any exception — an unimportable renderer included — is an `error:`
+    line, never a traceback; a run without `docs/` Markdown never imports it.
+    """
+    root = root or REPO_ROOT
+    if paths is None:
+        sources = sorted((root / "docs").rglob("*.md"))
+    else:
+        sources = [
+            root / p for p in paths if p.startswith("docs/") and p.endswith(".md") and (root / p).is_file()
+        ]
+    if not sources:
+        _emit("diagrams", "SKIP (no docs/ Markdown changed)")
+        return []
+    try:
+        import mermaid_svg  # noqa: PLC0415 — sibling import, loaded only when a doc changed
+
+        code, report = mermaid_svg.run(sources, check=True)
+    except Exception as exc:  # noqa: BLE001 — a renderer crash is a FAIL line, not a traceback
+        code, report = 1, {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
+    if code == 0:
+        _emit("diagrams", "PASS")
+        return []
+    top = root.resolve()
+    stale = report.get("stale")
+    if report.get("status") == "stale" and isinstance(stale, list):
+        for svg in stale:
+            _emit("diagrams", f"stale: {os.path.relpath(svg, top)}")
+    else:
+        _emit("diagrams", f"error: {report.get('message', report)}")
+    rel = " ".join(shlex.quote(os.path.relpath(src.resolve(), top)) for src in sources)
+    _emit("diagrams", f"fix: python scripts/qs/mermaid_svg.py render {rel}")
+    _emit("diagrams", "FAIL")
+    return ["diagrams"]
+
+
 def _with_cheap(rc: int, cheap_failed: list[str]) -> int:
     """Fold the cheap-check verdict into the tail's exit code (QS-371, D4).
+
+    `cheap_failed` also carries `"diagrams"` when the stale-SVG check failed
+    (QS-404) — the verdict line then reads
+    `[impacted] FAIL (cheap checks failed: diagrams)`.
 
     A cheap failure turns a 0 into 1; a non-zero tail code keeps its meaning
     (1 test/coverage fail, 4 no base in CI). Either way the verdict is the LAST
@@ -2612,7 +2666,8 @@ def check_impacted() -> int:
     """Run the `--impacted` inner-loop gate; return the process exit code.
 
     Pipeline: tooling probe → orphan-shard hygiene → testmon DB hygiene →
-    lane check → CI-mirrored cheap checks (QS-371) → non-`.py` early exit
+    lane check → CI-mirrored cheap checks (QS-371) → stale-SVG diagram check
+    (QS-404, `_impacted_diagram_check`) → non-`.py` early exit
     (QS-290 S-4) → diff-base ladder → one `_run_impacted_pass` → (on an
     incremental changed-line FAIL) exactly one self-heal rebuild + retry.
     Everything from the early exit on lives in `_check_impacted_tail`; its exit
@@ -2653,6 +2708,12 @@ def check_impacted() -> int:
     - Everything else (docs, other `scripts/`, `tests/`, agent files, UI
       assets) selects nothing and prints `[cheap-checks] SKIP`.
 
+    **Stale-SVG diagram check (QS-404).** Right after the cheap checks, on a
+    warm or a cold baseline alike: every changed `docs/**/*.md` (a `None`
+    listing: every `docs/**/*.md`) is rendered in `--check` mode, so a stale
+    SVG fails here as it does in CI. No `docs/` Markdown changed prints
+    `[diagrams] SKIP`. A failure joins the cheap-check verdict as `diagrams`.
+
     A cheap failure never short-circuits: the tail still runs, then a 0 becomes
     1 (`[impacted] FAIL (cheap checks failed: …)` as the last line) and a
     non-zero tail code is kept (with a `note:` line). There is no `--fix`
@@ -2672,7 +2733,7 @@ def check_impacted() -> int:
 
     Exit codes: 0 pass · 1 selected-test failure OR diff-coverage <100% OR a
     CI-mirrored cheap check (ruff lint / ruff format / mypy / translations)
-    failed OR lane-check failure · 3 testmon / diff-cover not importable ·
+    failed OR a stale / unrenderable SVG diagram (QS-404) OR lane-check failure · 3 testmon / diff-cover not importable ·
     4 no diff base resolvable in CI (warn-and-skip → 0 locally so an offline
     dev isn't blocked).
 
@@ -2744,7 +2805,8 @@ def check_impacted() -> int:
     # exit (a `pyproject.toml`-only change set is still linted/type-checked)
     # and never fail fast — the tail still runs, so one run surfaces every
     # problem, and `_with_cheap` folds both verdicts into the exit code.
-    cheap_failed = _impacted_cheap_checks(early_exit_paths)
+    # QS-404: the stale-SVG check joins them, before the same early exit.
+    cheap_failed = _impacted_cheap_checks(early_exit_paths) + _impacted_diagram_check(early_exit_paths)
     rc = _check_impacted_tail(early_exit_paths=early_exit_paths, was_incremental=was_incremental)
     return _with_cheap(rc, cheap_failed)
 

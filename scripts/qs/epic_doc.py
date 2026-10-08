@@ -12,14 +12,17 @@ not prose:
   worktree safe to discard?). ``--sync`` fast-forwards a reused worktree
   that is behind ``origin/main`` and holds nothing local.
 - ``land --issue N --message MSG [--merged P=<blob>]... [--dry-run]`` —
-  the **only** way an epic document reaches ``main``: it lands **only the
-  epic's own** ``docs/epics/QS-<N>.md``; any other changed path is refused
-  (``out-of-scope``). It also refuses a stale ``docs/agents/`` doc, and a
-  path ``main`` changed since the worktree's base (unless merged against
-  the current ``main`` blob). The landing commit is built on ``origin/main`` with
-  plumbing through a temporary index, so the working tree is **never
-  modified before the push is verified** — a failure cannot lose the
-  draft.
+  the **only** way an epic document reaches ``main``: it lands the epic's
+  own ``docs/epics/QS-<N>.md`` and the SVGs its ``@out`` hints declare
+  (``docs/epics/img/QS-<N>-*.svg``), re-rendered with ``main``'s
+  renderer (QS-404); any other changed path, an undeclared SVG included,
+  is refused (``out-of-scope``). It also refuses a stale ``docs/agents/``
+  doc, and a doc ``main`` changed since the worktree's base (unless merged
+  against the current ``main`` blob) — a declared SVG never conflicts, it
+  is simply re-rendered. The landing commit is built on ``origin/main``
+  with plumbing through a temporary index, and the SVGs are rendered in
+  memory, so the working tree is **never modified before the push is
+  verified** — a failure cannot lose the draft.
 - ``sync-issue --issue N [--rewrite-from FILE]`` — writes the epic issue
   body. By default additive and marker-free: it prepends the
   rationale-document link and adds the missing ``- [ ] #n`` child lines,
@@ -59,6 +62,8 @@ import re
 import shutil
 import sys
 import tempfile
+import types
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -69,6 +74,7 @@ import targets  # type: ignore[import-not-found]
 import utils  # type: ignore[import-not-found]
 
 DOC_PREFIX = "docs/epics/"
+RENDERER = "scripts/qs/mermaid_svg.py"
 
 _OK_STATUSES = frozenset({"ok", "landed", "already-landed", "ok-dry-run", "synced", "unchanged"})
 
@@ -85,6 +91,11 @@ class Refusal(Exception):  # noqa: N818 — a refusal is a normal outcome, not a
 def doc_path(issue: int) -> str:
     """Repo-relative path of the epic document for ``issue``."""
     return f"{DOC_PREFIX}QS-{issue}.md"
+
+
+def _svg_pattern(issue: int) -> re.Pattern[str]:
+    """The SVGs an epic may land: ``docs/epics/img/QS-<N>-<name>.svg`` (flat, no subdirectory)."""
+    return re.compile(rf"{re.escape(DOC_PREFIX)}img/QS-{issue}-[A-Za-z0-9._-]+\.svg")
 
 
 # ---------------------------------------------------------------------------
@@ -131,14 +142,14 @@ def _fetch_main(root: str) -> None:
     _git_ok(root, ["fetch", "origin", "main"])
 
 
-def _changed_paths(root: str) -> tuple[str, list[str]]:
-    """Return ``(base, changed)`` — every path changed since ``origin/main``'s merge-base.
+def _changed_paths(root: str, main: str = "origin/main") -> tuple[str, list[str]]:
+    """Return ``(base, changed)`` — every path changed since ``main``'s merge-base.
 
     Committed (``--no-renames``, so a rename contributes both sides) plus
     staged, unstaged and untracked (a porcelain rename entry contributes
     both paths).
     """
-    base = _git_ok(root, ["merge-base", "HEAD", "origin/main"]).strip()
+    base = _git_ok(root, ["merge-base", "HEAD", main]).strip()
     changed: set[str] = set()
     committed = _git_ok(root, ["diff", "--name-only", "-z", "--no-renames", base, "HEAD"])
     changed.update(p for p in committed.split("\0") if p)
@@ -162,9 +173,9 @@ def _changed_paths(root: str) -> tuple[str, list[str]]:
     return base, sorted(changed)
 
 
-def _main_blob(root: str, path: str) -> str | None:
-    """The ``origin/main:<path>`` blob sha, or ``None`` when absent."""
-    out = _git_ok(root, ["ls-tree", "-z", "origin/main", "--", path])
+def _main_blob(root: str, path: str, main: str = "origin/main") -> str | None:
+    """The ``<main>:<path>`` blob sha (``main`` defaults to ``origin/main``), or ``None`` when absent."""
+    out = _git_ok(root, ["ls-tree", "-z", main, "--", path])
     for entry in out.split("\0"):
         meta, _, name = entry.partition("\t")
         parts = meta.split()
@@ -272,6 +283,16 @@ def _all_blobs_on_main(
 
 
 def cmd_status(issue: int, *, sync: bool) -> dict:
+    """Read-only session state of the epic worktree (``--sync`` may fast-forward or reset it).
+
+    Every changed path counts, the epic's SVGs included: ``changed`` lists
+    them, and ``safe_to_discard`` / ``landed_not_reset`` compare their
+    working-tree blobs with ``main``'s like any other path. ``status``
+    never renders a diagram (QS-404) — a broken diagram must not make a
+    read-only snapshot refuse — so a land whose reset never ran, with a
+    stale local SVG, reads ``safe_to_discard: false``; re-running ``land``
+    recovers it.
+    """
     root = _toplevel()
     _fetch_main(root)
     doc = doc_path(issue)
@@ -379,19 +400,55 @@ def _drift(root: str, changed: list[str]) -> tuple[dict, list[str]]:
     return report, warnings
 
 
-def _build_commit(root: str, changed: list[str], message: str) -> str | None:
-    """Build the landing commit on ``origin/main`` via a temporary index.
+def _text_blob(root: str, path: str, text: str, *, write: bool = False) -> str:
+    """The blob sha of ``text`` as the content of ``path`` (``write`` stores it).
 
-    Returns the commit sha, or ``None`` when the resulting tree equals
-    ``origin/main``'s. The working tree and the real index are untouched.
+    The text goes through a temp file **outside** the repository, written
+    with the same call ``mermaid_svg.run`` uses, and is hashed with
+    ``--path`` so the same ``.gitattributes`` filters apply as to the
+    working-tree file — the working tree itself is never written.
     """
+    tmpdir = tempfile.mkdtemp(prefix="qs_epic_svg_")
+    try:
+        tmp = Path(tmpdir) / "blob"
+        tmp.write_text(text, encoding="utf-8")
+        args = ["hash-object", *(["-w"] if write else []), "--path", path, "--", str(tmp)]
+        return _git_ok(root, args).strip()
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _build_commit(
+    root: str,
+    changed: list[str],
+    message: str,
+    *,
+    contents: dict[str, str] | None = None,
+    main: str = "origin/main",
+) -> str | None:
+    """Build the landing commit on ``main`` (default ``origin/main``) via a temporary index.
+
+    A path in ``contents`` gets that text (a rendered SVG — even when the
+    working-tree file is absent or stale); any other path gets its
+    working-tree file, or is removed when that file is absent. Returns the
+    commit sha, or ``None`` when the resulting tree equals
+    ``main``'s. The working tree and the real index are untouched.
+    """
+    contents = contents or {}
     tmpdir = tempfile.mkdtemp(prefix="qs_epic_index_")
     # A not-yet-existing path: git refuses a pre-created empty index file.
     env = {"GIT_INDEX_FILE": os.path.join(tmpdir, "index")}
     try:
-        _git_ok(root, ["read-tree", "origin/main"], env=env)
+        _git_ok(root, ["read-tree", main], env=env)
         for path in changed:
-            if (Path(root) / path).is_file():
+            if path in contents:
+                blob = _text_blob(root, path, contents[path], write=True)
+                _git_ok(
+                    root,
+                    ["update-index", "--add", "--cacheinfo", f"100644,{blob},{path}"],
+                    env=env,
+                )
+            elif (Path(root) / path).is_file():
                 blob = _git_ok(root, ["hash-object", "-w", "--", path]).strip()
                 _git_ok(
                     root,
@@ -403,10 +460,10 @@ def _build_commit(root: str, changed: list[str], message: str) -> str | None:
         tree = _git_ok(root, ["write-tree"], env=env).strip()
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-    main_tree = _git_ok(root, ["rev-parse", "origin/main^{tree}"]).strip()
+    main_tree = _git_ok(root, ["rev-parse", f"{main}^{{tree}}"]).strip()
     if tree == main_tree:
         return None
-    return _git_ok(root, ["commit-tree", tree, "-p", "origin/main", "-m", message]).strip()
+    return _git_ok(root, ["commit-tree", tree, "-p", main, "-m", message]).strip()
 
 
 def _validate_decomposition(root: str, doc: str) -> None:
@@ -425,7 +482,100 @@ def _validate_decomposition(root: str, doc: str) -> None:
         raise Refusal("unparseable-decomposition", doc=doc, detail=str(exc)) from None
 
 
-def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
+def _landed_doc_text(root: str, doc: str, changed: list[str], main: str = "origin/main") -> str | None:
+    """The text of the doc that will land: the working tree's when changed, else ``main``'s.
+
+    ``None`` when ``main`` has no doc (it then declares nothing). A stale
+    local doc that is not in the change set never produces an SVG.
+    """
+    if doc in changed:
+        return _read_doc(root, doc)
+    return _blob_content(root, _main_blob(root, doc, main))
+
+
+def _load_renderer(source: str) -> tuple[types.ModuleType, str]:
+    """Exec the renderer ``source`` into a fresh module; return it with its ``sys.modules`` key.
+
+    The module is registered under a unique name (``dataclasses`` resolves
+    string annotations through ``sys.modules``); on **any** failure the
+    name is removed before the exception propagates. On success the
+    caller removes it once rendering is done. Safe because of the
+    renderer's import contract (stdlib-only, no file access, no import
+    side effect — see ``mermaid_svg.py``'s docstring).
+    """
+    key = f"qs_mermaid_svg_main_{uuid.uuid4().hex}"
+    module = types.ModuleType(key)
+    sys.modules[key] = module
+    try:
+        exec(compile(source, f"origin/main:{RENDERER}", "exec", dont_inherit=True), module.__dict__)  # noqa: S102 — main's own renderer
+        if not callable(getattr(module, "outputs_from_text", None)):
+            raise Refusal(
+                "diagram-error",
+                detail=f"origin/main's {RENDERER} has no outputs_from_text — it predates QS-404",
+            )
+    except BaseException:
+        sys.modules.pop(key, None)
+        raise
+    return module, key
+
+
+def _main_renderer(root: str, main: str = "origin/main") -> tuple[types.ModuleType, str]:
+    """``main``'s renderer (default ``origin/main``), loaded with :func:`_load_renderer`.
+
+    ``land`` always renders with ``main``'s renderer: what it lands must
+    pass CI on ``main``.
+    """
+    if _main_blob(root, RENDERER, main) is None:
+        raise Refusal("diagram-error", detail=f"origin/main has no {RENDERER} to render the diagrams with")
+    return _load_renderer(_git_ok(root, ["show", f"{main}:{RENDERER}"]))
+
+
+def _declared_svgs(root: str, issue: int, text: str | None, main: str = "origin/main") -> dict[str, str]:
+    """``{repo-relative SVG path: rendered SVG text}`` for every ``@out`` block of ``text``.
+
+    The renderer is loaded only when ``text`` contains ``@out``. Every
+    declared path must be ``docs/epics/img/QS-<issue>-*.svg``
+    (``out-of-scope`` otherwise, an escaping ``@out`` shown as ``../…``);
+    any load or render failure is ``diagram-error`` — a ``SystemExit``
+    raised by the renderer included.
+    """
+    if text is None or "@out" not in text:
+        return {}
+    key = None
+    try:
+        module, key = _main_renderer(root, main)
+        top = Path(root).resolve()
+        found = module.outputs_from_text(text, top / DOC_PREFIX)
+        pattern = _svg_pattern(issue)
+        declared = {Path(os.path.relpath(svg_path, top)).as_posix(): svg for svg_path, svg in found}
+        bad = [p for p in declared if not pattern.fullmatch(p)]
+        if bad:
+            raise Refusal(
+                "out-of-scope",
+                offenders=bad,
+                detail=f"an epic's @out must target {DOC_PREFIX}img/QS-{issue}-*.svg",
+            )
+        return declared
+    except Refusal:
+        raise
+    except SystemExit as exc:  # a BaseException: argparse / sys.exit at import
+        raise Refusal("diagram-error", detail=f"origin/main's {RENDERER} exited: {exc}") from None
+    except Exception as exc:  # noqa: BLE001 — "JSON refusal, never a traceback"
+        raise Refusal("diagram-error", detail=str(exc)) from None
+    finally:
+        if key:
+            sys.modules.pop(key, None)
+
+
+def _already_landed(changed: list[str], *, dry_run: bool, root: str) -> dict:
+    if dry_run:
+        # S1: dry-run stops before building the commit — it never resets.
+        return {"status": "ok-dry-run", "already_landed": True, "paths": changed, "reset": False}
+    _reset_to_main(root)
+    return {"status": "already-landed", "paths": changed, "reset": True}
+
+
+def cmd_land(  # noqa: C901 — the eleven steps read best as one sequence
     issue: int, *, message: str, merged: list[str], dry_run: bool
 ) -> dict:
     merged_map = _parse_merged(merged)
@@ -436,56 +586,121 @@ def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
     labels, _state, _body = _issue_info(issue)
     _require_epic(issue, labels)
     _fetch_main(root)
+    # Review fix #01 F4: pin origin/main ONCE. ``refs/remotes/origin/main`` is
+    # shared by every worktree, so another session's fetch could move it
+    # between the conflict check / the render and the build. Everything below
+    # reads this sha; a concurrent landing then makes the push a non-fast-
+    # forward (``push-rejected`` → re-run) instead of silently overwriting main.
+    main = _git_ok(root, ["rev-parse", "--verify", "origin/main^{commit}"]).strip()
     doc = doc_path(issue)
-    base, changed = _changed_paths(root)
+    base, changed = _changed_paths(root, main)
+    svg_re = _svg_pattern(issue)
 
-    # N6: an epic session lands its OWN document and nothing else — not another
-    # epic's docs/epics/QS-M.md, not swap files, not *.orig/*.bak backups. The
-    # single landable path is exactly ``docs/epics/QS-<issue>.md``.
-    offenders = [p for p in changed if p != doc]
+    # N6: an epic session lands its OWN document and the SVGs that document
+    # declares — not another epic's docs/epics/QS-M.md, not swap files, not
+    # *.orig/*.bak backups. This pre-render pass admits exactly the doc and the
+    # paths shaped like the epic's SVGs; which of those the doc really declares
+    # is checked after rendering (step 8).
+    offenders = [p for p in changed if p != doc and not svg_re.fullmatch(p)]
     if offenders:
         raise Refusal(
             "out-of-scope",
             offenders=offenders,
             detail=(
-                f"an epic document lands alone: the only landable path is {doc} "
+                f"an epic document lands with its own diagrams only: the landable paths are {doc} "
+                f"and the SVGs its @out hints declare ({DOC_PREFIX}img/QS-{issue}-*.svg) "
                 "(no other epic's doc, swap files, *.orig/*.bak or backups)"
             ),
         )
 
     if not changed:
-        if _main_blob(root, doc) is not None:
+        if _main_blob(root, doc, main) is not None:
             return {"status": "already-landed", "paths": [], "reset": False}
         raise Refusal("missing-doc", doc=doc, detail=f"{doc} is neither local nor on main")
     if not (Path(root) / doc).is_file():
         raise Refusal("missing-doc", doc=doc, detail=f"{doc} does not exist in the worktree")
 
-    main_blobs = {p: _main_blob(root, p) for p in changed}
+    main_blobs = {p: _main_blob(root, p, main) for p in changed}
     local_blobs = {p: _worktree_blob(root, p) for p in changed}
-    if _all_blobs_on_main(changed, main_blobs, local_blobs):
-        # The bytes are already on main (e.g. a push that landed while the
-        # local reset never ran): the reset loses nothing, and the doc on main
-        # was already validated when it first landed — no need to re-check.
-        if dry_run:
-            # S1: dry-run stops before building the commit — it never resets.
-            return {"status": "ok-dry-run", "already_landed": True, "paths": changed, "reset": False}
-        _reset_to_main(root)
-        return {"status": "already-landed", "paths": changed, "reset": True}
+    # Working-tree shortcut, before any render: the bytes are already on main
+    # (e.g. a push that landed while the local reset never ran), so the reset
+    # loses nothing and the doc on main was already validated when it first
+    # landed. SVGs are derived: a changed SVG main holds is simply overwritten
+    # by the reset, so only the non-SVG paths are compared — but an SVG main
+    # lacks would survive the reset, so its presence skips the shortcut.
+    # Review fix #01 F2: a change set whose EVERY path (SVGs included) already
+    # equals main — e.g. only main's re-rendered SVG copied in — is landed too,
+    # without rendering, so a broken main renderer never blocks that cleanup.
+    non_svg = [p for p in changed if not svg_re.fullmatch(p)]
+    svgs_on_main = all(main_blobs[p] is not None for p in changed if svg_re.fullmatch(p))
+    if _all_blobs_on_main(changed, main_blobs, local_blobs) or (
+        non_svg and svgs_on_main and _all_blobs_on_main(non_svg, main_blobs, local_blobs)
+    ):
+        return _already_landed(changed, dry_run=dry_run, root=root)
+
+    # Render the declared SVGs of the doc that will land, in memory.
+    rendered = _declared_svgs(root, issue, _landed_doc_text(root, doc, changed, main), main)
+    # Review fix #03 H1: an undeclared SVG whose local state already equals
+    # main's (restored, or deleted on both sides) is not a change — it builds
+    # as a no-op, and refusing it would loop on the hint below.
+    undeclared = [
+        p for p in changed if svg_re.fullmatch(p) and p not in rendered and local_blobs[p] != main_blobs[p]
+    ]
+    if undeclared:
+        # Review fix #02 G1: the hint depends on the file's state — a leftover
+        # main lacks can only be deleted; a path main holds can only be restored
+        # (D3: orphan cleanup is out of scope, land never deletes an epic SVG).
+        leftovers = [p for p in undeclared if main_blobs[p] is None]
+        deleted = [p for p in undeclared if local_blobs[p] is None]
+        restore = [p for p in undeclared if main_blobs[p] is not None]
+        hints = []
+        if leftovers:
+            hints.append("a leftover render main lacks — delete it: " + " ".join(leftovers))
+        if deleted:
+            hints.append("deleting an epic's SVG is not supported")
+        if restore:
+            hints.append(
+                "restore main's copy with " + " ; ".join(f"`git checkout origin/main -- {p}`" for p in restore)
+            )
+        raise Refusal(
+            "out-of-scope",
+            offenders=undeclared,
+            detail=f"no @out hint of {doc} declares these SVGs",
+            hint=" · ".join(hints),
+        )
+
+    # The effective set: the changed paths plus every declared SVG whose render
+    # differs from main's (the agent forgot to render). A declared SVG's local
+    # blob is its RENDERED blob — the one the build writes — so the shortcut
+    # below compares exactly what would land.
+    rendered_blobs = {p: _text_blob(root, p, svg) for p, svg in rendered.items()}
+    for p in rendered:
+        if p not in main_blobs:
+            main_blobs[p] = _main_blob(root, p, main)
+    local_blobs.update(rendered_blobs)
+    effective = sorted(set(changed) | {p for p in rendered if rendered_blobs[p] != main_blobs[p]})
+    if _all_blobs_on_main(effective, main_blobs, local_blobs):
+        return _already_landed(effective, dry_run=dry_run, root=root)
 
     # S2: validate the Decomposition table before any plumbing, dry-run and
-    # real alike (but after the already-landed shortcut, so cleaning up a
-    # landed worktree never re-validates).
-    _validate_decomposition(root, doc)
+    # real alike — only when the doc lands from the working tree; otherwise the
+    # doc that lands is main's, validated when it first landed.
+    if doc in changed:
+        _validate_decomposition(root, doc)
 
-    report, warnings = _drift(root, changed)
+    report, warnings = _drift(root, effective)
     if report.get("stale_docs"):
         raise Refusal(
             "drift", drift=report, warnings=warnings, detail="stale docs/agents/ documents — update them first"
         )
 
+    # D13: a declared SVG never conflicts — it is derived from the landed doc
+    # and main's renderer, so a change main made to it is simply re-rendered.
     conflicts: list[dict] = []
-    for path in changed:
-        if _git_flag(root, ["diff", "--quiet", base, "origin/main", "--", path]):
+    for path in [p for p in effective if p not in rendered]:
+        if local_blobs[path] == main_blobs[path]:
+            continue  # review fix #01 F8: the local bytes ARE main's — nothing to merge
+        if _git_flag(root, ["diff", "--quiet", base, main, "--", path]):
             continue  # main did not touch this path since the worktree's base
         if main_blobs[path] is not None and merged_map.get(path) == main_blobs[path]:
             continue
@@ -508,13 +723,13 @@ def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
         )
 
     if dry_run:
-        return {"status": "ok-dry-run", "paths": changed, "drift": report, "warnings": warnings}
+        return {"status": "ok-dry-run", "paths": effective, "drift": report, "warnings": warnings}
 
-    # N4: under the single-path N6 scope, ``_build_commit`` can never return
-    # ``None`` here — the only changed path is the doc, and the already-landed
-    # shortcut above already returned when its bytes equalled main, so the built
-    # tree always differs from ``origin/main``'s.
-    sha = _build_commit(root, changed, message)
+    # N4: ``_build_commit`` can never return ``None`` here — the rendered-blob
+    # shortcut above already returned when every effective path's blob (the
+    # rendered one for a declared SVG, the working-tree one otherwise — exactly
+    # the blobs the build writes) equalled main's, so the built tree differs.
+    sha = _build_commit(root, effective, message, contents=rendered, main=main)
     if sha is None:
         # N6: defensive — the already-landed shortcut above already returned when
         # the built tree equalled main, so ``None`` here can only mean an internal
@@ -549,7 +764,7 @@ def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
     if not _git_flag(root, ["merge-base", "--is-ancestor", sha, "origin/main"]):
         raise Refusal("verify-failed", sha=sha, detail="the pushed commit is not an ancestor of origin/main")
     _reset_to_main(root)
-    return {"status": "landed", "sha": sha, "paths": changed, "drift": report, "warnings": warnings}
+    return {"status": "landed", "sha": sha, "paths": effective, "drift": report, "warnings": warnings}
 
 
 # ---------------------------------------------------------------------------
@@ -979,7 +1194,10 @@ def main(argv: list[str] | None = None) -> int:
 
     land = sub.add_parser(
         "land",
-        help="land only the epic's own docs/epics/QS-<N>.md on main by direct commit",
+        help=(
+            "land the epic's own docs/epics/QS-<N>.md and the SVGs its @out hints declare, "
+            "re-rendered with main's renderer, on main by direct commit"
+        ),
     )
     land.add_argument("--issue", type=_issue_number, required=True)
     land.add_argument("--message", required=True, help="commit message, used verbatim")

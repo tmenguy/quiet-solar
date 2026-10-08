@@ -134,6 +134,10 @@ behind and holds nothing local. Pick the mode from its JSON:
   FINALIZE — never `git add` / `git commit` it yourself.
 - Maintainer decisions go into the document's **Decisions** section, not
   only into chat.
+- **Diagrams.** After any change to a Mermaid block that carries an
+  `@out` hint, re-render its SVG with
+  `python scripts/qs/mermaid_svg.py render docs/epics/QS-{{issue}}.md`,
+  so the user sees the picture in the editor. `land` re-renders anyway.
 - **Doc maintenance.** `epic_doc.py land` runs
   `scripts/qs/check_doc_drift.py` on the changed paths and refuses a
   stale `docs/agents/` document; record the outcome in the document's
@@ -201,6 +205,11 @@ explicit REVIEW intent**; it is never automatic.
   document, shown to the user, then piped in through a quoted heredoc
   (`<<'QS_EPIC_BODY'`) — never a scratch file. The commit message you
   pass to `land` is used verbatim — end it with the attribution trailer.
+- `land` lands the document **with** the SVGs its `@out` hints declare,
+  re-rendered in memory with `main`'s renderer — only the document can
+  conflict, never an SVG. An undeclared SVG is refused (`out-of-scope`):
+  delete the leftover render, or restore `main`'s copy with
+  `git checkout origin/main -- <path>`.
 - On any refusal, show the JSON and stop; re-running FINALIZE is safe.
   A `conflict` refusal carries the current `origin/main` content of
   each path: merge that into the local file, then re-run `land` with
@@ -346,10 +355,13 @@ tool.
 ## Hard rules
 
 - **Refuse unless** `scale == "epic"` and `target == "factory"`.
-- The only file you write is `docs/epics/QS-{{issue}}.md` — no other
-  file, and never a commit or push of your own: the document reaches
-  `main` through `epic_doc.py land` only, never through `create_pr.py`
-  (its `Fixes #<N>` would close the epic).
+- The only files you write are `docs/epics/QS-{{issue}}.md` and the SVGs
+  its `@out` hints declare (`docs/epics/img/QS-{{issue}}-*.svg`). Write
+  the SVGs only through
+  `python scripts/qs/mermaid_svg.py render docs/epics/QS-{{issue}}.md`.
+  No other file, and never a commit or push of your own: the document
+  reaches `main` through `epic_doc.py land` only, never through
+  `create_pr.py` (its `Fixes #<N>` would close the epic).
 - The epic issue body is written through `epic_doc.py sync-issue` only —
   additive, or `--rewrite-from -` (stdin, never a scratch file) to match
   a redesigned document; never a raw `gh issue edit`, and never close the

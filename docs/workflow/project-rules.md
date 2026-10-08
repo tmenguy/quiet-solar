@@ -28,7 +28,8 @@ all four; use it only for ad-hoc single-node debugging.
 # ~seconds. QS-371: it also runs the CI-mirrored cheap checks (ruff
 # lint, ruff format, mypy, translations when relevant) on change sets
 # that can move them — trigger rules in the `check_impacted` docstring;
-# a failure never short-circuits the rest of the run.
+# a failure never short-circuits the rest of the run. QS-404: + the
+# stale-SVG check on changed `docs/` Markdown (`[diagrams]` lines).
 # QS-278: coverage ACCUMULATES across runs (--cov-append), so
 # a no-op re-run (testmon selects 0 tests) or a single-file edit (small
 # subset) still has every changed-vs-origin line covered — no spurious
@@ -134,7 +135,8 @@ Python files changed too — also run
 three iteration commands relate as: `--impacted` is the mandatory
 pre-commit gate (testmon-selected tests + changed-line 100% coverage +
 the CI-mirrored cheap checks (ruff lint, ruff format, mypy,
-translations when relevant), self-heals a drifted baseline); `--quick` is for hammering
+translations when relevant) + the stale-SVG check on changed `docs/`
+Markdown, self-heals a drifted baseline); `--quick` is for hammering
 an explicit test path you already know; `--cache` accelerates repeated
 *full*-gate runs. `--impacted` is mutually exclusive with
 `--quick`/`--cache`/`--no-cache`/`--full`/`--fix`.
@@ -160,6 +162,11 @@ and the full pipeline runs.)
 Exception (QS-371): a change set touching a lint/type-config or
 translations-source path still runs the CI-mirrored cheap checks — see
 the `check_impacted` docstring.
+
+Exception (QS-404): a changed `docs/**/*.md` still runs the stale-SVG
+diagram check — a stale SVG fails `--impacted` as it fails CI's
+`test_every_svg_in_docs_is_up_to_date`; fix it with
+`python scripts/qs/mermaid_svg.py render <doc>`.
 
 *Cold baselines do not take the exit.* The exit requires a **warm**
 `.testmondata`, because "testmon could never select a test" is only true
@@ -355,12 +362,16 @@ declared target, and refuses a `scale:epic` issue outright (QS-340).
 ### Epic documents
 
 An epic's rationale document `docs/epics/QS-<N>.md` reaches `main` by
-**direct commit, landing only the epic's own `docs/epics/QS-<N>.md`**,
+**direct commit, landing only the epic's own `docs/epics/QS-<N>.md` with
+the SVGs its `@out` hints declare** (`docs/epics/img/QS-<N>-*.svg`,
+re-rendered in memory by `land` with `main`'s renderer — QS-404),
 through `python scripts/qs/epic_doc.py land` only — **never through
 `create_pr.py`**, whose `Fixes #<N>` would close the epic (it refuses
-an epic issue for that reason). `land` refuses any other changed path
-(`out-of-scope`), a stale `docs/agents/` document (`check_doc_drift.py`),
-and a path `main` changed since the worktree's base; it builds the
+an epic issue for that reason). `land` refuses any other changed path,
+an undeclared SVG included (`out-of-scope`), a broken diagram
+(`diagram-error`), a stale `docs/agents/` document (`check_doc_drift.py`),
+and a doc `main` changed since the worktree's base — only the doc can
+conflict, a declared SVG is simply re-rendered; it builds the
 commit on `origin/main` through a temporary index and leaves the working
 tree untouched until the push is verified. If a `docs/epics/` path ever
 becomes `tests/qs`-pinned, `--quick tests/qs` joins the gate.
