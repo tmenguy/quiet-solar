@@ -6103,7 +6103,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                             await self.on_device_state_change(
                                 time=time,
                                 device_change_type=DEVICE_STATUS_CHANGE_ERROR,
-                                message=f"There is no power being delivered to the car ({self.car.name}) while charging was expected",
+                                message=f"There is no power being delivered to the car ({self.car.name}) while charging was expected"
+                                " — try unplugging and re-plugging the car",
                             )
                     else:
                         self.possible_charge_error_start_time = None
@@ -6183,8 +6184,34 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         is_car_stopped_asked_current = self.is_car_stopped_asking_current(time=time)
         result = current_charge
 
+        if (
+            is_car_stopped_asked_current is True
+            and is_target_percent
+            and current_charge is not None
+            and self.car is not None
+            and not self.car.is_soc_sensor_distrusted()
+            # Strict `>` on purpose (QS-403): keeps "95 % for a 100 % target" on the charged
+            # side, unlike the zero-power check's `>=` on the same constant. Do not harmonise.
+            and target_charge - current_charge > CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT
+        ):
+            # QS-403: the car stopped asking current but a trusted SOC is far below target:
+            # the car is faulty, not full — fall through to the normal SOC evaluation.
+            self.log_info_on_change(
+                f"stopped_asking_not_full:{self.car.name}",
+                (round(current_charge), round(target_charge)),
+                time,
+                "%s car %s stopped asking current but trusted SOC %s%% is far below target %s%%"
+                " — not considered charged",
+                self.name,
+                self.car.name,
+                current_charge,
+                target_charge,
+            )
+            is_car_stopped_asked_current = False
+
         if is_car_stopped_asked_current is True:
-            # force met constraint: car is charged in all cases
+            # force met constraint: a car that stopped asking current is considered charged,
+            # except when its trusted SOC is far below a percent target (QS-403, above)
             result = target_charge
         elif current_charge is not None:
             if accept_bigger_tolerance:
