@@ -499,17 +499,20 @@ that stops drawing power because it is faulty, not full, then had its constraint
 COMPLETED (SOC callback) or its person constraint removed
 (`_person_constraint_ends_this_cycle`). The force is now skipped for a percent
 target when a car is attached, its SOC sensor is not distrusted
-(`is_soc_sensor_distrusted()`), it is not in SOC estimation mode (a manual-override
-estimate is not sensor-backed), and `target - current_charge >
-CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT`: the normal SOC evaluation decides
-instead. A `None` charge (idle/off command in the SOC callback) is judged on the raw
-SOC sensor, so the forced target cannot complete the constraint through that path. The comparison is a strict `>`, unlike the zero-power check's `>=`, so 95 %
-for a 100 % target still counts as charged. Energy targets, a distrusted SOC, estimation mode,
-and a missing car keep the legacy force. Known limit: the guard trusts the sensor
-*status*, not the value's origin, so a calculus value fed in place of the sensor is
-treated as trusted. `_probe_and_enforce_stopped_charge_command_state` is unchanged:
-QS still stops the charge, it just no longer claims the target is reached. The
-zero-power notification now also suggests unplugging and re-plugging the car.
+(`is_soc_sensor_distrusted()`), it is not in SOC estimation mode (a
+manual-override estimate is not sensor-backed), and `target - current_charge >
+CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT`: the normal SOC evaluation
+decides instead. A `None` charge (idle/off command in the SOC callback) is
+judged on the raw SOC sensor (same 30 min freshness window as the callback's
+sensor read), so the forced target cannot complete the constraint through that
+path. The comparison is a strict `>`, unlike the zero-power check's `>=`, so
+95 % for a 100 % target still counts as charged. Energy targets, a distrusted SOC,
+estimation mode, and a missing car keep the legacy force. Known limit: the guard
+trusts the sensor *status*, not the value's origin, so a calculus value fed in
+place of the sensor is treated as trusted.
+`_probe_and_enforce_stopped_charge_command_state` is unchanged: QS still stops
+the charge, it just no longer claims the target is reached. The zero-power
+notification now also suggests unplugging and re-plugging the car.
 
 ### The plug-state rescue no longer needs a currently-attached car (QS-346)
 

@@ -147,18 +147,28 @@ def test_stopped_asking_gap_just_above_threshold_is_not_charged():
     assert is_charged is False
 
 
+@pytest.mark.parametrize(
+    ("raw_soc", "expected"),
+    [
+        (SOC_AT_FAULT, (None, True)),  # far below target: the constraint continues
+        (96.0, (MANUAL_TARGET, False)),  # near target: legacy force, a full car completes
+        (None, (MANUAL_TARGET, False)),  # no fresh raw SOC: legacy force
+    ],
+    ids=["far_below", "near_target", "no_raw_soc"],
+)
 @pytest.mark.asyncio
-async def test_soc_callback_idle_command_does_not_complete_when_car_stops_at_51():
+async def test_soc_callback_idle_command_does_not_complete_when_car_stops_at_51(raw_soc, expected):
     """Review fix #01 EC-1: an idle/off command feeds `None` to `is_car_charged`. The raw
-    trusted SOC (51 %) must still block the force, or the callback completes the constraint."""
+    trusted SOC (51 %) must still block the force, or the callback completes the constraint.
+    The near-target / missing-raw cases pin the legacy force on that path (review fix #02)."""
     charger, car = _charger_with_car()
-    _setup_soc_callback(charger, car, sensor_value=SOC_AT_FAULT)
+    _setup_soc_callback(charger, car, sensor_value=raw_soc)
     charger.current_command = copy_command(CMD_IDLE)
     ct = _ManualSocConstraint(current_value=SOC_AT_FAULT, target_value=MANUAL_TARGET)
 
     result, do_continue_constraint = await charger.constraint_update_value_callback_percent_soc(ct, NOW)
 
-    assert (result, do_continue_constraint) == (None, True)
+    assert (result, do_continue_constraint) == expected
 
 
 @pytest.mark.asyncio

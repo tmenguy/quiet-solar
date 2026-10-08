@@ -6196,9 +6196,12 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             # QS-403: the car stopped asking current but a trusted SOC is far below target:
             # the car is faulty, not full — fall through to the normal SOC evaluation.
             # A `None` charge (idle/off command in the SOC callback) is judged on the raw
-            # sensor, or the forced target would still complete the constraint there.
+            # sensor, or the forced target would still complete the constraint there. Same
+            # 30 min freshness window as the callback's own sensor read.
             trusted_soc = (
-                current_charge if current_charge is not None else self.car.get_car_charge_percent_raw_sensor(time)
+                current_charge
+                if current_charge is not None
+                else self.car.get_car_charge_percent_raw_sensor(time, tolerance_seconds=30 * 60)
             )
             # Strict `>` on purpose (QS-403): keeps "95 % for a 100 % target" on the charged
             # side, unlike the zero-power check's `>=` on the same constant. Do not harmonise.
