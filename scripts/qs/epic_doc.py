@@ -640,7 +640,12 @@ def cmd_land(  # noqa: C901 — the eleven steps read best as one sequence
 
     # Render the declared SVGs of the doc that will land, in memory.
     rendered = _declared_svgs(root, issue, _landed_doc_text(root, doc, changed, main), main)
-    undeclared = [p for p in changed if svg_re.fullmatch(p) and p not in rendered]
+    # Review fix #03 H1: an undeclared SVG whose local state already equals
+    # main's (restored, or deleted on both sides) is not a change — it builds
+    # as a no-op, and refusing it would loop on the hint below.
+    undeclared = [
+        p for p in changed if svg_re.fullmatch(p) and p not in rendered and local_blobs[p] != main_blobs[p]
+    ]
     if undeclared:
         # Review fix #02 G1: the hint depends on the file's state — a leftover
         # main lacks can only be deleted; a path main holds can only be restored

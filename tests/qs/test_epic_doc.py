@@ -1507,6 +1507,43 @@ def test_land_a_doc_equal_to_main_is_never_a_conflict(repos, runner, clean_drift
     assert repos.main_file(SVG) == _svg()
 
 
+def test_land_an_undeclared_svg_equal_to_main_is_not_refused(repos, runner, clean_drift, capsys) -> None:
+    """Review fix #03 H1: main changed an orphan SVG since the base; restoring main's copy clears it."""
+    _seed_renderer(repos)
+    orphan = f"docs/epics/img/QS-{ISSUE}-orphan.svg"
+    repos.push_from_seed(orphan, "<svg>v1</svg>\n")
+    _pull(repos)
+    repos.push_from_seed(orphan, "<svg>v2 on main</svg>\n", "main edits the orphan")
+    repos.write(orphan, "<svg>edited</svg>\n")
+    repos.write(DOC, _diagram_doc())
+    out = _refused(repos, capsys, "out-of-scope")
+    assert out["offenders"] == [orphan]
+    # Follow the hint literally: the path then equals main but still differs from the base.
+    _git(repos.work, "fetch", "-q", "origin", "main")
+    _git(repos.work, "checkout", "origin/main", "--", orphan)
+    assert orphan in _git(repos.work, "status", "--porcelain")
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out["status"] == "landed"
+    assert repos.main_file(orphan) == "<svg>v2 on main</svg>\n"
+    assert repos.main_file(SVG) == _svg()
+
+
+def test_land_an_undeclared_svg_deleted_on_both_sides_is_not_refused(repos, runner, clean_drift, capsys) -> None:
+    """Review fix #03 H1: main deleted the orphan too — nothing to delete, nothing to restore."""
+    _seed_renderer(repos)
+    orphan = f"docs/epics/img/QS-{ISSUE}-orphan.svg"
+    repos.push_from_seed(orphan, "<svg>v1</svg>\n")
+    _pull(repos)
+    repos.push_from_seed(orphan, None, "main drops the orphan")
+    (repos.work / orphan).unlink()
+    repos.write(DOC, _diagram_doc())
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out["status"] == "landed"
+    assert repos.main_file(orphan) is None
+
+
 def test_land_refuses_an_undeclared_svg_with_both_hints(repos, runner, capsys) -> None:
     """Review fix #01 F7: a leftover and a deletion in one refusal get both hints."""
     _seed_renderer(repos)
