@@ -133,6 +133,22 @@ def _cheap_checks_isolated():
         yield
 
 
+# QS-404: the REAL diagram check, captured at import time — the autouse
+# `_diagram_check_isolated` fixture below stubs it for every test, so
+# `TestImpactedDiagramCheck` calls (or re-patches with) this reference.
+_REAL_IMPACTED_DIAGRAM_CHECK = quality_gate._impacted_diagram_check
+
+
+@pytest.fixture(autouse=True)
+def _diagram_check_isolated():
+    """QS-404 existing-test audit: `check_impacted()` now renders the changed
+    `docs/` Markdown's diagrams. Stub the step to "passed" so no other test
+    renders the real `docs/` tree; `TestImpactedDiagramCheck` re-patches it.
+    """
+    with patch.object(quality_gate, "_impacted_diagram_check", return_value=[]):
+        yield
+
+
 # A real sentinel object, so the default is not a
 # `str` masquerading as a `list[str] | None` behind a blanket `type: ignore`.
 # `None` cannot be the default here — it is a MEANINGFUL value (git failed →
@@ -5644,6 +5660,195 @@ class TestImpactedCheapChecks:
             assert err.splitlines()[-1] == "[impacted] FAIL (cheap checks failed: mypy)"
 
 
+_DIAGRAM_BLOCK = (
+    "flowchart TB\n"
+    '    a["A"]\n'
+    "    %% @out img/x.svg\n"
+    "    %% @canvas 200 100\n"
+    "    %% @node a at=10,10 size=100,50\n"
+)
+
+
+class TestImpactedDiagramCheck:
+    """QS-404: `--impacted` fails on a stale SVG before commit, as CI does.
+
+    testmon fingerprints only `.py` files, so a Markdown-only change set took
+    the non-`.py` early exit and a stale diagram surfaced only in CI's
+    `test_every_svg_in_docs_is_up_to_date`. The diagram check runs right after
+    the cheap checks, before the early exit, on a warm or a cold baseline.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _testmon_db_present(self, tmp_path_factory: pytest.TempPathFactory):
+        """Same isolation as `TestImpactedCheapChecks`'s fixture: a present
+        (warm) `.testmondata` and a tmp `COVERAGE_DATA`."""
+        root = tmp_path_factory.mktemp("tmdb")
+        db = root / ".testmondata"
+        db.write_bytes(b"x")
+        with (
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            patch.object(quality_gate, "COVERAGE_DATA", root / ".coverage"),
+        ):
+            yield
+
+    @staticmethod
+    def _tree(root: Path, *, fresh: bool, block: str = _DIAGRAM_BLOCK) -> None:
+        """`docs/x.md` with one `@out img/x.svg` block, plus `docs/img/x.svg`."""
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        import mermaid_svg  # noqa: PLC0415 — the gate's own sibling
+
+        (root / "docs" / "img").mkdir(parents=True)
+        (root / "docs" / "x.md").write_text(f"# x\n\n```mermaid\n{block}```\n", encoding="utf-8")
+        svg = mermaid_svg.render_block(block)[1] if fresh else "<svg>stale</svg>\n"
+        (root / "docs" / "img" / "x.svg").write_text(svg, encoding="utf-8")
+
+    @staticmethod
+    def _lines(err: str) -> list[str]:
+        return [ln for ln in err.splitlines() if ln.startswith("[diagrams]")]
+
+    def _check_impacted(self, tmp_path: Path, paths: list[str] | None, **overrides: Any) -> int:
+        with TestImpactedCheapChecks._seams(
+            _impacted_diagram_check=lambda p: _REAL_IMPACTED_DIAGRAM_CHECK(p, root=tmp_path),
+            _impacted_early_exit_paths=MagicMock(return_value=paths),
+            **overrides,
+        ):
+            return quality_gate.check_impacted()
+
+    # --- AC 15: a stale SVG fails the gate ---
+
+    def test_stale_svg_fails_on_the_warm_non_py_early_exit(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._tree(tmp_path, fresh=False)
+        rc = self._check_impacted(
+            tmp_path,
+            ["docs/x.md"],
+            _testmon_baseline_warm=MagicMock(return_value=True),
+            _resolve_diff_base=MagicMock(side_effect=AssertionError("early exit expected")),
+        )
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert self._lines(err) == [
+            "[diagrams] stale: docs/img/x.svg",
+            "[diagrams] fix: python scripts/qs/mermaid_svg.py render docs/x.md",
+            "[diagrams] FAIL",
+        ]
+        assert "no Python files changed" in err
+        assert err.splitlines()[-1] == "[impacted] FAIL (cheap checks failed: diagrams)"
+
+    def test_stale_svg_fails_on_a_cold_baseline(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        self._tree(tmp_path, fresh=False)
+        run_pass = MagicMock(return_value=(quality_gate._IMPACTED_PASS, False))
+        rc = self._check_impacted(
+            tmp_path,
+            ["docs/x.md"],
+            _testmon_baseline_warm=MagicMock(return_value=False),
+            _resolve_diff_base=MagicMock(return_value="origin/main"),
+            _run_impacted_pass=run_pass,
+        )
+        assert rc == 1
+        run_pass.assert_called_once_with("origin/main")
+        err = capsys.readouterr().err
+        assert "[diagrams] stale: docs/img/x.svg" in err
+        assert err.splitlines()[-1] == "[impacted] FAIL (cheap checks failed: diagrams)"
+
+    def test_diagram_failure_joins_the_cheap_failures(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        self._tree(tmp_path, fresh=False)
+        rc = self._check_impacted(
+            tmp_path,
+            ["docs/x.md"],
+            _impacted_cheap_checks=MagicMock(return_value=["mypy"]),
+            _testmon_baseline_warm=MagicMock(return_value=True),
+        )
+        assert rc == 1
+        assert capsys.readouterr().err.splitlines()[-1] == "[impacted] FAIL (cheap checks failed: mypy, diagrams)"
+
+    def test_step_receives_the_early_exit_paths(self) -> None:
+        check = MagicMock(return_value=[])
+        with TestImpactedCheapChecks._seams(
+            _impacted_diagram_check=check,
+            _impacted_early_exit_paths=MagicMock(return_value=["docs/x.md"]),
+            _check_impacted_tail=MagicMock(return_value=0),
+        ):
+            assert quality_gate.check_impacted() == 0
+        check.assert_called_once_with(["docs/x.md"])
+
+    # --- AC 16: pass and skip ---
+
+    def test_fresh_svg_passes_and_keeps_the_verdict(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        self._tree(tmp_path, fresh=True)
+        rc = self._check_impacted(tmp_path, ["docs/x.md"], _testmon_baseline_warm=MagicMock(return_value=True))
+        assert rc == 0
+        err = capsys.readouterr().err
+        assert self._lines(err) == ["[diagrams] PASS"]
+        assert "cheap checks failed" not in err
+
+    def test_changed_md_without_out_passes(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "plain.md").write_text("# plain\n\n```mermaid\nflowchart TB\n```\n")
+        assert _REAL_IMPACTED_DIAGRAM_CHECK(["docs/plain.md"], root=tmp_path) == []
+        assert self._lines(capsys.readouterr().err) == ["[diagrams] PASS"]
+
+    @pytest.mark.parametrize(
+        "paths",
+        [["README.md"], ["scripts/qs/foo.py", "docs/x.svg"], [], ["docs/x.mdx"]],
+        ids=["md-outside-docs", "no-md", "empty", "not-md"],
+    )
+    def test_no_docs_markdown_skips(
+        self, tmp_path: Path, paths: list[str], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "README.md").write_text("x\n")
+        assert _REAL_IMPACTED_DIAGRAM_CHECK(paths, root=tmp_path) == []
+        assert self._lines(capsys.readouterr().err) == ["[diagrams] SKIP (no docs/ Markdown changed)"]
+
+    def test_defaults_to_the_repo_root(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        self._tree(tmp_path, fresh=False)
+        with patch.object(quality_gate, "REPO_ROOT", tmp_path):
+            assert _REAL_IMPACTED_DIAGRAM_CHECK(["docs/x.md"]) == ["diagrams"]
+        assert "[diagrams] stale: docs/img/x.svg" in capsys.readouterr().err
+
+    # --- AC 17: fail-closed and skipped files ---
+
+    def test_unknown_listing_checks_every_docs_markdown(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._tree(tmp_path, fresh=False)
+        (tmp_path / "docs" / "sub").mkdir()
+        (tmp_path / "docs" / "sub" / "a.md").write_text("# a\n")
+        assert _REAL_IMPACTED_DIAGRAM_CHECK(None, root=tmp_path) == ["diagrams"]
+        lines = self._lines(capsys.readouterr().err)
+        assert "[diagrams] stale: docs/img/x.svg" in lines
+        assert "[diagrams] fix: python scripts/qs/mermaid_svg.py render docs/sub/a.md docs/x.md" in lines
+
+    def test_unknown_listing_without_docs_skips(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        assert _REAL_IMPACTED_DIAGRAM_CHECK(None, root=tmp_path) == []
+        assert self._lines(capsys.readouterr().err) == ["[diagrams] SKIP (no docs/ Markdown changed)"]
+
+    def test_deleted_markdown_is_skipped(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        self._tree(tmp_path, fresh=True)
+        assert _REAL_IMPACTED_DIAGRAM_CHECK(["docs/gone.md", "docs/x.md"], root=tmp_path) == []
+        assert self._lines(capsys.readouterr().err) == ["[diagrams] PASS"]
+
+    # --- AC 18: errors are reported, not raised ---
+
+    def test_malformed_block_is_an_error_line(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        self._tree(tmp_path, fresh=False, block=_DIAGRAM_BLOCK.replace("at=10,10", "at=1"))
+        assert _REAL_IMPACTED_DIAGRAM_CHECK(["docs/x.md"], root=tmp_path) == ["diagrams"]
+        lines = self._lines(capsys.readouterr().err)
+        assert lines[0].startswith("[diagrams] error: bad Mermaid block or hint")
+        assert lines[1:] == ["[diagrams] fix: python scripts/qs/mermaid_svg.py render docs/x.md", "[diagrams] FAIL"]
+
+    def test_renderer_crash_is_an_error_line(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        self._tree(tmp_path, fresh=True)
+        import mermaid_svg  # noqa: PLC0415 — the module the check imports
+
+        with patch.object(mermaid_svg, "run", side_effect=RuntimeError("kaboom")):
+            assert _REAL_IMPACTED_DIAGRAM_CHECK(["docs/x.md"], root=tmp_path) == ["diagrams"]
+        lines = self._lines(capsys.readouterr().err)
+        assert lines[0] == "[diagrams] error: RuntimeError: kaboom"
+        assert lines[-1] == "[diagrams] FAIL"
+
+
 class TestTestmonSchemaVersion:
     """QS-278 #01-1: `_testmon_schema_version` probes VENV_PYTHON for testmon's DATA_VERSION."""
 
@@ -7585,6 +7790,8 @@ class TestProjectRulesDocGuards:
         # section itself, not somewhere else in the file.
         section = flat.split("**Non-Python change sets", 1)[1].split("*Cold baselines do not take the exit.*", 1)[0]
         assert "Exception (QS-371)" in section
+        # QS-404: a changed `docs/**/*.md` still runs the stale-SVG diagram check.
+        assert "Exception (QS-404)" in section
         # nice-to-have 18: the doc's UI hint must agree with `_IMPACTED_NON_PY_LINES`.
         for hint in quality_gate._IMPACTED_NON_PY_LINES:
             for target in re.findall(r"--quick [\w./]+", hint):

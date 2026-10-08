@@ -119,8 +119,10 @@ explicit REVIEW intent**; it is never automatic.
    and a body in the child form of the conventions below.
 3. **Land the document**: `python scripts/qs/epic_doc.py land --issue
    <N> --message "…"` — one direct commit on `main`, landing **only the
-   epic's own `docs/epics/QS-<N>.md`**; any other changed path is refused
-   (`out-of-scope`).
+   epic's own `docs/epics/QS-<N>.md` with the SVGs its `@out` hints
+   declare** (`docs/epics/img/QS-<N>-*.svg`), re-rendered in memory by
+   `land` with `main`'s renderer; any other changed path, an undeclared
+   SVG included, is refused (`out-of-scope`).
 4. **Sync the epic issue**: `python scripts/qs/epic_doc.py sync-issue
    --issue <N>`; its JSON must report `state: OPEN`. When the document
    was redesigned and the body states things that are no longer true,
@@ -144,15 +146,20 @@ carrying `Refs #<N>` — never through `create_pr.py`, whose
 ### The landing rule
 
 An epic document reaches `main` by **direct commit, landing only the
-epic's own `docs/epics/QS-<N>.md`**, through `epic_doc.py land` only —
-never through `create_pr.py`. `land` refuses a non-epic issue, any other
-changed path (`out-of-scope`), a stale `docs/agents/` doc
-(`check_doc_drift.py`), and a
-path that `main` changed since the worktree's base (the `conflict`
-refusal carries the current `origin/main` content; merge it into the
-local file, then re-run with `--merged <path>=<blob>`). The working
-tree is never modified before the push is verified, so a failed run
-never loses the draft. An amendment to an existing epic document
+epic's own `docs/epics/QS-<N>.md` with the SVGs its `@out` hints
+declare** (`docs/epics/img/QS-<N>-*.svg`), through `epic_doc.py land`
+only — never through `create_pr.py`. `land` re-renders those SVGs in
+memory with `main`'s renderer (QS-404), so what lands always matches the
+document, whatever the working-tree SVG holds. `land` refuses a non-epic
+issue, any other changed path — an undeclared SVG included
+(`out-of-scope`) —, a broken diagram (`diagram-error`), a stale
+`docs/agents/` doc (`check_doc_drift.py`), and a doc that `main` changed
+since the worktree's base (the `conflict` refusal carries the current
+`origin/main` content; merge it into the local file, then re-run with
+`--merged <path>=<blob>`). Only the doc can conflict: a declared SVG is
+derived, so a change `main` made to it is simply re-rendered. The
+working tree is never modified before the push is verified, so a failed
+run never loses the draft. An amendment to an existing epic document
 follows the same rule, or rides a child's own PR when that child changes
 the design. See [project-rules.md](../project-rules.md) → "Epic
 documents".
@@ -232,7 +239,9 @@ To file the next wave, or to amend the document: `setup-task --issue
 
 **Hard rules**:
 - Refuse unless the task is `scale:epic` × `target:factory`.
-- The only file written is `docs/epics/QS-<N>.md`.
+- The only files written are `docs/epics/QS-<N>.md` and the SVGs its
+  `@out` hints declare (`docs/epics/img/QS-<N>-*.svg`), written only
+  through `python scripts/qs/mermaid_svg.py render`.
 - Always offer, and recommend, at least one REVIEW round before the first
   land; the FINALIZE gate is advisory (never a hard block).
 - Sub-agents are spawned in parallel (one message).

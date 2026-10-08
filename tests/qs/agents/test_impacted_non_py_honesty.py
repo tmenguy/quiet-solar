@@ -221,3 +221,18 @@ def test_states_cheap_checks_exception(harness_dir: Path) -> None:
         f"{harness_dir / f'{AGENT_NAME}.md'}: expected the QS-371 exception "
         f"sentence at both 'checks nothing' body sites, found {count}."
     )
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
+def test_states_diagram_check_exception(harness_dir: Path) -> None:
+    """QS-404: a changed `docs/**/*.md` still runs the stale-SVG diagram check.
+
+    So, like the QS-371 exception, BOTH body sites that say a non-`.py` run
+    checks nothing must carry the sentence (the unique literal
+    `Exception (QS-404)`).
+    """
+    count = _flat(harness_dir).count("Exception (QS-404)")
+    assert count == 2, (
+        f"{harness_dir / f'{AGENT_NAME}.md'}: expected the QS-404 exception "
+        f"sentence at both 'checks nothing' body sites, found {count}."
+    )

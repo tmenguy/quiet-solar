@@ -70,7 +70,9 @@ the dev loop: `python scripts/qs/quality_gate.py --impacted`. It uses
 `diff-cover --fail-under=100` asserts the **lines you changed** are
 100% covered. It also runs the CI-mirrored cheap checks (ruff lint,
 ruff format, mypy, translations when relevant) — it mirrors CI's lint /
-typecheck / translations steps (QS-371). On a small diff this is seconds
+typecheck / translations steps (QS-371) — and the stale-SVG check on
+changed `docs/` Markdown, which mirrors CI's
+`test_every_svg_in_docs_is_up_to_date` (QS-404). On a small diff this is seconds
 instead of minutes (the first run in a fresh worktree is slower — mypy
 starts with a cold `.mypy_cache`). The
 implement phase ALWAYS runs it before commit/PR and never substitutes
@@ -89,6 +91,8 @@ sets" for the canonical statement and what to run instead.
 Exception (QS-371): a change set touching a lint/type-config or
 translations-source path still runs the CI-mirrored cheap checks — see
 the `check_impacted` docstring.
+Exception (QS-404): a changed `docs/**/*.md` still runs the stale-SVG
+diagram check — see the `check_impacted` docstring.
 
 **Hard limitation — read this.** `--impacted` guarantees the lines you
 *changed* are covered. It does **not** detect coverage lost in

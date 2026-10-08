@@ -33,6 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "qs"))
 
 import epic_doc  # type: ignore[import-not-found]  # noqa: E402
+import mermaid_svg  # type: ignore[import-not-found]  # noqa: E402
 
 import utils  # type: ignore[import-not-found]  # noqa: E402
 
@@ -1067,6 +1068,494 @@ def test_plumbing_failure_is_git_error_and_cleans_the_temp_index(
     monkeypatch.setattr(epic_doc.utils, "run_git", spy)
     _refused(repos, capsys, "git-error")
     assert seen_index and not Path(seen_index[0]).parent.exists()
+
+
+# ---------------------------------------------------------------------------
+# land — the declared SVGs (QS-404)
+# ---------------------------------------------------------------------------
+
+SVG = f"docs/epics/img/QS-{ISSUE}-x.svg"
+RENDERER = "scripts/qs/mermaid_svg.py"
+_RENDERER_SOURCE = (REPO_ROOT / RENDERER).read_text(encoding="utf-8")
+_RENDERER_KEY_PREFIX = "qs_mermaid_svg_main_"
+
+
+def _block(label: str = "A", node: str = "at=10,10 size=100,50", out: str = f"img/QS-{ISSUE}-x.svg") -> str:
+    """The inner text of the fixture Mermaid block (between the fences)."""
+    return (
+        "flowchart TB\n"
+        f'    a["{label}"]\n'
+        f"    %% @out {out}\n"
+        "    %% @canvas 200 100\n"
+        f"    %% @node a {node}\n"
+    )
+
+
+_DIAGRAM = f"```mermaid\n{_block()}```\n"
+
+
+def _diagram_doc(intro: str = "# Epic QS-900\n", *blocks: str) -> str:
+    """An epic doc with a valid Decomposition and the given Mermaid blocks (``_block()`` by default)."""
+    fences = "".join(f"\n```mermaid\n{b}```\n" for b in (blocks or (_block(),)))
+    return _epic(intro + fences)
+
+
+def _svg(block: str | None = None) -> str:
+    return mermaid_svg.render_block(block or _block())[1]
+
+
+def _seed_renderer(repos: Repos) -> str:
+    """Put this worktree's renderer on ``origin/main`` — not a changed path of ``work``."""
+    return repos.push_from_seed(RENDERER, _RENDERER_SOURCE, "seed the renderer")
+
+
+def _pull(repos: Repos) -> None:
+    _git(repos.work, "pull", "-q", "--ff-only", "origin", "main")
+
+
+def _renderer_loaded(runner: Runner) -> bool:
+    return bool(runner.git_calls("show", f"origin/main:{RENDERER}"))
+
+
+def _renderer_keys() -> list[str]:
+    return [k for k in sys.modules if k.startswith(_RENDERER_KEY_PREFIX)]
+
+
+def _main_blob_sha(repos: Repos, path: str) -> str:
+    return _git(repos.origin, "rev-parse", f"main:{path}").strip()
+
+
+def test_land_lands_the_doc_with_its_rendered_svg(repos, runner, clean_drift, capsys, tmp_path) -> None:
+    """AC 1: the doc changed, the SVG is absent locally and on main → both land."""
+    _seed_renderer(repos)
+    repos.write(DOC, _diagram_doc())
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out["status"] == "landed"
+    assert out["paths"] == [DOC, SVG]
+    assert repos.main_file(SVG) == _svg()
+    # The landed blob is byte-for-byte what ``mermaid_svg.py render`` writes.
+    scratch = tmp_path / "scratch"
+    (scratch / "docs" / "epics").mkdir(parents=True)
+    (scratch / DOC).write_text(_diagram_doc(), encoding="utf-8")
+    assert mermaid_svg.run([scratch / DOC], check=False)[0] == 0
+    assert _git(repos.work, "hash-object", str(scratch / SVG)).strip() == _main_blob_sha(repos, SVG)
+    assert _git(repos.work, "rev-parse", "HEAD").strip() == repos.main_sha()
+    assert _git(repos.work, "status", "--porcelain") == ""
+    assert (repos.work / SVG).read_text() == _svg()
+    assert _renderer_loaded(runner)
+    assert clean_drift == [["--repo-root", str(repos.work), "--json", "--paths", DOC, SVG]]
+    assert _renderer_keys() == []
+
+
+def test_land_the_rendered_bytes_win_over_a_garbage_local_svg(repos, runner, clean_drift, capsys) -> None:
+    """AC 2: the landing commit gets the rendered SVG, whatever the working tree holds."""
+    _seed_renderer(repos)
+    repos.write(DOC, _diagram_doc())
+    repos.write(SVG, "<svg>garbage</svg>\n")
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out["paths"] == [DOC, SVG]
+    assert repos.main_file(SVG) == _svg()
+
+
+def test_land_push_rejected_leaves_the_doc_and_a_garbage_svg_untouched(
+    repos, runner, clean_drift, capsys
+) -> None:
+    """AC 2: a failed push never writes the rendered SVG into the working tree."""
+    _seed_renderer(repos)
+    repos.write(DOC, _diagram_doc())
+    repos.write(SVG, "<svg>garbage</svg>\n")
+    runner.on(
+        _is("push", "origin"),
+        lambda cmd: _done(cmd, 1, "", "! [rejected] main -> main (non-fast-forward)"),
+    )
+    out = _refused(repos, capsys, "push-rejected")
+    assert "re-run" in out["hint"]
+    assert (repos.work / SVG).read_text() == "<svg>garbage</svg>\n"
+    assert repos.main_file(SVG) is None
+
+
+def test_land_a_locally_deleted_declared_svg_lands_its_rendered_blob(
+    repos, runner, clean_drift, capsys
+) -> None:
+    """AC 3: deleting a declared SVG is not a deletion — its render lands."""
+    _seed_renderer(repos)
+    repos.push_from_seed(DOC, _diagram_doc())
+    repos.push_from_seed(SVG, _svg())
+    _pull(repos)
+    repos.write(DOC, _diagram_doc("# Epic QS-900\n", _block("B")))
+    (repos.work / SVG).unlink()
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out["paths"] == [DOC, SVG]
+    assert repos.main_file(SVG) == _svg(_block("B"))
+
+
+def test_land_a_locally_deleted_declared_svg_alone_is_already_landed(repos, runner, capsys) -> None:
+    """AC 3: with the doc unchanged, the render equals main — the reset restores the SVG."""
+    _seed_renderer(repos)
+    repos.push_from_seed(DOC, _diagram_doc())
+    repos.push_from_seed(SVG, _svg())
+    _pull(repos)
+    (repos.work / SVG).unlink()
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out == {"status": "already-landed", "paths": [SVG], "reset": True}
+    assert _renderer_loaded(runner)
+    assert (repos.work / SVG).read_text() == _svg()
+    assert repos.main_file(SVG) == _svg()
+
+
+def test_land_refuses_an_undeclared_untracked_svg(repos, runner, capsys) -> None:
+    """AC 4: a pattern SVG no hint declares is a leftover render (step 8)."""
+    _seed_renderer(repos)
+    repos.write(DOC, _diagram_doc())
+    leftover = f"docs/epics/img/QS-{ISSUE}-y.svg"
+    repos.write(leftover, "<svg/>\n")
+    out = _refused(repos, capsys, "out-of-scope")
+    assert out["offenders"] == [leftover]
+    assert "leftover render" in out["hint"]
+    assert "git checkout origin/main --" in out["hint"]
+    assert _renderer_loaded(runner)
+
+
+def test_land_refuses_deleting_an_undeclared_tracked_svg(repos, runner, capsys) -> None:
+    """AC 4: deleting a pattern SVG that no hint declares is refused too."""
+    _seed_renderer(repos)
+    leftover = f"docs/epics/img/QS-{ISSUE}-y.svg"
+    repos.push_from_seed(leftover, "<svg/>\n")
+    _pull(repos)
+    repos.write(DOC, _diagram_doc())
+    (repos.work / leftover).unlink()
+    out = _refused(repos, capsys, "out-of-scope")
+    assert out["offenders"] == [leftover]
+    assert "leftover render" in out["hint"]
+
+
+def test_land_refuses_another_epics_svg_before_rendering(repos, runner, capsys) -> None:
+    """AC 4: another epic's SVG fails the pre-render scope (step 4)."""
+    _seed_renderer(repos)
+    repos.write(DOC, _diagram_doc())
+    repos.write("docs/epics/img/QS-901-x.svg", "<svg/>\n")
+    out = _refused(repos, capsys, "out-of-scope")
+    assert out["offenders"] == ["docs/epics/img/QS-901-x.svg"]
+    assert f"docs/epics/img/QS-{ISSUE}-*.svg" in out["detail"]
+    assert not _renderer_loaded(runner)
+
+
+def test_land_refuses_an_out_hint_outside_the_epic_pattern(repos, runner, capsys) -> None:
+    """AC 5: an ``@out`` must target ``docs/epics/img/QS-<N>-*.svg``."""
+    _seed_renderer(repos)
+    repos.write(DOC, _diagram_doc("# Epic QS-900\n", _block(out="img/other.svg")))
+    out = _refused(repos, capsys, "out-of-scope")
+    assert out["offenders"] == ["docs/epics/img/other.svg"]
+    assert f"docs/epics/img/QS-{ISSUE}-*.svg" in out["detail"]
+    assert not runner.git_calls("push")
+
+
+def test_land_refuses_an_out_hint_escaping_the_repo(repos, runner, capsys) -> None:
+    """AC 5: an escaping ``@out`` is a ``../`` offender, never a traceback."""
+    _seed_renderer(repos)
+    repos.write(DOC, _diagram_doc("# Epic QS-900\n", _block(out="../../../../x.svg")))
+    out = _refused(repos, capsys, "out-of-scope")
+    (offender,) = out["offenders"]
+    assert offender.startswith("../") and offender.endswith("x.svg")
+    assert not runner.git_calls("push")
+
+
+@pytest.mark.parametrize(
+    "blocks",
+    [
+        pytest.param((_block(), _block("B")), id="duplicate-out"),
+        pytest.param((_block(node="at=1 size=100,50"),), id="bad-node-hint"),
+    ],
+)
+def test_land_refuses_a_broken_diagram(repos, runner, capsys, blocks) -> None:
+    """AC 5: a duplicate ``@out`` or a malformed hint is ``diagram-error``."""
+    _seed_renderer(repos)
+    repos.write(DOC, _diagram_doc("# Epic QS-900\n", *blocks))
+    out = _refused(repos, capsys, "diagram-error")
+    assert out["detail"]
+    assert not runner.git_calls("push")
+    assert _renderer_keys() == []
+
+
+def test_land_refuses_a_diagram_when_main_has_no_renderer(repos, runner, capsys) -> None:
+    """AC 5: ``origin/main`` without ``scripts/qs/mermaid_svg.py`` cannot render."""
+    repos.write(DOC, _diagram_doc())
+    out = _refused(repos, capsys, "diagram-error")
+    assert RENDERER in out["detail"]
+    assert _renderer_keys() == []
+
+
+@pytest.mark.parametrize(
+    ("source", "fragment"),
+    [
+        pytest.param('raise RuntimeError("broken renderer")\n', "broken renderer", id="raises-at-import"),
+        pytest.param("def render_block(block):\n    return None, ''\n", "outputs_from_text", id="predates-qs404"),
+        pytest.param("this is not python\n", "", id="syntax-error"),
+    ],
+)
+def test_land_refuses_a_diagram_with_a_broken_main_renderer(repos, runner, capsys, source, fragment) -> None:
+    """AC 5: a renderer that fails to load leaves no ``sys.modules`` entry behind."""
+    repos.push_from_seed(RENDERER, source, "a broken renderer")
+    repos.write(DOC, _diagram_doc())
+    out = _refused(repos, capsys, "diagram-error")
+    assert fragment in out["detail"]
+    assert _renderer_keys() == []
+
+
+def test_land_dry_run_lists_the_svg_and_writes_nothing(repos, runner, clean_drift, capsys) -> None:
+    """AC 6: dry-run reports the SVG and leaves every file's bytes and mtime alone."""
+    _seed_renderer(repos)
+    repos.write(DOC, _diagram_doc())
+    repos.write(SVG, "<svg>garbage</svg>\n")
+    mtimes = {p: (repos.work / p).stat().st_mtime_ns for p in (DOC, SVG)}
+    before = repos.snapshot()
+    main_before = repos.main_sha()
+    rc, out = _land(capsys, "--dry-run")
+    assert rc == 0, out
+    assert out["status"] == "ok-dry-run"
+    assert out["paths"] == [DOC, SVG]
+    assert repos.snapshot() == before
+    assert {p: (repos.work / p).stat().st_mtime_ns for p in (DOC, SVG)} == mtimes
+    assert repos.main_sha() == main_before
+
+
+def test_land_dry_run_never_creates_an_absent_svg(repos, runner, clean_drift, capsys) -> None:
+    _seed_renderer(repos)
+    repos.write(DOC, _diagram_doc())
+    rc, out = _land(capsys, "--dry-run")
+    assert rc == 0, out
+    assert out["paths"] == [DOC, SVG]
+    assert not (repos.work / SVG).exists()
+
+
+def _landed_not_reset(repos: Repos) -> None:
+    """AC 7: main holds the doc and its SVG; the doc is local but never pulled."""
+    _seed_renderer(repos)
+    repos.push_from_seed(DOC, _diagram_doc())
+    repos.push_from_seed(SVG, _svg())
+    repos.write(DOC, _diagram_doc())
+    repos.write(SVG, "<svg>garbage</svg>\n")
+
+
+def test_land_already_landed_with_a_garbage_svg_resets(repos, runner, capsys) -> None:
+    """AC 7: the working-tree shortcut ignores an SVG that main holds."""
+    _landed_not_reset(repos)
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out == {"status": "already-landed", "paths": [DOC, SVG], "reset": True}
+    assert not _renderer_loaded(runner)
+    assert (repos.work / SVG).read_text() == _svg()
+
+
+def test_land_already_landed_dry_run_does_not_reset(repos, runner, capsys) -> None:
+    _landed_not_reset(repos)
+    before = repos.snapshot()
+    rc, out = _land(capsys, "--dry-run")
+    assert rc == 0, out
+    assert out == {"status": "ok-dry-run", "already_landed": True, "paths": [DOC, SVG], "reset": False}
+    assert not runner.git_calls("reset")
+    assert repos.snapshot() == before
+
+
+def test_land_already_landed_never_loads_a_broken_renderer(repos, runner, capsys) -> None:
+    """AC 7: rendering never blocks the cleanup of a landed worktree."""
+    _landed_not_reset(repos)
+    repos.push_from_seed(RENDERER, 'raise RuntimeError("broken renderer")\n', "break the renderer")
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out["status"] == "already-landed" and out["reset"] is True
+    assert not _renderer_loaded(runner)
+
+
+def test_land_already_landed_with_a_leftover_svg_main_lacks_is_refused(repos, runner, capsys) -> None:
+    """AC 7: a reset would never remove an untracked SVG main lacks — refuse it instead."""
+    _landed_not_reset(repos)
+    leftover = f"docs/epics/img/QS-{ISSUE}-y.svg"
+    repos.write(leftover, "<svg/>\n")
+    out = _refused(repos, capsys, "out-of-scope")
+    assert out["offenders"] == [leftover]
+    assert "leftover render" in out["hint"]
+    assert not runner.git_calls("reset")
+
+
+def test_land_nothing_changed_never_loads_the_renderer(repos, runner, capsys) -> None:
+    _seed_renderer(repos)
+    repos.push_from_seed(DOC, _diagram_doc())
+    repos.push_from_seed(SVG, _svg())
+    _pull(repos)
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out == {"status": "already-landed", "paths": [], "reset": False}
+    assert not _renderer_loaded(runner)
+
+
+def test_land_renders_mains_doc_when_the_local_doc_is_unchanged(repos, runner, capsys) -> None:
+    """AC 8: main moved the doc and its SVG; a stale local SVG lands nothing."""
+    _seed_renderer(repos)
+    repos.push_from_seed(DOC, _diagram_doc())
+    repos.push_from_seed(SVG, _svg())
+    _pull(repos)
+    repos.push_from_seed(DOC, _diagram_doc("# Epic QS-900\n", _block("B")), "a child PR amends the doc")
+    repos.push_from_seed(SVG, _svg(_block("B")), "and re-renders")
+    main_svg = _main_blob_sha(repos, SVG)
+    repos.write(SVG, "<svg>garbage</svg>\n")
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out == {"status": "already-landed", "paths": [SVG], "reset": True}
+    assert _renderer_loaded(runner)
+    assert _main_blob_sha(repos, SVG) == main_svg
+    assert (repos.work / SVG).read_text() == _svg(_block("B"))
+
+
+def test_land_a_rerender_alone_lands_mains_doc_svg_without_revalidating(
+    repos, runner, clean_drift, capsys
+) -> None:
+    """D4/D5 step 10: only the SVG changed — main's doc renders, and is not re-validated."""
+    _seed_renderer(repos)
+    legacy = "# Epic QS-900\n\nno Decomposition table yet\n\n" + _DIAGRAM
+    repos.push_from_seed(DOC, legacy)
+    repos.push_from_seed(SVG, "<svg>hand-edited</svg>\n")
+    _pull(repos)
+    repos.write(SVG, _svg())
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out["status"] == "landed"
+    assert out["paths"] == [SVG]
+    assert repos.main_file(SVG) == _svg()
+    assert repos.main_file(DOC) == legacy
+
+
+def test_land_a_svg_main_rerendered_is_never_a_conflict(repos, runner, clean_drift, capsys) -> None:
+    """AC 9 (D13): main changed only the SVG since the base — land re-renders it."""
+    _seed_renderer(repos)
+    repos.push_from_seed(DOC, _diagram_doc())
+    repos.push_from_seed(SVG, _svg())
+    _pull(repos)
+    repos.push_from_seed(SVG, "<svg>a different render</svg>\n", "main re-renders")
+    repos.write(DOC, _diagram_doc("# Epic QS-900\n", _block("B")))
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out["status"] == "landed"
+    assert out["paths"] == [DOC, SVG]
+    assert repos.main_file(SVG) == _svg(_block("B"))
+
+
+def test_land_conflicts_list_only_the_doc_and_merged_lands_the_rerender(
+    repos, runner, clean_drift, capsys
+) -> None:
+    """AC 9 (D13): main changed the doc — only the doc conflicts; ``--merged`` lands both."""
+    _seed_renderer(repos)
+    repos.push_from_seed(DOC, _diagram_doc())
+    repos.push_from_seed(SVG, _svg())
+    _pull(repos)
+    repos.push_from_seed(DOC, _diagram_doc("# Epic QS-900\nmain edit\n"), "a child PR amends the doc")
+    repos.push_from_seed(SVG, "<svg>main's render</svg>\n", "and its SVG")
+    repos.write(DOC, _diagram_doc("# Epic QS-900\n", _block("B")))
+    out = _refused(repos, capsys, "conflict")
+    assert [c["path"] for c in out["conflicts"]] == [DOC]
+    blob = out["conflicts"][0]["main_blob"]
+    repos.write(DOC, _diagram_doc("# Epic QS-900\nmain edit\n", _block("B")))
+    rc, out = _land(capsys, "--merged", f"{DOC}={blob}")
+    assert rc == 0, out
+    assert out["status"] == "landed"
+    assert out["paths"] == [DOC, SVG]
+    assert repos.main_file(DOC) == _diagram_doc("# Epic QS-900\nmain edit\n", _block("B"))
+    assert repos.main_file(SVG) == _svg(_block("B"))
+
+
+def test_land_a_doc_without_out_never_loads_the_renderer(repos, runner, clean_drift, capsys) -> None:
+    """AC 10: a doc without the substring ``@out`` lands exactly as before."""
+    repos.write(DOC, _epic("# Epic QS-900\n\n```mermaid\nflowchart TB\n    a[\"A\"]\n```\n"))
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out["paths"] == [DOC]
+    assert not _renderer_loaded(runner)
+
+
+def test_land_a_doc_mentioning_out_in_prose_lands_alone(repos, runner, clean_drift, capsys) -> None:
+    """AC 10 / D4: ``@out`` in prose loads the renderer, which declares nothing."""
+    _seed_renderer(repos)
+    repos.write(DOC, _epic("# Epic QS-900\n\nan `@out` hint names the SVG.\n"))
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out["paths"] == [DOC]
+    assert _renderer_loaded(runner)
+    assert _renderer_keys() == []
+
+
+def test_status_counts_a_changed_svg(repos, runner, capsys) -> None:
+    """AC 11: an SVG path is a changed path like any other."""
+    repos.write(SVG, "<svg/>\n")
+    rc, out = _status(capsys)
+    assert rc == 0
+    assert SVG in out["changed"]
+    assert out["safe_to_discard"] is False
+
+
+def test_status_landed_but_unreset_with_its_svg_is_safe_to_discard(repos, runner, capsys) -> None:
+    """AC 11: the doc and its SVG both equal main → landed, not reset, safe to discard."""
+    repos.push_from_seed(DOC, _diagram_doc())
+    repos.push_from_seed(SVG, _svg())
+    repos.write(DOC, _diagram_doc())
+    repos.write(SVG, _svg())
+    rc, out = _status(capsys)
+    assert rc == 0
+    assert sorted(out["changed"]) == [DOC, SVG]
+    assert out["landed_not_reset"] is True
+    assert out["safe_to_discard"] is True
+
+
+def test_land_refuses_an_undecodable_doc_that_declares_an_svg(repos, runner, capsys) -> None:
+    """AC 11: a non-UTF-8 doc is ``undecodable`` before any render."""
+    _seed_renderer(repos)
+    (repos.work / DOC).parent.mkdir(parents=True, exist_ok=True)
+    (repos.work / DOC).write_bytes(_diagram_doc().encode() + b"\xff\xfe\n")
+    out = _refused(repos, capsys, "undecodable")
+    assert out["detail"] == DOC
+    assert not _renderer_loaded(runner)
+
+
+def test_load_renderer_runs_the_real_source() -> None:
+    """AC 11b: the loader execs the real renderer into a fresh, removable module."""
+    for _ in range(2):
+        module, key = epic_doc._load_renderer(_RENDERER_SOURCE)
+        try:
+            assert key.startswith(_RENDERER_KEY_PREFIX)
+            assert sys.modules[key] is module
+            ((path, svg),) = module.outputs_from_text(_DIAGRAM, Path("/x/docs/epics"))
+            assert path == Path(f"/x/docs/epics/img/QS-{ISSUE}-x.svg").resolve()
+            assert svg == _svg()
+        finally:
+            sys.modules.pop(key)
+        assert key not in sys.modules
+
+
+def test_load_renderer_removes_its_module_on_failure() -> None:
+    with pytest.raises(RuntimeError, match="boom"):
+        epic_doc._load_renderer('raise RuntimeError("boom")\n')
+    with pytest.raises(epic_doc.Refusal) as info:
+        epic_doc._load_renderer("X = 1\n")
+    assert info.value.status == "diagram-error"
+    assert _renderer_keys() == []
+
+
+def test_svg_pattern_matches_only_the_epics_own_flat_svgs() -> None:
+    pattern = epic_doc._svg_pattern(ISSUE)
+    assert pattern.fullmatch(f"docs/epics/img/QS-{ISSUE}-big-picture.svg")
+    assert pattern.fullmatch(f"docs/epics/img/QS-{ISSUE}-v1.2_x.svg")
+    for path in (
+        f"docs/epics/img/QS-{ISSUE}0-x.svg",
+        f"docs/epics/img/QS-{ISSUE}-.svg",
+        f"docs/epics/img/QS-{ISSUE}-a/b.svg",
+        f"docs/epics/QS-{ISSUE}-x.svg",
+        f"docs/epics/img/QS-{ISSUE}-x.svg.bak",
+        "docs/epics/img/QS-1-x.svg",
+    ):
+        assert not pattern.fullmatch(path), path
 
 
 # ---------------------------------------------------------------------------

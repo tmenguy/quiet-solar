@@ -10,7 +10,8 @@ description: >-
   trees except the Control Plane, scripts/qs/control_plane/, whose changed
   lines must be 100% covered; a no-op when the change set contains no .py
   file, except the CI-mirrored cheap checks on a lint-config /
-  translations-source change). Use when /create-plan selected
+  translations-source change, or the stale-SVG check on a changed docs/
+  Markdown file). Use when /create-plan selected
   implement-setup-task as the next phase.
 tools: Bash, Read, Edit, Write, Grep, Glob, Agent, TodoWrite, WebFetch, LSP
 model: [[ model ]]
@@ -24,7 +25,8 @@ description: >-
   except the Control Plane, scripts/qs/control_plane/, whose changed lines
   must be 100% covered; a no-op when the change set contains no .py file,
   except the CI-mirrored cheap checks on a lint-config /
-  translations-source change).
+  translations-source change, or the stale-SVG check on a changed docs/
+  Markdown file).
   Use when create-plan selected implement-setup-task as the next
   phase.
 mode: primary
@@ -95,7 +97,9 @@ set contains a `.py` file the tooling's own testmon-selected tests run,
 but a change set with no `.py` file at all is checked by nothing.
 Exception (QS-371): a change set touching a lint/type-config or
 translations-source path still runs the CI-mirrored cheap checks — see
-the `check_impacted` docstring.
+the `check_impacted` docstring. Exception (QS-404): a changed
+`docs/**/*.md` still runs the stale-SVG diagram check — see the
+`check_impacted` docstring.
 
 ## Discover the task context first
 
@@ -204,7 +208,9 @@ itself tell you the run verified anything:
   `--quick tests/qs` run below is your ONLY real verification, not a
   supplement. Exception (QS-371): a change set touching a lint/type-config or
   translations-source path still runs the CI-mirrored cheap checks — see
-  the `check_impacted` docstring.
+  the `check_impacted` docstring. Exception (QS-404): a changed
+  `docs/**/*.md` still runs the stale-SVG diagram check — see the
+  `check_impacted` docstring.
 - **A git probe failed.** The early exit **fails closed** — no exit, the
   full pipeline runs. So "no output about the exit" never means "the
   exit silently fired".
