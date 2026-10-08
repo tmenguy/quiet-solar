@@ -3073,8 +3073,9 @@ async def test_charger_device_charge_checks(
     is_charged, result = charger_device.is_car_charged(
         now, current_charge=20.0, target_charge=50.0, is_target_percent=True
     )
-    assert is_charged is True
-    assert result == 50.0
+    # QS-403: a trusted SOC far below target is not "charged" just because the car stopped asking
+    assert is_charged is False
+    assert result == 20.0
 
     charger_device.is_car_stopped_asking_current = MagicMock(return_value=False)
     is_charged, result = charger_device.is_car_charged(

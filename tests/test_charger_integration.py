@@ -371,8 +371,10 @@ class TestIsCarCharged(unittest.TestCase):
         self.time = datetime.now(pytz.UTC)
 
     def test_is_car_charged_when_car_stopped_asking_current(self):
-        """Test is_car_charged returns True when car stopped asking for current."""
-        # When car stops asking for current, it's considered charged regardless of SOC
+        """No car attached -> legacy force path: stopped asking current means charged.
+
+        With a car whose SOC sensor is trusted and far below target this no longer holds (QS-403).
+        """
         self.charger.is_car_stopped_asking_current = MagicMock(return_value=True)
 
         current_charge = 50.0  # Only at 50%
@@ -382,7 +384,7 @@ class TestIsCarCharged(unittest.TestCase):
             self.time, current_charge=current_charge, target_charge=target_charge, is_target_percent=True
         )
 
-        # Car stopped asking = charged, result should be target value
+        # No car: legacy force, result is the target value
         self.assertTrue(result)
         self.assertEqual(final_value, target_charge)
 
