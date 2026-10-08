@@ -569,18 +569,20 @@ def outputs_from_text(markdown: str, base_dir: Path) -> list[tuple[Path, str]]:
     """The ``(svg path, svg text)`` of every block of ``markdown`` with an ``@out`` hint.
 
     ``@out`` paths resolve against ``base_dir`` (the Markdown file's
-    directory). Two blocks declaring the same output are refused.
+    directory). Two blocks declaring the same output are refused —
+    compared case-insensitively, as a case-insensitive file system (APFS)
+    would write both to one file.
     """
     found: list[tuple[Path, str]] = []
-    seen: set[Path] = set()
+    seen: set[str] = set()
     for block in mermaid_blocks(markdown):
         if not re.search(r"^\s*%%\s*@out\s", block, re.M):
             continue
         out, svg = render_block(block)
         svg_path = (base_dir / str(out)).resolve()
-        if svg_path in seen:
+        if str(svg_path).casefold() in seen:
             raise MermaidSvgError(f"duplicate @out: {out}")
-        seen.add(svg_path)
+        seen.add(str(svg_path).casefold())
         found.append((svg_path, svg))
     return found
 

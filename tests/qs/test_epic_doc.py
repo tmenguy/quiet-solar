@@ -507,8 +507,9 @@ def test_first_landing_builds_on_main_pushes_verifies_then_resets(
     assert _git(repos.work, "status", "--porcelain") == ""
     # The drift checker ran in-process on exactly the changed paths.
     assert clean_drift == [["--repo-root", str(repos.work), "--json", "--paths", DOC]]
-    # The real index was never used for the landing commit.
-    assert runner.git_calls("read-tree", "origin/main")
+    # The real index was never used for the landing commit — built on the
+    # origin/main pinned right after the fetch (review fix #01 F4).
+    assert runner.git_calls("read-tree", base)
 
 
 def test_landing_a_committed_doc(repos, runner, clean_drift, capsys) -> None:
@@ -1114,7 +1115,10 @@ def _pull(repos: Repos) -> None:
 
 
 def _renderer_loaded(runner: Runner) -> bool:
-    return bool(runner.git_calls("show", f"origin/main:{RENDERER}"))
+    """Whether ``land`` read main's renderer (``git show <pinned main>:scripts/qs/mermaid_svg.py``)."""
+    return any(
+        c[0] == "git" and "show" in c and any(arg.endswith(f":{RENDERER}") for arg in c) for c in runner.calls
+    )
 
 
 def _renderer_keys() -> list[str]:
@@ -1230,7 +1234,9 @@ def test_land_refuses_deleting_an_undeclared_tracked_svg(repos, runner, capsys) 
     (repos.work / leftover).unlink()
     out = _refused(repos, capsys, "out-of-scope")
     assert out["offenders"] == [leftover]
-    assert "leftover render" in out["hint"]
+    assert "deleting an epic's SVG is not supported" in out["hint"]
+    assert f"git checkout origin/main -- {leftover}" in out["hint"]
+    assert "delete it" not in out["hint"]
 
 
 def test_land_refuses_another_epics_svg_before_rendering(repos, runner, capsys) -> None:
@@ -1252,6 +1258,7 @@ def test_land_refuses_an_out_hint_outside_the_epic_pattern(repos, runner, capsys
     assert out["offenders"] == ["docs/epics/img/other.svg"]
     assert f"docs/epics/img/QS-{ISSUE}-*.svg" in out["detail"]
     assert not runner.git_calls("push")
+    assert _renderer_keys() == []
 
 
 def test_land_refuses_an_out_hint_escaping_the_repo(repos, runner, capsys) -> None:
@@ -1262,6 +1269,7 @@ def test_land_refuses_an_out_hint_escaping_the_repo(repos, runner, capsys) -> No
     (offender,) = out["offenders"]
     assert offender.startswith("../") and offender.endswith("x.svg")
     assert not runner.git_calls("push")
+    assert _renderer_keys() == []
 
 
 @pytest.mark.parametrize(
@@ -1295,6 +1303,7 @@ def test_land_refuses_a_diagram_when_main_has_no_renderer(repos, runner, capsys)
         pytest.param('raise RuntimeError("broken renderer")\n', "broken renderer", id="raises-at-import"),
         pytest.param("def render_block(block):\n    return None, ''\n", "outputs_from_text", id="predates-qs404"),
         pytest.param("this is not python\n", "", id="syntax-error"),
+        pytest.param("import sys\nsys.exit(3)\n", "exited", id="exits-at-import"),
     ],
 )
 def test_land_refuses_a_diagram_with_a_broken_main_renderer(repos, runner, capsys, source, fragment) -> None:
@@ -1427,6 +1436,75 @@ def test_land_a_rerender_alone_lands_mains_doc_svg_without_revalidating(
     assert out["paths"] == [SVG]
     assert repos.main_file(SVG) == _svg()
     assert repos.main_file(DOC) == legacy
+
+
+def test_land_svg_only_change_equal_to_main_never_renders(repos, runner, capsys) -> None:
+    """Review fix #01 F2: every changed path (an SVG) already equals main — reset, no render."""
+    _seed_renderer(repos)
+    repos.push_from_seed(DOC, _diagram_doc())
+    repos.push_from_seed(SVG, _svg())
+    _pull(repos)
+    repos.push_from_seed(SVG, "<svg>main's re-render</svg>\n", "main re-renders")
+    repos.push_from_seed(RENDERER, 'raise RuntimeError("broken renderer")\n', "break the renderer")
+    repos.write(SVG, "<svg>main's re-render</svg>\n")
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out == {"status": "already-landed", "paths": [SVG], "reset": True}
+    assert not _renderer_loaded(runner)
+
+
+def test_land_pins_main_so_a_concurrent_fetch_is_a_rejected_push(repos, runner, clean_drift, capsys) -> None:
+    """Review fix #01 F4: origin/main moving mid-land never overwrites main's newer doc."""
+    _seed_renderer(repos)
+    repos.write(DOC, _diagram_doc())
+    moved: list[bool] = []
+
+    def move_main(cmd: list[str]):
+        if not moved and any(arg.endswith(f":{RENDERER}") for arg in cmd):
+            moved.append(True)
+            repos.push_from_seed(DOC, _diagram_doc("# Epic QS-900\nmain edit\n"), "a child PR amends the doc")
+            _git(repos.work, "fetch", "-q", "origin", "main")  # another session's fetch
+        return None
+
+    runner.on(lambda cmd: cmd[0] == "git" and "show" in cmd, move_main)
+    rc, out = _land(capsys)
+    assert moved
+    assert rc == 1, out
+    assert out["status"] == "push-rejected"
+    assert "main moved" in out["hint"]
+    assert repos.main_file(DOC) == _diagram_doc("# Epic QS-900\nmain edit\n")
+    rc, out = _land(capsys)
+    assert rc == 1 and out["status"] == "conflict"
+    assert [c["path"] for c in out["conflicts"]] == [DOC]
+
+
+def test_land_a_doc_equal_to_main_is_never_a_conflict(repos, runner, clean_drift, capsys) -> None:
+    """Review fix #01 F8: main added the doc but not its SVG; the local doc is main's, byte for byte."""
+    _seed_renderer(repos)
+    repos.push_from_seed(DOC, _diagram_doc())
+    repos.write(DOC, _diagram_doc())
+    repos.write(SVG, _svg())
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out["status"] == "landed"
+    assert out["paths"] == [DOC, SVG]
+    assert repos.main_file(SVG) == _svg()
+
+
+def test_land_refuses_an_undeclared_svg_with_both_hints(repos, runner, capsys) -> None:
+    """Review fix #01 F7: a leftover and a deletion in one refusal get both hints."""
+    _seed_renderer(repos)
+    deleted = f"docs/epics/img/QS-{ISSUE}-old.svg"
+    repos.push_from_seed(deleted, "<svg/>\n")
+    _pull(repos)
+    (repos.work / deleted).unlink()
+    leftover = f"docs/epics/img/QS-{ISSUE}-y.svg"
+    repos.write(leftover, "<svg/>\n")
+    repos.write(DOC, _diagram_doc())
+    out = _refused(repos, capsys, "out-of-scope")
+    assert out["offenders"] == [deleted, leftover]
+    assert "leftover render" in out["hint"]
+    assert "deleting an epic's SVG is not supported" in out["hint"]
 
 
 def test_land_a_svg_main_rerendered_is_never_a_conflict(repos, runner, clean_drift, capsys) -> None:

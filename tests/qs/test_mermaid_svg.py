@@ -260,6 +260,30 @@ def test_import_contract_lets_epic_doc_load_mains_renderer() -> None:
         if index == 0 and isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
             continue  # the module docstring
         assert isinstance(stmt, allowed) or _is_main_guard(stmt), ast.dump(stmt)[:120]
+        if isinstance(stmt, (ast.Assign, ast.AnnAssign)) and stmt.value is not None:
+            # An assignment runs at import: it may only compile a regex.
+            for call in (n for n in ast.walk(stmt.value) if isinstance(n, ast.Call)):
+                assert _is_re_compile(call), ast.dump(call)[:120]
+
+
+def _is_re_compile(call: ast.Call) -> bool:
+    func = call.func
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == "compile"
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "re"
+    )
+
+
+def test_import_contract_pin_flags_a_call_at_import() -> None:
+    """The pin's own guard: a module-level assignment calling anything but ``re.compile``."""
+    (stmt,) = ast.parse("X = open('f')\n").body
+    assert isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Call)
+    assert not _is_re_compile(stmt.value)
+    (stmt,) = ast.parse("X = re.compile('x')\n").body
+    assert isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Call)
+    assert _is_re_compile(stmt.value)
 
 
 def test_outputs_from_text_matches_outputs(tmp_path: Path) -> None:
@@ -275,6 +299,15 @@ def test_outputs_from_text_matches_outputs(tmp_path: Path) -> None:
 def test_outputs_from_text_refuses_a_duplicate_out(tmp_path: Path) -> None:
     """QS-404 AC 13: two blocks writing one SVG would silently overwrite each other."""
     text = f"```mermaid\n{BLOCK}```\n\n```mermaid\n{BLOCK}```\n"
+    with pytest.raises(mermaid_svg.MermaidSvgError, match="duplicate @out"):
+        mermaid_svg.outputs_from_text(text, tmp_path)
+
+
+def test_outputs_from_text_refuses_a_case_only_duplicate(tmp_path: Path) -> None:
+    """Review fix #01 F6: on a case-insensitive file system both blocks would write one file."""
+    lower = BLOCK.replace("img/run.svg", "img/view.svg")
+    upper = BLOCK.replace("img/run.svg", "img/View.svg")
+    text = f"```mermaid\n{lower}```\n\n```mermaid\n{upper}```\n"
     with pytest.raises(mermaid_svg.MermaidSvgError, match="duplicate @out"):
         mermaid_svg.outputs_from_text(text, tmp_path)
 

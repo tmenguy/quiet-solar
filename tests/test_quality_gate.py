@@ -5694,7 +5694,8 @@ class TestImpactedDiagramCheck:
     @staticmethod
     def _tree(root: Path, *, fresh: bool, block: str = _DIAGRAM_BLOCK) -> None:
         """`docs/x.md` with one `@out img/x.svg` block, plus `docs/img/x.svg`."""
-        sys.path.insert(0, str(SCRIPTS_DIR))
+        if str(SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS_DIR))
         import mermaid_svg  # noqa: PLC0415 — the gate's own sibling
 
         (root / "docs" / "img").mkdir(parents=True)
@@ -5837,6 +5838,32 @@ class TestImpactedDiagramCheck:
         lines = self._lines(capsys.readouterr().err)
         assert lines[0].startswith("[diagrams] error: bad Mermaid block or hint")
         assert lines[1:] == ["[diagrams] fix: python scripts/qs/mermaid_svg.py render docs/x.md", "[diagrams] FAIL"]
+
+    def test_unimportable_renderer_is_an_error_line(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Review fix #01 F1: a broken worktree renderer never tracebacks the gate."""
+        self._tree(tmp_path, fresh=True)
+        with patch.dict(sys.modules, {"mermaid_svg": None}):
+            assert _REAL_IMPACTED_DIAGRAM_CHECK(["docs/x.md"], root=tmp_path) == ["diagrams"]
+        lines = self._lines(capsys.readouterr().err)
+        assert lines[0].startswith("[diagrams] error: ModuleNotFoundError: import of mermaid_svg halted")
+        assert lines[-1] == "[diagrams] FAIL"
+
+    def test_no_docs_markdown_never_imports_the_renderer(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with patch.dict(sys.modules, {"mermaid_svg": None}):
+            assert _REAL_IMPACTED_DIAGRAM_CHECK(["scripts/qs/foo.py"], root=tmp_path) == []
+        assert self._lines(capsys.readouterr().err) == ["[diagrams] SKIP (no docs/ Markdown changed)"]
+
+    def test_fix_line_is_shell_quoted(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """Review fix #01 F9: a path with a space stays one argument."""
+        self._tree(tmp_path, fresh=False)
+        (tmp_path / "docs" / "x.md").rename(tmp_path / "docs" / "my doc.md")
+        assert _REAL_IMPACTED_DIAGRAM_CHECK(["docs/my doc.md"], root=tmp_path) == ["diagrams"]
+        lines = self._lines(capsys.readouterr().err)
+        assert "[diagrams] fix: python scripts/qs/mermaid_svg.py render 'docs/my doc.md'" in lines
 
     def test_renderer_crash_is_an_error_line(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         self._tree(tmp_path, fresh=True)

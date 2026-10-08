@@ -71,6 +71,7 @@ import json
 import math
 import os
 import re
+import shlex
 import signal
 import sqlite3
 import subprocess
@@ -1916,11 +1917,10 @@ def _impacted_diagram_check(paths: list[str] | None, root: Path | None = None) -
     changed `.md` (left to CI), and `scripts/qs/mermaid_svg.py` itself
     (testmon selects `tests/qs/test_mermaid_svg.py` for it). Not a fifth
     cheap gate: the full gate already runs the every-SVG test in its pytest
-    pass. Any exception is an `error:` line, never a traceback.
+    pass. Any exception — an unimportable renderer included — is an `error:`
+    line, never a traceback; a run without `docs/` Markdown never imports it.
     """
     root = root or REPO_ROOT
-    import mermaid_svg  # noqa: PLC0415 — sibling import, loaded only by `--impacted`
-
     if paths is None:
         sources = sorted((root / "docs").rglob("*.md"))
     else:
@@ -1931,6 +1931,8 @@ def _impacted_diagram_check(paths: list[str] | None, root: Path | None = None) -
         _emit("diagrams", "SKIP (no docs/ Markdown changed)")
         return []
     try:
+        import mermaid_svg  # noqa: PLC0415 — sibling import, loaded only when a doc changed
+
         code, report = mermaid_svg.run(sources, check=True)
     except Exception as exc:  # noqa: BLE001 — a renderer crash is a FAIL line, not a traceback
         code, report = 1, {"status": "error", "message": f"{type(exc).__name__}: {exc}"}
@@ -1944,7 +1946,7 @@ def _impacted_diagram_check(paths: list[str] | None, root: Path | None = None) -
             _emit("diagrams", f"stale: {os.path.relpath(svg, top)}")
     else:
         _emit("diagrams", f"error: {report.get('message', report)}")
-    rel = " ".join(os.path.relpath(src, root) for src in sources)
+    rel = " ".join(shlex.quote(os.path.relpath(src.resolve(), top)) for src in sources)
     _emit("diagrams", f"fix: python scripts/qs/mermaid_svg.py render {rel}")
     _emit("diagrams", "FAIL")
     return ["diagrams"]
