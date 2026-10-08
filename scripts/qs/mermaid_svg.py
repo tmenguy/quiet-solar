@@ -11,7 +11,9 @@ Mermaid renderer ignores, so the Markdown stays the single source.
 A block is rendered only when it carries an ``@out`` hint. Hints, one per
 comment line (``%% @...``); coordinates are SVG pixels:
 
-- ``@out PATH`` — the SVG to write, relative to the Markdown file.
+- ``@out PATH`` — the SVG to write, relative to the Markdown file; it must
+  be an ``.svg`` file under the Markdown file's directory (symlinks
+  resolved), so ``render`` never writes anywhere else.
 - ``@canvas W H [origin=X,Y]`` — the drawing size and its top-left corner.
 - ``@group ID at=X,Y size=W,H [title=top|bottom] [badge=TEXT]``
 - ``@node ID at=X,Y size=W,H [fs=N] [tfs=N]`` — every node needs one.
@@ -597,7 +599,12 @@ def run(paths: list[Path], check: bool) -> tuple[int, dict[str, object]]:
     written, stale, fresh = [], [], []
     try:
         for md_path in paths:
+            home = md_path.parent.resolve()
             for svg_path, svg in outputs(md_path):
+                if svg_path.suffix != ".svg" or not svg_path.is_relative_to(home):
+                    # A document-controlled path is never followed outside its
+                    # directory: ``render`` is an allow-listed agent command.
+                    raise MermaidSvgError(f"@out must be an .svg under {home}: {svg_path}")
                 current = svg_path.read_text(encoding="utf-8") if svg_path.exists() else None
                 if current == svg:
                     fresh.append(str(svg_path))

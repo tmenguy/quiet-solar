@@ -358,6 +358,39 @@ def test_run_reports_a_non_utf8_svg_as_an_error(tmp_path: Path) -> None:
     assert report["status"] == "error"
 
 
+@pytest.mark.parametrize("check", [False, True], ids=["render", "check"])
+@pytest.mark.parametrize(
+    "out",
+    ["../escape.svg", "{tmp}/abs.svg", "img/notes.txt", "img/run.SVG.bak"],
+    ids=["parent", "absolute", "not-svg", "svg-suffix-inside"],
+)
+def test_run_refuses_an_out_outside_the_markdown_directory(tmp_path: Path, out: str, check: bool) -> None:
+    """Review fix #02 G2: ``render`` writes only ``.svg`` files under the Markdown file's directory."""
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    md = docs / "doc.md"
+    out = out.format(tmp=tmp_path)  # an absolute path, still inside the sandbox
+    md.write_text(f"```mermaid\n{BLOCK.replace('img/run.svg', out)}```\n", encoding="utf-8")
+    code, report = mermaid_svg.run([md], check=check)
+    assert code == 1
+    assert report["status"] == "error"
+    assert "@out must be an .svg under" in str(report["message"])
+    assert sorted(p.name for p in tmp_path.rglob("*") if p.is_file()) == ["doc.md"]
+
+
+def test_run_refuses_an_out_through_a_symlink_leaving_the_directory(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "img").symlink_to(outside, target_is_directory=True)
+    md = docs / "doc.md"
+    md.write_text(f"```mermaid\n{BLOCK}```\n", encoding="utf-8")
+    code, report = mermaid_svg.run([md], check=False)
+    assert code == 1 and report["status"] == "error"
+    assert list(outside.iterdir()) == []
+
+
 def test_every_svg_in_docs_is_up_to_date() -> None:
     """A Mermaid block with an ``@out`` hint must have its SVG regenerated after an edit."""
     docs = sorted((REPO_ROOT / "docs").rglob("*.md"))

@@ -1177,6 +1177,7 @@ def test_land_push_rejected_leaves_the_doc_and_a_garbage_svg_untouched(
     out = _refused(repos, capsys, "push-rejected")
     assert "re-run" in out["hint"]
     assert (repos.work / SVG).read_text() == "<svg>garbage</svg>\n"
+    assert (repos.work / DOC).read_text() == _diagram_doc()
     assert repos.main_file(SVG) is None
 
 
@@ -1219,9 +1220,24 @@ def test_land_refuses_an_undeclared_untracked_svg(repos, runner, capsys) -> None
     repos.write(leftover, "<svg/>\n")
     out = _refused(repos, capsys, "out-of-scope")
     assert out["offenders"] == [leftover]
-    assert "leftover render" in out["hint"]
-    assert "git checkout origin/main --" in out["hint"]
+    assert "leftover render" in out["hint"] and "delete it" in out["hint"]
+    # Review fix #02 G1: main lacks it, so there is no copy to restore.
+    assert "git checkout" not in out["hint"]
     assert _renderer_loaded(runner)
+
+
+def test_land_refuses_an_undeclared_svg_main_holds_with_a_restore_hint(repos, runner, capsys) -> None:
+    """Review fix #02 G1: an edited undeclared SVG main holds is restored, never deleted."""
+    _seed_renderer(repos)
+    orphan = f"docs/epics/img/QS-{ISSUE}-orphan.svg"
+    repos.push_from_seed(orphan, "<svg/>\n")
+    _pull(repos)
+    repos.write(orphan, "<svg>edited</svg>\n")
+    repos.write(DOC, _diagram_doc())
+    out = _refused(repos, capsys, "out-of-scope")
+    assert out["offenders"] == [orphan]
+    assert f"`git checkout origin/main -- {orphan}`" in out["hint"]
+    assert "delete it" not in out["hint"]
 
 
 def test_land_refuses_deleting_an_undeclared_tracked_svg(repos, runner, capsys) -> None:

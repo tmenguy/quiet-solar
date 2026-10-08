@@ -507,7 +507,7 @@ def _load_renderer(source: str) -> tuple[types.ModuleType, str]:
     module = types.ModuleType(key)
     sys.modules[key] = module
     try:
-        exec(compile(source, f"origin/main:{RENDERER}", "exec"), module.__dict__)  # noqa: S102 — main's own renderer
+        exec(compile(source, f"origin/main:{RENDERER}", "exec", dont_inherit=True), module.__dict__)  # noqa: S102 — main's own renderer
         if not callable(getattr(module, "outputs_from_text", None)):
             raise Refusal(
                 "diagram-error",
@@ -642,18 +642,20 @@ def cmd_land(  # noqa: C901 — the eleven steps read best as one sequence
     rendered = _declared_svgs(root, issue, _landed_doc_text(root, doc, changed, main), main)
     undeclared = [p for p in changed if svg_re.fullmatch(p) and p not in rendered]
     if undeclared:
+        # Review fix #02 G1: the hint depends on the file's state — a leftover
+        # main lacks can only be deleted; a path main holds can only be restored
+        # (D3: orphan cleanup is out of scope, land never deletes an epic SVG).
+        leftovers = [p for p in undeclared if main_blobs[p] is None]
         deleted = [p for p in undeclared if local_blobs[p] is None]
+        restore = [p for p in undeclared if main_blobs[p] is not None]
         hints = []
-        if len(deleted) < len(undeclared):
-            hints.append(
-                "a leftover render — delete it, or restore main's copy with "
-                "`git checkout origin/main -- <path>`"
-            )
+        if leftovers:
+            hints.append("a leftover render main lacks — delete it: " + " ".join(leftovers))
         if deleted:
-            # D3: orphan cleanup is out of scope — land never deletes an epic SVG.
+            hints.append("deleting an epic's SVG is not supported")
+        if restore:
             hints.append(
-                "deleting an epic's SVG is not supported — restore main's copy with "
-                + " ; ".join(f"`git checkout origin/main -- {p}`" for p in deleted)
+                "restore main's copy with " + " ; ".join(f"`git checkout origin/main -- {p}`" for p in restore)
             )
         raise Refusal(
             "out-of-scope",
