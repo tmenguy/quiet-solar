@@ -20,8 +20,14 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytz
 
-from custom_components.quiet_solar.const import DEVICE_STATUS_CHANGE_ERROR, USER_ORIGINATED_CHARGE_TIME
-from custom_components.quiet_solar.home_model.commands import CMD_AUTO_GREEN_ONLY, copy_command
+from custom_components.quiet_solar.const import (
+    CHARGE_TIME_CONSTRAINTS_CLEARED,
+    CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    DEVICE_STATUS_CHANGE_ERROR,
+    USER_ORIGINATED_CHARGE_TIME,
+)
+from custom_components.quiet_solar.home_model.commands import CMD_AUTO_GREEN_ONLY, CMD_IDLE, copy_command
+from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraintChargePercent
 from tests.factories import create_charger, make_charger_group, make_hass, make_home, make_real_car
 from tests.test_bug_376_stuck_charger_group import build_stuck_charger
 from tests.test_bug_379_zero_power_alert_arming import (
@@ -112,7 +118,7 @@ async def test_soc_callback_keeps_manual_100_constraint_when_car_stops_at_51():
 def test_person_constraint_not_removed_when_car_stops_at_51():
     """3: the 04:56 / 05:17 person path must not see the person as covered at 51 %."""
     charger, car = _charger_with_car()
-    assert car.get_user_originated(USER_ORIGINATED_CHARGE_TIME) != "constraints_cleared"
+    assert car.get_user_originated(USER_ORIGINATED_CHARGE_TIME) != CHARGE_TIME_CONSTRAINTS_CLEARED
     person = MagicMock()
     person.name = "Arthur Menguy"
 
@@ -141,9 +147,76 @@ def test_stopped_asking_gap_just_above_threshold_is_not_charged():
     assert is_charged is False
 
 
+@pytest.mark.asyncio
+async def test_soc_callback_idle_command_does_not_complete_when_car_stops_at_51():
+    """Review fix #01 EC-1: an idle/off command feeds `None` to `is_car_charged`. The raw
+    trusted SOC (51 %) must still block the force, or the callback completes the constraint."""
+    charger, car = _charger_with_car()
+    _setup_soc_callback(charger, car, sensor_value=SOC_AT_FAULT)
+    charger.current_command = copy_command(CMD_IDLE)
+    ct = _ManualSocConstraint(current_value=SOC_AT_FAULT, target_value=MANUAL_TARGET)
+
+    result, do_continue_constraint = await charger.constraint_update_value_callback_percent_soc(ct, NOW)
+
+    assert (result, do_continue_constraint) == (None, True)
+
+
+@pytest.mark.asyncio
+async def test_time_constraint_not_killed_when_car_stops_far_below_target():
+    """Review fix #01 EC-4: the time-constraint kill caller. With a recent completed constraint
+    and an agenda event 10 h out, the legacy force kills the agenda constraint; a trusted
+    SOC far below target must keep it."""
+    charger, car = _charger_with_car()
+    now = datetime.now(pytz.UTC)
+    charger.is_charger_unavailable = MagicMock(return_value=False)
+    charger.probe_for_possible_needed_reboot = MagicMock(return_value=False)
+    charger.is_not_plugged = MagicMock(return_value=False)
+    charger.is_plugged = MagicMock(return_value=True)
+    charger.set_charging_num_phases = AsyncMock(return_value=False)
+    charger.set_max_charging_current = AsyncMock(return_value=True)
+    charger.reboot = AsyncMock()
+    charger.get_best_car = MagicMock(return_value=car)
+    car.do_force_next_charge = False
+    car.do_next_charge_time = None
+    car.get_car_charge_percent = lambda time=None, *a, **kw: 50.0
+    charger._last_completed_constraint = MultiStepsPowerLoadConstraintChargePercent(
+        total_capacity_wh=60000,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        time=now - timedelta(hours=3),
+        load=charger,
+        load_param=car.name,
+        from_user=False,
+        end_of_constraint=now - timedelta(hours=1),
+        initial_value=30.0,
+        target_value=80.0,
+        power_steps=charger._power_steps,
+    )
+    start_time = now + timedelta(hours=10)
+    car.get_next_scheduled_event = AsyncMock(return_value=(start_time, start_time + timedelta(hours=2)))
+    car.get_best_person_next_need = AsyncMock(return_value=(None, None, None, None))
+
+    await charger.check_load_activity_and_constraints(now)
+
+    agenda_cts = [c for c in charger._constraints if c is not None and c.is_mandatory and not c.from_user]
+    assert [c.end_of_constraint for c in agenda_cts] == [start_time]
+
+
 # --------------------------------------------------------------------------------------
 # Non-regression: green before and after
 # --------------------------------------------------------------------------------------
+
+
+def test_stopped_asking_in_soc_estimation_mode_keeps_legacy_force():
+    """Review fix #01 EC-2: a manual-override estimate is not a sensor-backed SOC — keep the
+    legacy force so a really-full car with a lagging estimate still completes."""
+    charger, car = _charger_with_car()
+    car.is_in_soc_estimation_mode = MagicMock(return_value=True)
+
+    is_charged, result = charger.is_car_charged(
+        NOW, current_charge=90, target_charge=MANUAL_TARGET, is_target_percent=True
+    )
+
+    assert (is_charged, result) == (True, MANUAL_TARGET)
 
 
 def test_stopped_asking_with_distrusted_soc_still_forces_charged():

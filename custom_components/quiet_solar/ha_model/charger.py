@@ -3890,8 +3890,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         is_target_percent: bool,
         time: datetime,
     ) -> bool:
-        """Decision (no state mutation; ``is_car_charged`` may emit one INFO line when
-        the SOC is unknown): does the person's minimum-charge constraint end this
+        """Decision (no state mutation beyond log dedup; ``is_car_charged`` may emit one
+        INFO line when the SOC is unknown, or a memoised ``stopped_asking_not_full`` line
+        (QS-403)): does the person's minimum-charge constraint end this
         cycle? Single source of truth for ``do_remove_all_person_constraints`` and
         for the force/timed early restore (QS-352). Mirrors the removal block: a person
         need survives only when the person is assigned, range-uncovered, its
@@ -6187,27 +6188,33 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         if (
             is_car_stopped_asked_current is True
             and is_target_percent
-            and current_charge is not None
             and self.car is not None
             and not self.car.is_soc_sensor_distrusted()
-            # Strict `>` on purpose (QS-403): keeps "95 % for a 100 % target" on the charged
-            # side, unlike the zero-power check's `>=` on the same constant. Do not harmonise.
-            and target_charge - current_charge > CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT
+            # an estimate (manual SOC override) is not sensor-backed: keep the legacy force
+            and not self.car.is_in_soc_estimation_mode(time)
         ):
             # QS-403: the car stopped asking current but a trusted SOC is far below target:
             # the car is faulty, not full — fall through to the normal SOC evaluation.
-            self.log_info_on_change(
-                f"stopped_asking_not_full:{self.car.name}",
-                (round(current_charge), round(target_charge)),
-                time,
-                "%s car %s stopped asking current but trusted SOC %s%% is far below target %s%%"
-                " — not considered charged",
-                self.name,
-                self.car.name,
-                current_charge,
-                target_charge,
+            # A `None` charge (idle/off command in the SOC callback) is judged on the raw
+            # sensor, or the forced target would still complete the constraint there.
+            trusted_soc = (
+                current_charge if current_charge is not None else self.car.get_car_charge_percent_raw_sensor(time)
             )
-            is_car_stopped_asked_current = False
+            # Strict `>` on purpose (QS-403): keeps "95 % for a 100 % target" on the charged
+            # side, unlike the zero-power check's `>=` on the same constant. Do not harmonise.
+            if trusted_soc is not None and target_charge - trusted_soc > CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT:
+                self.log_info_on_change(
+                    f"stopped_asking_not_full:{self.car.name}",
+                    (round(trusted_soc), round(target_charge)),
+                    time,
+                    "%s car %s stopped asking current but trusted SOC %s%% is far below target %s%%"
+                    " — not considered charged",
+                    self.name,
+                    self.car.name,
+                    trusted_soc,
+                    target_charge,
+                )
+                is_car_stopped_asked_current = False
 
         if is_car_stopped_asked_current is True:
             # force met constraint: a car that stopped asking current is considered charged,
