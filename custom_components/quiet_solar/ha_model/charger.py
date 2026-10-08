@@ -6197,7 +6197,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             # the car is faulty, not full — fall through to the normal SOC evaluation.
             # A `None` charge (idle/off command in the SOC callback) is judged on the raw
             # sensor, or the forced target would still complete the constraint there. Same
-            # 30 min freshness window as the callback's own sensor read.
+            # 30 min unavailability tolerance as the callback's own sensor read.
             trusted_soc = (
                 current_charge
                 if current_charge is not None

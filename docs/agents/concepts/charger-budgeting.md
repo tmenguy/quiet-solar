@@ -503,8 +503,8 @@ target when a car is attached, its SOC sensor is not distrusted
 manual-override estimate is not sensor-backed), and `target - current_charge >
 CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT`: the normal SOC evaluation
 decides instead. A `None` charge (idle/off command in the SOC callback) is
-judged on the raw SOC sensor (same 30 min freshness window as the callback's
-sensor read), so the forced target cannot complete the constraint through that
+judged on the raw SOC sensor (same 30 min unavailability tolerance as the
+callback's sensor read), so the forced target cannot complete the constraint through that
 path. The comparison is a strict `>`, unlike the zero-power check's `>=`, so
 95 % for a 100 % target still counts as charged. Energy targets, a distrusted SOC,
 estimation mode, and a missing car keep the legacy force. Known limit: the guard

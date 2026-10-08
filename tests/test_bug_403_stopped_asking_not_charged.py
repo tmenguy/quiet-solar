@@ -169,6 +169,7 @@ async def test_soc_callback_idle_command_does_not_complete_when_car_stops_at_51(
     result, do_continue_constraint = await charger.constraint_update_value_callback_percent_soc(ct, NOW)
 
     assert (result, do_continue_constraint) == expected
+    car.get_car_charge_percent_raw_sensor.assert_called_once_with(NOW, tolerance_seconds=30 * 60)
 
 
 @pytest.mark.asyncio
