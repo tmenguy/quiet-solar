@@ -65,6 +65,7 @@ MODULES = (
     "ticks",
     "activeloop",
     "selfcheck",
+    "detectors",
     "cli",
 )
 for _name in MODULES:

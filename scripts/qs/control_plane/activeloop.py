@@ -44,15 +44,16 @@ def seams() -> Seams:
 
 def _builtin() -> list[tuple[str, ticks.Hook]]:
     """The built-in hooks, in tick order (each task adds its own, and its name to ``BUILTIN_NAMES``)."""
-    from . import selfcheck
+    from . import detectors, selfcheck
 
     return [
         (selfcheck.CODE_VERSION, selfcheck.code_version_hook),
         (selfcheck.SELFCHECK, selfcheck.selfcheck_hook),
+        (detectors.DETECTORS, detectors.detectors_hook),
     ]
 
 
-BUILTIN_NAMES: frozenset[str] = frozenset({"code_version", "selfcheck"})
+BUILTIN_NAMES: frozenset[str] = frozenset({"code_version", "selfcheck", "detectors"})
 
 
 def register_builtin() -> None:
@@ -64,6 +65,9 @@ def register_builtin() -> None:
 
 
 def _reset_for_tests() -> None:
-    """Drop the cached seams."""
+    """Drop the cached seams and every hook module's in-memory state (a new daemon)."""
     global _seams
     _seams = None
+    from . import detectors
+
+    detectors._reset_for_tests()

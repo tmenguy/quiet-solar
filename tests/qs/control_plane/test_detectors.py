@@ -1,0 +1,469 @@
+"""QS-406 T7: the detectors (§6, AC 8, and AC 3's overlap restart)."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import pytest
+from control_plane import activeloop, clock, detectors, tasks, ticks
+from control_plane.runner import RunResult
+
+from .conftest import Call, FakeRunner, insert_node, insert_task, open_run, sql
+
+
+@dataclass
+class FakeGit:
+    """Scripted git: refs, diffs, ancestry, merge-tree, worktree list; counts calls."""
+
+    refs: dict[str, str] = field(default_factory=dict)
+    diffs: dict[tuple[str, str], list[str]] = field(default_factory=dict)
+    ancestors: set[tuple[str, str]] = field(default_factory=set)
+    conflicts: dict[tuple[str, str], list[str]] = field(default_factory=dict)
+    worktrees: list[str] = field(default_factory=list)
+    fail: set[str] = field(default_factory=set)  # subcommands that exit 128
+    calls: list[list[str]] = field(default_factory=list)
+
+    def install(self, runner: FakeRunner) -> FakeGit:
+        runner.on(("git",), self)
+        return self
+
+    def __call__(self, call: Call) -> RunResult:
+        args = call.argv[3:]  # after `git -C <main>`
+        self.calls.append(args)
+        assert call.timeout == 20
+        if args[0] in self.fail:
+            return RunResult(128, "", "fatal: boom")
+        if args[0] == "rev-parse":
+            sha = self.refs.get(args[-1])
+            return RunResult(0, sha + "\n", "") if sha else RunResult(1, "", "")
+        if args[0] == "merge-base":
+            return RunResult(0 if (args[2], args[3]) in self.ancestors else 1, "", "")
+        if args[0] == "diff":
+            base, tip = args[2].split("...")
+            return RunResult(0, "\n".join(self.diffs.get((base, tip), [])) + "\n", "")
+        if args[0] == "merge-tree":
+            a, b = args[-2], args[-1]
+            files = self.conflicts.get((a, b))
+            return RunResult(1, "tree\n" + "\n".join(files) + "\n", "") if files else RunResult(0, "tree\n", "")
+        if args[0] == "worktree":
+            return RunResult(0, "".join(f"worktree {p}\nHEAD x\n\n" for p in self.worktrees), "")
+        raise AssertionError(args)
+
+    def count(self) -> int:
+        return len(self.calls)
+
+
+@pytest.fixture
+def git(fake_runner: FakeRunner) -> FakeGit:
+    return FakeGit(refs={"refs/heads/main": "m"}).install(fake_runner)
+
+
+def _tick(conn: sqlite3.Connection, fake_clock: clock.FakeClock, advance: float = detectors.DETECT_EVERY_S) -> None:
+    detectors.detectors_hook(conn, fake_clock)
+    fake_clock.advance(advance)
+
+
+def _open(path: Path) -> list[tuple[str, str, str]]:
+    return [
+        (r[0], r[1], r[2])
+        for r in sql(
+            path, "SELECT run_id, kind, subject FROM alerts WHERE cleared_at IS NULL ORDER BY run_id, kind, subject"
+        )
+    ]
+
+
+def _payload(path: Path, kind: str) -> dict[str, Any]:
+    return json.loads(sql(path, "SELECT payload FROM alerts WHERE kind = ? ORDER BY id DESC", [kind])[0][0])
+
+
+def _ago(fake_clock: clock.FakeClock, seconds: float) -> str:
+    return clock.stamp(fake_clock, plus=-seconds)
+
+
+# --------------------------------------------------------------------------- overlap
+
+
+class TestOverlap:
+    def _two_runs(self, migrated: Path, git: FakeGit) -> tuple[str, str]:
+        r1, _ = open_run("r1", "S-1")
+        r2, _ = open_run("r2", "S-2")
+        insert_task(migrated, "T1", r1, branch="QS_1", is_deliverable=1)
+        insert_task(migrated, "T2", r2, branch="QS_2", is_deliverable=1)
+        git.refs.update({"refs/heads/QS_1": "t1", "refs/heads/QS_2": "t2"})
+        git.diffs.update({("m", "t1"): ["a.py", "b.py"], ("m", "t2"): ["b.py", "c.py"]})
+        git.conflicts[("t1", "t2")] = ["b.py"]
+        return r1, r2
+
+    def test_two_runs_deliverables_cross_run_with_conflicts(self, conn, migrated, git, fake_clock) -> None:
+        r1, r2 = self._two_runs(migrated, git)
+        _tick(conn, fake_clock)
+        assert _open(migrated) == [(r1, "overlap_cross_run", "T1|T2"), (r2, "overlap_cross_run", "T1|T2")]
+        assert _payload(migrated, "overlap_cross_run") == {
+            "tasks": ["T1", "T2"],
+            "files": ["b.py"],
+            "truncated": False,
+            "conflicts": ["b.py"],
+        }
+
+    def test_clears_when_fixed(self, conn, migrated, git, fake_clock) -> None:
+        self._two_runs(migrated, git)
+        _tick(conn, fake_clock)
+        git.refs["refs/heads/QS_2"] = "t2b"
+        git.diffs[("m", "t2b")] = ["c.py"]
+        _tick(conn, fake_clock, detectors.OVERLAP_EVERY_S)
+        _tick(conn, fake_clock)
+        assert _open(migrated) == []
+
+    def test_items(self, conn, migrated, git, fake_clock) -> None:
+        r1, _ = open_run()
+        insert_task(migrated, "T1", r1, branch="QS_1", is_deliverable=1)
+        insert_task(migrated, "T2", r1, branch="QS_2", is_deliverable=1)
+        insert_task(migrated, "T3", r1, branch="QS_1_1", deliverable_id="T1", item_k=1)
+        insert_task(migrated, "T4", r1, branch="QS_1_2", deliverable_id="T1", item_k=2)
+        git.refs.update(
+            {"refs/heads/QS_1": "t1", "refs/heads/QS_2": "t2", "refs/heads/QS_1_1": "i1", "refs/heads/QS_1_2": "i2"}
+        )
+        git.diffs.update(
+            {("m", "t1"): ["a.py"], ("m", "t2"): ["x.py"], ("t1", "i1"): ["a.py", "x.py"], ("t1", "i2"): ["a.py"]}
+        )
+        _tick(conn, fake_clock)
+        subjects = {s for _, _, s in _open(migrated)}
+        assert subjects == {"T2|T3", "T3|T4"}  # never an item with its own deliverable (T1|T3, T1|T4)
+
+    def test_unresolvable_branches_and_bases_are_skipped(self, conn, migrated, git, fake_clock) -> None:
+        r1, _ = open_run()
+        insert_task(migrated, "T1", r1, branch="QS_1", is_deliverable=1)  # no ref
+        insert_task(migrated, "T2", r1, branch="QS_2", is_deliverable=1)
+        insert_task(migrated, "T3", r1, branch="QS_2_1", deliverable_id="T2", item_k=1)
+        insert_task(migrated, "T5", r1, is_deliverable=1)
+        insert_task(migrated, "T6", r1, branch="QS_5_1", deliverable_id="T5", item_k=1)  # the deliverable has no branch
+        git.refs.update({"refs/heads/QS_2_1": "i1", "refs/heads/QS_5_1": "i5"})  # QS_2 (the item's base) is missing
+        _tick(conn, fake_clock)
+        assert _open(migrated) == [] and detectors._overlap.last == []
+
+    @pytest.mark.parametrize(
+        ("local", "remote", "ancestors", "base"),
+        [
+            ("m", None, set(), "m"),
+            (None, "o", set(), "o"),
+            ("m", "m", set(), "m"),
+            ("m", "o", {("m", "o")}, "o"),
+            ("m", "o", {("o", "m")}, "m"),
+            ("m", "o", set(), "o"),
+        ],
+    )
+    def test_the_main_base(self, conn, git, fake_clock, local, remote, ancestors, base) -> None:
+        git.refs = {k: v for k, v in (("refs/heads/main", local), ("refs/remotes/origin/main", remote)) if v}
+        git.ancestors = ancestors
+        assert detectors._main_base(detectors._Git(conn, fake_clock, activeloop.seams())) == base
+
+    def test_a_git_failure_clears_nothing(self, conn, migrated, git, fake_clock) -> None:
+        self._two_runs(migrated, git)
+        _tick(conn, fake_clock)
+        git.refs["refs/heads/QS_2"] = "t2b"  # a moved tip: the diff must be recomputed
+        git.fail.add("diff")
+        _tick(conn, fake_clock, detectors.OVERLAP_EVERY_S)
+        _tick(conn, fake_clock)
+        assert len(_open(migrated)) == 2
+
+    def test_cached_conditions_are_re_emitted_and_git_busy_skips(
+        self, conn, migrated, git, fake_clock, fake_main
+    ) -> None:
+        self._two_runs(migrated, git)
+        _tick(conn, fake_clock)
+        n = git.count()
+        _tick(conn, fake_clock)  # not due yet: no git, the cached conditions are re-emitted
+        assert git.count() == n and len(_open(migrated)) == 2
+        (fake_main / ".git" / "MERGE_HEAD").write_text("x")
+        fake_clock.advance(detectors.OVERLAP_EVERY_S)
+        _tick(conn, fake_clock)
+        assert git.count() == n and len(_open(migrated)) == 2
+
+    def test_a_cold_daemon_omits_overlap_until_a_full_walk(self, conn, migrated, git, fake_clock, fake_main) -> None:
+        self._two_runs(migrated, git)
+        _tick(conn, fake_clock)
+        messages = sql(migrated, "SELECT count(*) FROM messages")[0][0]
+        ticks._reset_for_tests()
+        activeloop._reset_for_tests()  # a restart
+        (fake_main / ".git" / "MERGE_HEAD").write_text("x")  # no walk possible: overlap is unknown
+        assert detectors.detect_overlap(conn, fake_clock, activeloop.seams()) == detectors.NONE
+        _tick(conn, fake_clock)
+        assert len(_open(migrated)) == 2
+        (fake_main / ".git" / "MERGE_HEAD").unlink()
+        _tick(conn, fake_clock)
+        assert len(_open(migrated)) == 2 and sql(migrated, "SELECT count(*) FROM messages")[0][0] == messages
+
+    def test_a_tick_makes_at_most_the_budget_and_the_walk_completes(self, conn, migrated, git, fake_clock) -> None:
+        r1, _ = open_run()
+        for i in range(1, 11):
+            insert_task(migrated, f"T{i}", r1, branch=f"QS_{i}", is_deliverable=1)
+            git.refs[f"refs/heads/QS_{i}"] = f"t{i}"
+            git.diffs[("m", f"t{i}")] = ["shared.py"]
+        per_tick = []
+        for _ in range(10):
+            before = git.count()
+            kinds, conds = detectors.detect_overlap(conn, fake_clock, activeloop.seams())
+            per_tick.append(git.count() - before)
+            if kinds:
+                break
+            assert conds == []  # cold: nothing to re-emit yet
+        assert max(per_tick) <= detectors.OVERLAP_MAX_CALLS and len(per_tick) > 1
+        assert len(conds) == 45 and not detectors._overlap.walking
+
+    def test_files_are_truncated(self, conn, migrated, git, fake_clock) -> None:
+        self._two_runs(migrated, git)
+        many = [f"f{i:03}.py" for i in range(60)]
+        git.diffs.update({("m", "t1"): many, ("m", "t2"): many})
+        _, conds = detectors.detect_overlap(conn, fake_clock, activeloop.seams())
+        assert len(conds[0].payload["files"]) == 50 and conds[0].payload["truncated"] is True
+
+
+# --------------------------------------------------------------------------- stalled node, rounds
+
+
+class TestStalled:
+    def test_a_quiet_running_node_is_stalled(self, conn, migrated, git, fake_clock) -> None:
+        r1, _ = open_run()
+        insert_task(migrated, "T1", r1)
+        insert_node(migrated, "N1", r1, "T1", launch_at=_ago(fake_clock, 4000), spawned_at=_ago(fake_clock, 4000))
+        _tick(conn, fake_clock)
+        assert _open(migrated) == [(r1, "node_stalled", "N1")]
+        sql(
+            migrated,
+            "INSERT INTO messages (run_id, recipient, kind, sender, payload, state, created_at) VALUES (?, 'orchestrator', 'k', 'node:T1', '{}', 'queued', ?)",
+            [r1, clock.stamp(fake_clock)],
+        )
+        _tick(conn, fake_clock)
+        assert _open(migrated) == []
+
+    def test_not_while_a_tool_call_is_in_flight(self, conn, migrated, git, fake_clock) -> None:
+        r1, _ = open_run()
+        insert_task(migrated, "T1", r1)
+        insert_node(migrated, "N1", r1, "T1", launch_at=_ago(fake_clock, 4000), spawned_at=_ago(fake_clock, 4000))
+        sql(
+            migrated,
+            "INSERT INTO tool_calls (tool, key, args_hash, run_id, task_id, actor, args, state, started_at) VALUES ('push', 'k', 'h', ?, 'T1', 'node:T1', '{}', 'started', ?)",
+            [r1, _ago(fake_clock, 5000)],
+        )
+        _tick(conn, fake_clock)
+        assert _open(migrated) == []
+
+
+class TestRounds:
+    def test_round_6_then_7(self, conn, migrated, git, fake_clock) -> None:
+        r1, _ = open_run()
+        insert_task(migrated, "T1", r1)
+        for rnd in range(1, 7):
+            sql(
+                migrated,
+                "INSERT INTO reports (task_id, phase, round, status, summary, fields, at) VALUES ('T1', 'build', ?, 'continuing', 's', '{}', 'x')",
+                [rnd],
+            )
+        _tick(conn, fake_clock)
+        assert _open(migrated) == [(r1, "too_many_rounds", "T1:build:r6")]
+        sql(
+            migrated,
+            "INSERT INTO reports (task_id, phase, round, status, summary, fields, at) VALUES ('T1', 'build', 7, 'continuing', 's', '{}', 'x')",
+        )
+        _tick(conn, fake_clock)
+        assert _open(migrated) == [(r1, "too_many_rounds", "T1:build:r7")]
+
+
+# --------------------------------------------------------------------------- state anomalies
+
+
+class TestAnomalies:
+    def test_task_without_node(self, conn, migrated, git, fake_clock) -> None:
+        r1, _ = open_run()
+        insert_task(migrated, "T1", r1, state="building")
+        sql(
+            migrated,
+            "INSERT INTO task_history (task_id, at, actor, to_state) VALUES ('T1', ?, 'a', 'building')",
+            [_ago(fake_clock, 700)],
+        )
+        _tick(conn, fake_clock)
+        assert _open(migrated) == [(r1, "task_without_node", "T1")]
+        c = conn
+        from control_plane import db
+
+        with db.write(c):
+            tasks.update_fields(c, fake_clock, "T1", {"ci_state": "green"})  # writes no history: the grace holds
+        _tick(conn, fake_clock)
+        assert _open(migrated) == [(r1, "task_without_node", "T1")]
+        insert_node(migrated, "N1", r1, "T1", state="running", launch_at=clock.stamp(fake_clock))
+        _tick(conn, fake_clock)
+        assert _open(migrated) == []
+
+    @pytest.mark.parametrize(
+        ("dependent", "blocked_from", "dependency", "flagged"),
+        [
+            ("building", None, "ready", True),
+            ("ready_to_merge", None, "dropped", True),
+            ("planning", None, "merged", False),
+            ("contracted", None, "validated", False),
+            ("blocked", "building", "building", True),
+            ("blocked", "ready", "building", False),
+            ("ready", None, "building", False),
+            ("merged", None, "dropped", False),
+        ],
+    )
+    def test_dependency_violated(
+        self, conn, migrated, git, fake_clock, dependent, blocked_from, dependency, flagged
+    ) -> None:
+        r1, _ = open_run()
+        insert_task(migrated, "T1", r1, state=dependent, blocked_from=blocked_from)
+        insert_task(migrated, "T2", r1, state=dependency)
+        sql(migrated, "INSERT INTO task_deps (task_id, depends_on) VALUES ('T1', 'T2')")
+        kinds, conds = detectors.detect_anomalies(conn, fake_clock, activeloop.seams())
+        violated = [c for c in conds if c.kind == "dependency_violated"]
+        assert [c.subject for c in violated] == (["T1->T2"] if flagged else [])
+
+    @pytest.mark.parametrize(
+        ("name", "holder_kind", "age", "flagged"),
+        [
+            ("main-merge", "process", 1300, True),
+            ("main-checkout", "process", 1100, False),
+            ("integration:QS_9", "process", 1300, True),
+            ("integration:QS_9", "session", 3000, False),  # co-held by integrate-finish for 50 min
+            ("integration:QS_9", "session", 11000, True),
+            ("other", "session", 3700, True),
+            ("other", "process", 3500, False),
+        ],
+    )
+    def test_lock_held_long(self, conn, migrated, git, fake_clock, name, holder_kind, age, flagged) -> None:
+        r1, _ = open_run()
+        sql(
+            migrated,
+            "INSERT INTO locks (name, holder_kind, holder_actor, token_subject, acquired_at) VALUES (?, ?, 'a', 'run:R1', ?)",
+            [name, holder_kind, _ago(fake_clock, age)],
+        )
+        _, conds = detectors.detect_anomalies(conn, fake_clock, activeloop.seams())
+        held = [c for c in conds if c.kind == "lock_held_long"]
+        assert len(held) == int(flagged) and all(c.run_ids == (r1,) for c in held)
+
+    def test_lock_routing(self, conn, migrated, git, fake_clock) -> None:
+        r1, _ = open_run("r1", "S-1")
+        r2, _ = open_run("r2", "S-2")
+        insert_task(migrated, "T1", r2)
+        insert_node(migrated, "N1", r2, "T1")
+        old = _ago(fake_clock, 4000)
+        for name, subject in (("a", "node:N1"), ("b", "node:N9"), ("c", "x:y")):
+            sql(
+                migrated,
+                "INSERT INTO locks (name, holder_kind, holder_actor, token_subject, acquired_at) VALUES (?, 'session', 'a', ?, ?)",
+                [name, subject, old],
+            )
+        _, conds = detectors.detect_anomalies(conn, fake_clock, activeloop.seams())
+        routes = {c.subject.split("@")[0]: c.run_ids for c in conds if c.kind == "lock_held_long"}
+        assert routes == {"a": (r2,), "b": (r1, r2), "c": (r1, r2)}
+
+    def test_gate_slot_held_long(self, conn, migrated, git, fake_clock) -> None:
+        r1, _ = open_run("r1", "S-1")
+        r2, _ = open_run("r2", "S-2")
+        for slot, pid in ((0, 5), (1, 6)):
+            sql(
+                migrated,
+                "INSERT INTO cap_slots (cap, slot, holder_pid, holder_actor, acquired_at) VALUES ('gates', ?, ?, 'a', ?)",
+                [slot, pid, _ago(fake_clock, 5000)],
+            )
+        sql(
+            migrated,
+            "INSERT INTO tool_calls (tool, key, args_hash, run_id, actor, args, state, holder_pid, started_at) VALUES ('gate', 'k', 'h', ?, 'a', '{}', 'started', 5, 'x')",
+            [r2],
+        )
+        _, conds = detectors.detect_anomalies(conn, fake_clock, activeloop.seams())
+        routes = {c.subject.split("@")[0]: c.run_ids for c in conds if c.kind == "gate_slot_held_long"}
+        assert routes == {"gates#0": (r2,), "gates#1": (r1, r2)}
+
+    def test_leftovers(self, conn, migrated, git, fake_clock, tmp_path) -> None:
+        r1, _ = open_run()
+        insert_task(migrated, "T1", r1, state="validated", branch="QS_1", is_deliverable=1)
+        insert_task(migrated, "T2", r1, branch="QS_1_1", deliverable_id="T1", item_k=1, worktree="/w/QS_1_1")
+        insert_task(migrated, "T3", r1, branch="QS_1_2", deliverable_id="T1", item_k=2)
+        git.worktrees = ["/m", f"{tmp_path}/QS_1_2_integration", "/x/QS_7_1_integration", "/y/other"]
+        _tick(conn, fake_clock)
+        assert _open(migrated) == [(r1, "leftover_item", "T2"), (r1, "leftover_scratch", "T3")]
+        git.fail.add("worktree")  # a failed listing: leftover_scratch is unknown, so it stays
+        _tick(conn, fake_clock)
+        assert (r1, "leftover_scratch", "T3") in _open(migrated)
+
+    def test_no_finished_item_needs_no_listing(self, conn, migrated, git, fake_clock) -> None:
+        _tick(conn, fake_clock)
+        assert git.calls == []
+
+
+# --------------------------------------------------------------------------- cycles, duplicates
+
+
+class TestCyclesAndDuplicates:
+    def test_a_two_run_cycle_alerts_both_runs(self, conn, migrated, git, fake_clock) -> None:
+        r1, _ = open_run("r1", "S-1")
+        r2, _ = open_run("r2", "S-2")
+        for tid, run in (("T1", r1), ("X", r1), ("T2", r2), ("Y", r2), ("A", r1), ("B", r1)):
+            insert_task(migrated, tid, run, state="proposed", title=f"title {tid}")
+        for a, b in (("T1", "X"), ("X", "T2"), ("T2", "Y"), ("Y", "T1"), ("A", "B"), ("B", "A")):
+            sql(migrated, "INSERT INTO task_deps (task_id, depends_on) VALUES (?, ?)", [a, b])
+        _tick(conn, fake_clock)
+        assert _open(migrated) == [
+            (r1, "dependency_cycle", "A|B"),
+            (r1, "dependency_cycle_cross_run", "T1|T2|X|Y"),
+            (r2, "dependency_cycle_cross_run", "T1|T2|X|Y"),
+        ]
+
+    def test_strongly_connected(self) -> None:
+        comps = detectors.strongly_connected(
+            ["a", "b", "c", "d"], {"a": ["b"], "b": ["c", "a"], "c": ["d"], "d": ["c"]}
+        )
+        assert sorted(sorted(c) for c in comps) == [["a", "b"], ["c", "d"]]
+
+    def test_a_cross_run_duplicate(self, conn, migrated, git, fake_clock) -> None:
+        r1, _ = open_run("r1", "S-1")
+        r2, _ = open_run("r2", "S-2")
+        insert_task(migrated, "T1", r1, title="QS-12: Fix the Thing!")
+        insert_task(migrated, "T2", r2, title="fix  the_thing")
+        insert_task(migrated, "T3", r1, title="!!!")  # normalises to nothing
+        insert_task(migrated, "T4", r1, title="!!!")
+        insert_task(migrated, "T5", r1, title="fix the thing", state="merged")  # terminal: ignored
+        _tick(conn, fake_clock)
+        assert _open(migrated) == [(r1, "duplicate_task_cross_run", "T1|T2"), (r2, "duplicate_task_cross_run", "T1|T2")]
+
+    @pytest.mark.parametrize(
+        ("title", "norm"),
+        [("QS-12: Fix it", "fix it"), ("qs_7 — Ｆｕｌｌ width", "full width"), ("Straße", "strasse"), ("  ", "")],
+    )
+    def test_normalise_title(self, title: str, norm: str) -> None:
+        assert detectors.normalise_title(title) == norm
+
+
+# --------------------------------------------------------------------------- robustness, throttle
+
+
+def test_x_stamped_rows_never_crash_or_fire(conn, migrated, git, fake_clock) -> None:
+    r1, _ = open_run()
+    insert_task(migrated, "T1", r1, state="building")
+    insert_node(migrated, "N1", r1, "T1", launch_at="x")
+    sql(
+        migrated,
+        "INSERT INTO locks (name, holder_kind, holder_actor, token_subject, acquired_at) VALUES ('l', 'process', 'a', 'run:R1', 'x')",
+    )
+    sql(
+        migrated,
+        "INSERT INTO cap_slots (cap, slot, holder_pid, holder_actor, acquired_at) VALUES ('gates', 0, 5, 'a', 'x')",
+    )
+    _tick(conn, fake_clock)
+    assert _open(migrated) == []
+
+
+def test_the_hook_is_throttled(conn, migrated, git, fake_clock, monkeypatch) -> None:
+    runs: list[int] = []
+    monkeypatch.setattr(detectors, "ALL", ((lambda c, k, s: runs.append(1) or detectors.NONE),))
+    detectors.detectors_hook(conn, fake_clock)
+    fake_clock.advance(detectors.DETECT_EVERY_S - 1)
+    detectors.detectors_hook(conn, fake_clock)
+    fake_clock.advance(1)
+    detectors.detectors_hook(conn, fake_clock)
+    assert len(runs) == 2
