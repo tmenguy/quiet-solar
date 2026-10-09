@@ -317,8 +317,12 @@ def detect_overlap(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seam
         return _cached_overlap()
     except GitFailed as exc:
         _end_walk()
+        _overlap.last_at = now  # the next attempt waits OVERLAP_EVERY_S, keeping `last` (H4)
         _log_once(f"overlap:walk:{exc.returncode}", f"overlap: {exc}")
         return NONE
+    except BaseException:  # anything else (a failed beat…): no stale walk state leaks into the next (H3)
+        _end_walk()
+        raise
     _end_walk()
     _recovered("overlap:walk:")
     _overlap.last, _overlap.last_at = conditions, now
@@ -508,8 +512,9 @@ def _leftover_scratch(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: S
     try:
         _, listing = _Git(conn, clock, seams).run("worktree", "list", "--porcelain")
     except GitFailed as exc:
-        _log(f"leftover scratch: {exc}")
+        _log_once("scratch:worktree-list", f"leftover scratch: {exc}")
         return None
+    _recovered("scratch:worktree-list")
     out = []
     for line in listing.splitlines():
         if not line.startswith("worktree "):

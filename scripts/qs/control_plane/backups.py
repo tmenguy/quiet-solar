@@ -10,6 +10,7 @@ import hashlib
 import os
 import re
 import sqlite3
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -27,6 +28,9 @@ def _journal_delete(copy: sqlite3.Connection) -> str:
     return str(copy.execute("PRAGMA journal_mode = DELETE").fetchone()[0])
 
 
+_dir_fsync_logged = False  # a directory fsync failure is logged once per process
+
+
 def _fsync(path: Path) -> None:
     fd = os.open(path, os.O_RDONLY)
     try:
@@ -38,8 +42,9 @@ def _fsync(path: Path) -> None:
 def write_copy(src_conn: sqlite3.Connection, dest: Path) -> Path:
     """Copy ``src_conn``'s DB to ``dest``: 0600, in 0700 directories, ``journal_mode = DELETE``, atomic.
 
-    The copy is written to ``<dest>.partial``, fsynced, renamed into place, and the directory fsynced;
-    any failure removes the ``.partial`` and re-raises.
+    The copy is written to ``<dest>.partial``, fsynced and renamed into place; any failure up to the
+    rename removes the ``.partial`` and re-raises. The directory fsync after it is best-effort: a
+    filesystem that refuses it (logged once) still gets the copy.
     """
     paths.ensure_private_dir(paths.backup_dir())
     paths.ensure_private_dir(dest.parent)
@@ -56,12 +61,19 @@ def write_copy(src_conn: sqlite3.Connection, dest: Path) -> Path:
         copy = None
         _fsync(partial)
         os.replace(partial, dest)
-        _fsync(dest.parent)  # the rename itself survives a crash (G6)
     except BaseException:
         if copy is not None:
             copy.close()
         partial.unlink(missing_ok=True)
         raise
+    try:  # the copy is complete: the rename surviving a crash is best-effort (G6, H2)
+        _fsync(dest.parent)
+    except OSError as exc:  # EINVAL / ENOTSUP on FUSE, 9p, SMB…: never a failed copy
+        global _dir_fsync_logged
+        if not _dir_fsync_logged:
+            _dir_fsync_logged = True
+            sys.stderr.write(f"[cp-backup] directory fsync of {dest.parent} failed (logged once): {exc}\n")
+            sys.stderr.flush()
     return dest
 
 

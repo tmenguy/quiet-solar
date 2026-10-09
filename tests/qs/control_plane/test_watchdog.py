@@ -422,3 +422,14 @@ def test_cp_command_falls_back_to_this_python_without_the_main_venv(fake_main) -
     venv.parent.mkdir(parents=True)
     venv.write_text("")
     assert watchdog.cp_command(seams) == f"{venv} {fake_main}/scripts/qs/cp.py"
+
+
+def test_cp_command_quotes_its_paths(tmp_path: Path, monkeypatch) -> None:
+    import shlex
+    import sys
+
+    main = tmp_path / "my main"
+    seams = activeloop.Seams(runner=None, probe=None, claude=None, main=main, github=None)  # type: ignore[arg-type]
+    monkeypatch.setattr(sys, "executable", "/opt/py thon/bin/python")
+    assert shlex.split(watchdog.cp_command(seams)) == ["/opt/py thon/bin/python", f"{main}/scripts/qs/cp.py"]
+    assert f"`{watchdog.cp_command(seams)} msg pop" in watchdog.wake_text(seams, "R1", 1)

@@ -22,7 +22,7 @@ import re
 import sqlite3
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -253,7 +253,9 @@ class CiWatcher:
         if rate is not None and rate.remaining < CI_RATE_FLOOR and rate.reset_at:
             try:
                 reset = datetime.fromisoformat(rate.reset_at)
-            except ValueError:
+                if reset.tzinfo is None:  # a stamp without an offset is UTC (H6)
+                    reset = reset.replace(tzinfo=UTC)
+            except ValueError, TypeError:
                 reset = now + timedelta(seconds=CI_SLOW_S)
             self.next_at = max(self.next_at, min(reset, now + timedelta(seconds=CI_RESET_CAP_S)))
 

@@ -246,8 +246,9 @@ def _restore_into(path: Path, src: Path, live: tuple[int, int] | None, clock: cl
     The live DB gets exactly one write, the last step: the backup is first copied to a private staged
     file (``harness_state.restoring.<stamp>.db.partial``, removed on every exit) and the fix-up runs
     there in one transaction. A failure before that write leaves the live DB untouched (``CONFLICT``
-    for a DB that cannot be read or kept, ``INTERNAL`` for the fix-up); a failure of the write itself
-    is an ``INTERNAL`` error. Every error carries ``replaced`` once the live DB was kept.
+    for a DB that cannot be read or kept, ``INTERNAL`` for the staging or the fix-up); a failure of
+    the write itself is an ``INTERNAL`` error. Every error carries ``replaced`` once the live DB was
+    kept. Any non-empty file at the DB path is kept, migrated or not; only a missing or empty one is not.
     """
     stamp = clock.now().strftime(backups.STAMP_FORMAT)
     staged = backups.db_dir(path) / f"harness_state.restoring.{stamp}.db.partial"
@@ -259,16 +260,33 @@ def _restore_into(path: Path, src: Path, live: tuple[int, int] | None, clock: cl
     def where() -> str:
         return "" if replaced is None else f"; the pre-restore data is kept at {replaced}"
 
+    has_data = path.exists() and path.stat().st_size > 0  # an un-migrated file with data is kept too (H5)
     try:
         conn = db.connect(path, mode="rwc")
         try:
             waiters: list[tuple[Any, ...]] = []
             meta: dict[str, str] = {}
-            if live is not None:
+            if live is not None or has_data:
                 dest = backups.db_dir(path) / f"harness_state.replaced.{stamp}.db"
-                replaced = str(backups.write_copy(conn, dest))
+                try:
+                    replaced = str(backups.write_copy(conn, dest))
+                except OSError as exc:  # disk full, a backup directory it cannot write (H1)
+                    raise errors.CpError(
+                        "CONFLICT",
+                        f"the live DB cannot be kept: {exc}; nothing was restored and the live DB was not touched",
+                        hint=f"free space in (or fix) {dest.parent}, then retry",
+                    ) from exc
+            if live is not None:
                 waiters, meta = _carry(conn)
-            stage = _staged_copy(src, staged)
+            try:
+                stage = _staged_copy(src, staged)
+            except (sqlite3.Error, OSError, errors.CpError) as exc:  # disk full is the likeliest (H1)
+                raise errors.CpError(
+                    "INTERNAL",
+                    f"staging a copy of the backup {src.name} failed: {exc}; the live DB was not touched",
+                    hint=f"nothing was restored{where()}; free space in {staged.parent}, then retry",
+                    **kept(),
+                ) from exc
             try:
                 try:
                     _fix_up(stage, waiters, meta)

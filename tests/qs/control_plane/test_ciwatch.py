@@ -395,3 +395,20 @@ def test_a_pr_that_parses_again_is_logged_again_when_it_breaks(
         _tick(conn, fake_clock)
         fake_clock.advance(ciwatch.CI_SLOW_S)
     assert capsys.readouterr().err.count("PR #7") == 2  # one log per unparseable episode
+
+
+# --------------------------------------------------------------------------- review fix #03 (H6)
+
+
+@pytest.mark.parametrize(("reset_at", "wait_s"), [("naive", 1200), (12345, ciwatch.CI_SLOW_S)])
+def test_a_reset_stamp_without_an_offset_is_utc_and_a_non_string_is_ignored(
+    conn, migrated, watched, fake_github, fake_clock, reset_at: Any, wait_s: float
+) -> None:
+    from datetime import timedelta
+
+    if reset_at == "naive":
+        reset_at = (fake_clock.now() + timedelta(seconds=1200)).replace(tzinfo=None).isoformat()
+    fake_github.prs_by_number[7] = _pr(rollup="PENDING")
+    fake_github.rate = ciwatch.Rate(150, reset_at)
+    _tick(conn, fake_clock)
+    assert ciwatch._watcher.next_at == fake_clock.now() + timedelta(seconds=wait_s)

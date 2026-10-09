@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import sqlite3
 import sys
 from dataclasses import dataclass, field
@@ -204,10 +205,10 @@ def _kept(conn: sqlite3.Connection, run_id: str) -> alerts.Condition | None:
 
 
 def cp_command(seams: Seams) -> str:
-    """``<main>/venv/bin/python <main>/scripts/qs/cp.py``; this interpreter when the main venv is missing."""
+    """``<main>/venv/bin/python <main>/scripts/qs/cp.py``, shell-quoted; this interpreter when the main venv is missing."""
     venv_python = seams.main / "venv" / "bin" / "python"
     python = str(venv_python) if venv_python.exists() else sys.executable
-    return f"{python} {seams.main}/scripts/qs/cp.py"
+    return f"{shlex.quote(python)} {shlex.quote(f'{seams.main}/scripts/qs/cp.py')}"  # a path with a space (H7)
 
 
 def wake_text(seams: Seams, run_id: str, waiting: int) -> str:

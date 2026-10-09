@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from control_plane import activeloop, clock, detectors, tasks, ticks
+from control_plane import activeloop, clock, detectors, errors, tasks, ticks
 from control_plane.runner import RunResult
 
 from .conftest import Call, FakeRunner, insert_node, insert_task, open_run, sql
@@ -772,3 +772,63 @@ def test_a_self_dependency_cannot_be_stored(conn, migrated) -> None:
     insert_task(migrated, "T1", r1)
     with pytest.raises(sqlite3.IntegrityError):
         sql(migrated, "INSERT INTO task_deps (task_id, depends_on) VALUES ('T1', 'T1')")
+
+
+# --------------------------------------------------------------------------- review fix #03 (H3, H4, H6)
+
+
+class TestReviewFix03:
+    def _three(self, migrated: Path, git: FakeGit) -> None:
+        r1, _ = open_run()
+        for i in range(1, 4):
+            insert_task(migrated, f"T{i}", r1, branch=f"QS_{i}", is_deliverable=1)
+            git.refs[f"refs/heads/QS_{i}"] = f"t{i}"
+            git.diffs[("m", f"t{i}")] = ["shared.py"]
+
+    def test_an_unexpected_error_mid_walk_resets_the_walk(self, conn, migrated, git, fake_clock, monkeypatch) -> None:
+        self._three(migrated, git)
+        _failing_diff(git, "...t1", RunResult(128, "", "fatal: no merge base"))
+        raised: list[int] = []
+        real_beat = detectors.daemon.beat
+
+        def beat(c: sqlite3.Connection, k: clock.Clock) -> None:
+            if _diff_calls(git, "...t2") == 1 and not raised:
+                raised.append(1)
+                raise errors.CpError("INTERNAL", "database disk image is malformed")
+            real_beat(c, k)
+
+        monkeypatch.setattr(detectors.daemon, "beat", beat)
+        with pytest.raises(errors.CpError):
+            detectors.detect_overlap(conn, fake_clock, activeloop.seams())
+        assert _diff_calls(git, "...t1") == 1 and not detectors._overlap.failed_diffs
+        assert not detectors._overlap.refs and not detectors._overlap.walking
+        detectors.detect_overlap(conn, fake_clock, activeloop.seams())  # the next walk retries T1's diff
+        assert _diff_calls(git, "...t1") == 2
+
+    def test_an_aborted_walk_waits_the_overlap_interval(self, conn, migrated, git, fake_clock) -> None:
+        self._three(migrated, git)
+        _failing_diff(git, "", RunResult(124, "", "timed out"))
+        assert detectors.detect_overlap(conn, fake_clock, activeloop.seams()) == detectors.NONE
+        assert _diff_calls(git) == 1
+        fake_clock.advance(detectors.DETECT_EVERY_S)
+        detectors.detect_overlap(conn, fake_clock, activeloop.seams())  # not due yet: no new walk
+        assert _diff_calls(git) == 1
+        fake_clock.advance(detectors.OVERLAP_EVERY_S - detectors.DETECT_EVERY_S)
+        detectors.detect_overlap(conn, fake_clock, activeloop.seams())
+        assert _diff_calls(git) == 2
+
+    def test_a_failing_worktree_listing_is_logged_once_per_episode(
+        self, conn, migrated, git, fake_clock, capsys
+    ) -> None:
+        r1, _ = open_run()
+        insert_task(migrated, "T1", r1, state="validated", branch="QS_1", is_deliverable=1)
+        insert_task(migrated, "T3", r1, branch="QS_1_2", deliverable_id="T1", item_k=2)
+        git.fail.add("worktree")
+        for _ in range(2):
+            assert detectors._leftover_scratch(conn, fake_clock, activeloop.seams()) is None
+        assert capsys.readouterr().err.count("leftover scratch") == 1
+        git.fail.discard("worktree")
+        assert detectors._leftover_scratch(conn, fake_clock, activeloop.seams()) == []
+        git.fail.add("worktree")
+        assert detectors._leftover_scratch(conn, fake_clock, activeloop.seams()) is None
+        assert capsys.readouterr().err.count("leftover scratch") == 1  # a new episode

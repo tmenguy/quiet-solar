@@ -470,3 +470,17 @@ def test_halt_clear_on_a_db_below_the_current_schema_is_refused(migrated) -> Non
     sql(migrated, f"PRAGMA user_version = {CUR - 1}")  # e.g. the daemon cannot migrate (the STUCK case)
     code, out = run_cli("halt", "clear", "--reason", "r")
     assert out["error"] == "SCHEMA_PENDING" and f"v{CUR - 1}" in out["detail"]
+
+
+# --------------------------------------------------------------------------- review fix #03 (H6)
+
+
+def test_a_hand_edited_tries_counts_as_one(conn, migrated, fake_clock, real_gate) -> None:
+    _seed(migrated, mergegate.RECORD, {"code_version": "v1", "ok": False, "at": "garbage", "tries": "x"})
+    verdict = mergegate.merge_allowed(conn, "v1", fake_clock)
+    assert (
+        verdict.state == mergegate.RETRYING and f"(1 of {mergegate.SELFCHECK_ESCALATE_AFTER} tries)" in verdict.reason
+    )
+    with db.write(conn):
+        rec = mergegate.record(conn, fake_clock, "v1", ok=False, failures=[])
+    assert rec["tries"] == 1

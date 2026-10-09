@@ -567,7 +567,10 @@ class TestRestore:
             restore.restore(
                 migrated, clock=fake_clock, probe=fake_probe, kill=fake_kill, popen=fake_popen, lock_wait_s=0
             )
-        assert exc.value.code == "CONFLICT" and Path(exc.value.extra["replaced"]).exists()
+        err = exc.value  # a staging failure: the live DB was never touched (H1)
+        assert (
+            err.code == "INTERNAL" and Path(err.extra["replaced"]).exists() and "move it aside" not in err.extra["hint"]
+        )
 
     def test_a_source_missing_a_carried_table_is_refused_untouched(
         self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen
@@ -653,3 +656,130 @@ def test_a_rotation_failure_is_not_a_backup_failure(conn, migrated, fake_clock, 
     assert len(_periodic(migrated)) == 1 and _meta(migrated, restore.LAST_AT) == db.now(fake_clock)
     assert _failed_alerts(migrated) == [] and _meta(migrated, restore.LAST_ERROR) is None
     assert "rotation failed" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- review fix #03 (H1, H2, H5)
+
+
+def _restore_now(migrated: Path, fake_clock, fake_probe, fake_kill, fake_popen) -> dict[str, Any]:
+    return restore.restore(
+        migrated, clock=fake_clock, probe=fake_probe, kill=fake_kill, popen=fake_popen, lock_wait_s=0
+    )
+
+
+class TestReviewFix03:
+    @pytest.mark.parametrize("failure", ["disk_full", "o_excl", "private_dir"])
+    def test_a_staging_failure_leaves_the_live_db_untouched(
+        self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch, failure: str
+    ) -> None:
+        if failure == "disk_full":
+            real_connect = db.connect
+
+            class Full:
+                def backup(self, target: Any) -> None:
+                    raise sqlite3.OperationalError("database or disk is full")
+
+                def close(self) -> None:
+                    pass
+
+            def connect(path: Any, *a: Any, **k: Any) -> Any:
+                if Path(path) == backed_up["src"] and k.get("mode") == "ro" and _staged(migrated):
+                    return Full()  # the staging read only (the source checks come before it)
+                return real_connect(path, *a, **k)
+
+            monkeypatch.setattr(restore.db, "connect", connect)
+        elif failure == "o_excl":
+            real_open = os.open
+
+            def no_space(path: Any, flags: int, *a: Any) -> int:
+                if "restoring" in str(path):
+                    raise OSError(28, "No space left on device")
+                return real_open(path, flags, *a)
+
+            monkeypatch.setattr(restore.os, "open", no_space)
+        else:
+            real_private = paths.ensure_private_dir
+            seen: list[Path] = []
+
+            def refuse(d: Path) -> Path:
+                seen.append(d)
+                if len(seen) > 2:  # the two `write_copy` calls pass; the staging ones are refused
+                    raise restore.errors.CpError("POLICY_REFUSED", f"{d} is owned by another user")
+                return real_private(d)
+
+            monkeypatch.setattr(restore.paths, "ensure_private_dir", refuse)
+        before = _dump(migrated)
+        with pytest.raises(restore.errors.CpError) as exc:
+            _restore_now(migrated, fake_clock, fake_probe, fake_kill, fake_popen)
+        err = exc.value
+        assert err.code == "INTERNAL" and "not touched" in err.detail, err
+        assert "move it aside" not in err.extra["hint"] and "nothing was restored" in err.extra["hint"]
+        replaced = Path(err.extra["replaced"])
+        assert replaced.exists() and str(replaced) in err.extra["hint"]
+        assert _dump(migrated) == before and _staged(migrated) == []
+        assert not daemon.marker_path(migrated).exists() and len(fake_popen.calls) == 1
+
+    def test_a_failure_keeping_the_live_db_is_a_clean_refusal(
+        self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
+    ) -> None:
+        def full(*a: Any, **k: Any) -> Path:
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(backups, "write_copy", full)
+        before = _dump(migrated)
+        with pytest.raises(restore.errors.CpError) as exc:
+            _restore_now(migrated, fake_clock, fake_probe, fake_kill, fake_popen)
+        err = exc.value
+        assert err.code == "CONFLICT" and "not touched" in err.detail and "replaced" not in err.extra
+        assert "move it aside" not in err.extra["hint"]
+        assert _dump(migrated) == before and _staged(migrated) == []
+
+    def test_a_non_empty_never_migrated_file_is_kept(
+        self, conn, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen
+    ) -> None:
+        conn.close()
+        for suffix in ("", "-wal", "-shm"):
+            Path(str(migrated) + suffix).unlink(missing_ok=True)
+        c = sqlite3.connect(migrated)
+        c.execute("CREATE TABLE notes (x)")
+        c.execute("INSERT INTO notes (x) VALUES ('keep me')")  # user_version 0, but data
+        c.commit()
+        c.close()
+        out = _restore_now(migrated, fake_clock, fake_probe, fake_kill, fake_popen)
+        replaced = Path(out["replaced"])
+        assert replaced.name.startswith("harness_state.replaced.") and replaced.exists()
+        c = sqlite3.connect(replaced)
+        assert c.execute("SELECT x FROM notes").fetchall() == [("keep me",)]
+        c.close()
+        assert sql(migrated, "SELECT id FROM runs")[0][0] == backed_up["run"]
+
+
+def test_a_failed_directory_fsync_still_keeps_the_copy(conn, migrated, fake_clock, monkeypatch, capsys) -> None:
+    real_open, real_fsync = os.open, os.fsync
+    dirs: set[int] = set()
+
+    def spy_open(path: Any, flags: int, *a: Any) -> int:
+        fd = real_open(path, flags, *a)
+        (dirs.add if Path(path).is_dir() else dirs.discard)(fd)  # fd numbers are reused
+        return fd
+
+    def fsync(fd: int) -> None:
+        if fd in dirs:
+            raise OSError(22, "Invalid argument")  # a FUSE / 9p / SMB directory
+        real_fsync(fd)
+
+    monkeypatch.setattr(backups.os, "open", spy_open)
+    monkeypatch.setattr(backups.os, "fsync", fsync)
+    monkeypatch.setattr(backups, "_dir_fsync_logged", False)
+    rotated: list[Path] = []
+    real_rotate = backups.rotate
+    monkeypatch.setattr(backups, "rotate", lambda d, now: rotated.append(d) or real_rotate(d, now))
+    open_run()
+    _hook(conn, fake_clock)
+    [copy] = _periodic(migrated)
+    assert not Path(str(copy) + ".partial").exists() and rotated == [copy.parent]
+    assert _failed_alerts(migrated) == [] and _meta(migrated, restore.LAST_ERROR) is None
+    fake_clock.advance(backups.BACKUP_EVERY_S)
+    _hook(conn, fake_clock)
+    assert len(_periodic(migrated)) == 2
+    assert capsys.readouterr().err.count("directory fsync") == 1  # logged once
