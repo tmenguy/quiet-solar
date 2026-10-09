@@ -1133,9 +1133,16 @@ class TestReviewFix03:
         assert ledger.blast_radius(lw.conn, "T1", "") is None
         assert ledger.blast_radius(lw.conn, "T1") is not None
 
-    @pytest.mark.parametrize("file", ["a.py:42 /", "a.py:10-12 /."])
+    @pytest.mark.parametrize("file", ["a.py:42 /", "a.py:10-12 /.", "a.py:42 / /", "a.py:42 /. /", "a.py:42 /\t/"])
     def test_h2_a_line_suffix_before_whitespace(self, lw: L, file: str) -> None:
         assert code_of(lw.open, "T1", item(file=file)) == "USAGE"
+
+    @pytest.mark.parametrize(("given", "stored"), [("a.py /", "a.py"), (" src / a.py ", "src/a.py"), (" / ", None)])
+    def test_i1_each_segment_is_stripped(self, lw: L, given: str, stored: str | None) -> None:
+        if stored is None:
+            assert code_of(lw.open, "T1", item(file=given)) == "USAGE"  # absolute once stripped
+        else:
+            assert lw.row(lw.open("T1", item(file=given))[0])["file"] == stored
 
     def test_h3_a_lone_surrogate_in_a_flag(self, lw: L) -> None:
         a = lw.one("T1")

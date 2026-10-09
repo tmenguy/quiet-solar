@@ -100,19 +100,20 @@ def norm(text: str) -> str:
 
 
 def norm_path(file: str | None) -> str | None:
-    """A normalised repo-relative path (``a//b/./c`` → ``a/b/c``); empty is ``None``.
+    """A normalised repo-relative path (``a//b/ ./c `` → ``a/b/c``); empty is ``None``.
 
-    NFC-normalised, then checked: absolute, a drive letter, a ``..`` segment, a backslash, or a
-    ``:<line>`` suffix is ``USAGE`` (lines go in ``line_start`` / ``line_end``, or every round's
-    line would change the fingerprint).
+    Each segment stripped and NFC-normalised, then checked: absolute, a drive letter, a ``..``
+    segment, a backslash, or a ``:<line>`` suffix is ``USAGE`` (lines go in ``line_start`` /
+    ``line_end``, or every round's line would change the fingerprint).
     """
     path = _text(file)
     if path is None:
         return None
-    if ".." in path.split("/"):  # before normpath, which would fold `a/../b` into `b`
+    segments = [seg.strip() for seg in unicodedata.normalize("NFC", path).split("/")]
+    if ".." in segments:  # before normpath, which would fold `a/../b` into `b`
         raise errors.CpError("USAGE", f"`file` must be a relative path inside the repo: {file!r}")
-    path = posixpath.normpath(unicodedata.normalize("NFC", path))
-    if path.startswith("/") or "\\" in path or _DRIVE.match(path) or _LINE_SUFFIX.search(path.rstrip()):
+    path = posixpath.normpath("/".join(segments))
+    if path.startswith("/") or "\\" in path or _DRIVE.match(path) or _LINE_SUFFIX.search(path):
         raise errors.CpError("USAGE", f"`file` must be a relative path inside the repo, with no line: {file!r}")
     return None if path == "." else path
 

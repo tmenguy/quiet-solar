@@ -218,9 +218,9 @@ The vocabularies live in `schema_ledger`: `PHASES` (`plan`, `build`), `SOURCES` 
 | `category` | one of `CATEGORIES` | yes |
 | `title` | string holding at least one letter or digit | yes |
 | `body` | string | yes |
-| `file`, `symbol` | string; `file` repo-relative and normalised (NFC, `a//b/./c` → `a/b/c`; absolute, a drive letter, `..`, a backslash or a `:<line>` suffix is `USAGE`: lines go in `line_start` / `line_end`), `symbol` trimmed and NFC | no |
+| `file`, `symbol` | string; `file` repo-relative and normalised (NFC, each segment stripped, `a//b/ ./c` → `a/b/c`; absolute, a drive letter, `..`, a backslash or a `:<line>` suffix is `USAGE`: lines go in `line_start` / `line_end`), `symbol` trimmed and NFC | no |
 | `line_start`, `line_end` | int `>= 1`; `line_end` defaults to `line_start` | no |
-| `reviewer` | string (the lens, e.g. `qs-review-blind-hunter`) | no |
+| `reviewer` | string, trimmed and NFC (the lens, e.g. `qs-review-blind-hunter`) | no |
 | `unchanged_lines` | bool, recorded as given (`1` / `0` / NULL) | no |
 | `relates_to` | list of finding ids, de-duplicated (`NOT_FOUND` if one is unknown, or of another run) | no |
 | `sha` | string | `ci` only, required there |
