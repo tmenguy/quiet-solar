@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from control_plane import export, snapshot
+from control_plane import export, ledger, snapshot
 
-from .conftest import ORCH, insert_node, open_run, run_cli, sql
+from .conftest import CUR, ORCH, insert_node, open_run, run_cli, sql
 
 GOLDEN = Path(__file__).parent / "golden"
 
@@ -96,6 +96,65 @@ class TestExport:
             assert placeholder in text
         assert "### Tokens\n\nledger of T2\n" in text and "No ledger recorded." not in text
 
+    def test_empty_registry_renders_no_ledger(self, world, linked) -> None:
+        export.LEDGER_SECTIONS.clear()
+        run_cli("export-summary", "--task", "T1", "--out-worktree", str(linked))
+        text = (linked / "docs" / "stories" / "QS-11.summary.md").read_text()
+        assert text.endswith("## Ledger\n\nNo ledger recorded.\n")
+
+    def test_register_export_is_idempotent(self) -> None:
+        titles = [t for t, _ in export.LEDGER_SECTIONS]
+        assert titles == ["Rounds", "Findings", "Blast radius"]
+        ledger.register_export()
+        assert [t for t, _ in export.LEDGER_SECTIONS] == titles
+        export.LEDGER_SECTIONS.clear()
+        ledger.register_export()
+        assert [t for t, _ in export.LEDGER_SECTIONS] == titles
+
+    def test_a_populated_ledger(self, world, linked) -> None:
+        tok, tmp = world["token"], world["tmp"]
+        ok = lambda *a: run_cli(*a, "--token", tok)  # noqa: E731
+        ok("round", "start", "--task", "T1", "--phase", "plan")
+        ok("round", "start", "--task", "T1", "--phase", "build", "--head", "h1", "--base", "b0")
+        ok("round", "start", "--task", "T1", "--phase", "build", "--head", "h2")
+        items = [
+            {"severity": "must_fix", "category": "correctness", "title": "Off | by one", "body": "b", "symbol": "f"},
+            {"severity": "should_fix", "category": "design", "title": "Rename", "body": "b", "symbol": "f"},
+            {"severity": "nice_to_have", "category": "style", "title": "Nit", "body": "b", "symbol": "g"},
+        ]
+        opened = ok("finding", "open", "--task", "T1", "--phase", "build", "--source", "reviewer",
+                    "--input", _file(tmp, "i.json", json.dumps(items)))  # fmt: skip
+        assert opened[1]["ids"] == [1, 2, 3]
+        ok("finding", "state", "1", "--to", "resolved", "--commit", "c1")
+        ok("finding", "state", "2", "--to", "settled", "--reason", "keep the name")
+        again = {"severity": "should_fix", "category": "test", "title": "Again", "body": "b", "symbol": "f"}
+        ok("finding", "open", "--task", "T1", "--phase", "build", "--source", "reviewer",
+           "--input", _file(tmp, "j.json", json.dumps(again)))  # fmt: skip
+        ok("blast-radius", "set", "--task", "T1", "--value", "doubt", "--head-sha", "h1", "--review", "G1")
+        ok("blast-radius", "set", "--task", "T1", "--value", "ok", "--head-sha", "h2", "--review", "G2",
+           "--reason", "two files")  # fmt: skip
+        assert run_cli("export-summary", "--task", "T1", "--out-worktree", str(linked))[0] == 0
+        text = (linked / "docs" / "stories" / "QS-11.summary.md").read_text()
+        ledger_md = text.split("## Ledger\n\n", 1)[1]
+        assert ledger_md == (
+            "### Rounds\n\n"
+            "| phase | round | diff |\n|---|---|---|\n"
+            "| plan | 1 | `?..?` |\n| build | 1 | `b0..h1` |\n| build | 2 | `h1..h2` |\n\n"
+            "### Findings\n\n"
+            "| # | phase / round | source | class | state | title | resolution | flags |\n"
+            "|---|---|---|---|---|---|---|---|\n"
+            "| 1 | build / 2 | reviewer | must_fix | resolved | Off \\| by one | c1 |  |\n"
+            "| 2 | build / 2 | reviewer | should_fix | settled | Rename | keep the name |  |\n"
+            "| 3 | build / 2 | reviewer | nice_to_have | open | Nit |  |  |\n"
+            "| 4 | build / 2 | reviewer | should_fix | open | Again |  | overlaps_fix #1, overlaps_fix #2 |\n\n"
+            "### Blast radius\n\n"
+            "`ok` at `h2` (review G2) — two files\n"
+        )
+        ok("blast-radius", "set", "--task", "T1", "--value", "too_large", "--head-sha", "h3", "--review", "G3")
+        run_cli("export-summary", "--task", "T1", "--out-worktree", str(linked))
+        text = (linked / "docs" / "stories" / "QS-11.summary.md").read_text()
+        assert text.endswith("### Blast radius\n\n`too_large` at `h3` (review G3)\n")
+
     def test_errors(self, world, linked, db_path) -> None:
         assert run_cli("export-summary", "--task", "T2", "--out-worktree", str(linked))[1]["error"] == "INVALID_STATE"
         assert run_cli("export-summary", "--task", "T9", "--out-worktree", str(linked))[1]["error"] == "NOT_FOUND"
@@ -177,13 +236,22 @@ def busy_world(world, fake_clock) -> dict[str, Any]:
     )
     sql(
         w["db"],
-        "INSERT INTO daemon_lease (id, pid, schema_version, started_at, heartbeat_at) VALUES (1, 9, 1, 'x', '2026-10-03T11:59:50.000000Z')",
+        "INSERT INTO daemon_lease (id, pid, schema_version, started_at, heartbeat_at) VALUES (1, 9, ?, 'x', '2026-10-03T11:59:50.000000Z')",
+        [CUR],
     )
     sql(
         w["db"],
         "INSERT INTO hook_events (hook, session_id, decision, detail, at) VALUES ('stop', ?, 'alert', '{\"kind\": \"queue_not_draining\"}', 'x')",
         [ORCH],
     )
+    # #375: one row of each ledger table, so _shape pins their columns.
+    ok = lambda *a: run_cli(*a, "--token", w["token"])  # noqa: E731
+    assert ok("round", "start", "--task", "T1", "--phase", "build", "--head", "h1", "--base", "b0")[0] == 0
+    item = _file(w["tmp"], "i.json", '{"severity": "should_fix", "category": "test", "title": "t", "body": "42"}')
+    assert ok("finding", "open", "--task", "T1", "--phase", "build", "--source", "reviewer", "--input", item)[0] == 0
+    assert ok("finding", "classify", "1", "--class", "must_fix")[0] == 0
+    blast = ("blast-radius", "set", "--task", "T1", "--value", "ok", "--head-sha", "h1", "--review", "G1")
+    assert ok(*blast)[0] == 0
     return w
 
 
@@ -206,7 +274,7 @@ class TestSnapshot:
         assert snap["queues"] == [
             {"run_id": "R1", "recipient": "orchestrator", "depth": 3, "in_flight": 0, "dead": 0, "oldest_age_s": 0.0}
         ]
-        assert snap["daemon"]["heartbeat_age_s"] == 10.0 and snap["daemon"]["code_schema_version"] == 1
+        assert snap["daemon"]["heartbeat_age_s"] == 10.0 and snap["daemon"]["code_schema_version"] == CUR
         assert snap["tool_calls_in_flight"][0]["age_s"] == 60.0
         assert snap["alerts"][0]["detail"] == {"kind": "queue_not_draining"}
         assert snap["reports"][0]["fields"] == {"tests": 1}
@@ -220,6 +288,45 @@ class TestSnapshot:
         code, snap = run_cli("snapshot", "--run", "R1")
         snap.pop("ok")
         assert code == 0 and snap == snapshot.empty() and tuple(snap) == tuple(sorted(snapshot.KEYS))
+
+    def test_the_ledger_tables(self, busy_world) -> None:
+        snap = run_cli("snapshot")[1]
+        assert [(r["phase"], r["round"], r["base_sha"], r["head_sha"]) for r in snap["rounds"]] == [
+            ("build", 1, "b0", "h1")
+        ]
+        assert snap["findings"][0]["flags"] == [] and snap["findings"][0]["body"] == "42"  # never JSON-parsed
+        assert [e["kind"] for e in snap["finding_events"]] == ["classify"]
+        assert snap["blast_radius"][0]["value"] == "ok"
+
+    def test_the_run_filter_on_the_ledger(self, busy_world) -> None:
+        from .conftest import insert_task
+
+        w = busy_world
+        run2, tok2 = open_run("r2", "S-2")
+        insert_task(w["db"], "T8", run2)
+        insert_task(w["db"], "T9", None)  # no run: its findings show in the run that wrote them
+        item = _file(w["tmp"], "k.json", '{"severity": "must_fix", "category": "test", "title": "u", "body": "b"}')
+        for task, tok in (("T8", tok2), ("T9", tok2)):
+            base = ("--task", task, "--token", tok)
+            assert run_cli("round", "start", "--phase", "build", "--head", "h", *base)[0] == 0
+            assert (
+                run_cli("finding", "open", "--phase", "build", "--source", "reviewer", "--input", item, *base)[0] == 0
+            )
+            assert run_cli("blast-radius", "set", "--value", "ok", "--head-sha", "h", "--review", "G", *base)[0] == 0
+        fid = run_cli("snapshot", "--run", "R2")[1]["findings"][0]["id"]
+        assert run_cli("finding", "state", str(fid), "--to", "deferred", "--token", tok2)[0] == 0
+        r1, r2, everything = (run_cli("snapshot", *a)[1] for a in (("--run", "R1"), ("--run", "R2"), ()))
+        assert [r["task_id"] for r in r1["rounds"]] == ["T1"] and [r["task_id"] for r in r2["rounds"]] == ["T8"]
+        assert [f["task_id"] for f in r1["findings"]] == ["T1"]
+        assert [f["task_id"] for f in r2["findings"]] == ["T8", "T9"] and r2["findings"][1]["run_id"] == "R2"
+        assert [e["finding_id"] for e in r1["finding_events"]] == [1]
+        assert [e["finding_id"] for e in r2["finding_events"]] == [fid]
+        assert [b["task_id"] for b in r1["blast_radius"]] == ["T1"] and [b["task_id"] for b in r2["blast_radius"]] == [
+            "T8"
+        ]
+        assert (
+            len(everything["findings"]) == 3 and len(everything["rounds"]) == 3 and len(everything["blast_radius"]) == 3
+        )
 
     def test_unparseable_json_columns_are_kept_as_text(self, busy_world) -> None:
         sql(busy_world["db"], "UPDATE hook_events SET detail = 'not json'")
@@ -236,6 +343,23 @@ class TestTaskShow:
         assert len(out["decisions"]) == 2 and len(out["reports"]) == 1 and len(out["questions"]) == 1
         assert [h["to_state"] for h in out["history"]] == ["proposed"]
         assert run_cli("task", "show", "--task", "T2")[1]["digest"] is None
+
+    def test_the_ledger_in_task_show(self, busy_world) -> None:
+        out = run_cli("task", "show", "--task", "T1")[1]
+        assert [r["round"] for r in out["rounds"]] == [1] and [f["id"] for f in out["findings"]] == [1]
+        assert out["findings"][0]["body"] == "42" and out["findings"][0]["classification"] == "must_fix"
+        assert [e["kind"] for e in out["finding_events"]] == ["classify"]
+        assert [b["review"] for b in out["blast_radius"]] == ["G1"]
+        assert out["convergence"]["build"] == {
+            "converged": False,
+            "consistent": False,
+            "blocking": [1],
+            "latest_round": 1,
+            "counts": {"open": 1, "resolved": 0, "rejected": 0, "deferred": 0, "settled": 0},
+        }
+        assert out["convergence"]["plan"]["latest_round"] == 0
+        empty = run_cli("task", "show", "--task", "T2")[1]
+        assert empty["findings"] == [] and empty["rounds"] == [] and empty["blast_radius"] == []
 
     def test_unknown(self, world, db_path) -> None:
         assert run_cli("task", "show", "--task", "T9")[1]["error"] == "NOT_FOUND"

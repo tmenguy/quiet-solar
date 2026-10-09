@@ -38,6 +38,7 @@ MODULES = (
     "paths",
     "liveness",
     "schema_v1",
+    "schema_ledger",
     "migrations",
     "db",
     "daemon",
@@ -56,6 +57,7 @@ MODULES = (
     "tools",
     "items",
     "export",
+    "ledger",
     "snapshot",
     "cli",
 )
@@ -69,6 +71,7 @@ from control_plane import (  # noqa: E402
     export,
     faults,
     items,
+    ledger,
     liveness,
     merge_policy,
     migrations,
@@ -77,6 +80,9 @@ from control_plane import (  # noqa: E402
     tools,
 )
 from control_plane.runner import RunResult  # noqa: E402
+
+CUR = migrations.current_schema_version()  # the schema this code writes (QS-375: rebased tests)
+NEXT = CUR + 1  # a schema newer than the code
 
 REAL_PROCSETUP_GET = procsetup.get
 REAL_CODE_ROOT = paths.code_root
@@ -347,6 +353,7 @@ def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deps: cli.Dep
         tools.reset()
         items.register_item_tools()
         export.LEDGER_SECTIONS.clear()
+        ledger.register_export()  # #375: the sections cli registers at import, whole again for the next test
 
 
 @pytest.fixture

@@ -33,7 +33,7 @@ flowchart LR
         CLI["cp.py CLI<br/>(one JSON object per call)"]
         HK["Hooks<br/>Stop · PreToolUse · pre-push"]
         D["Daemon<br/>(singleton, ticks, migrates)"]
-        DB[("harness_state.db<br/>SQLite WAL, schema v1")]
+        DB[("harness_state.db<br/>SQLite WAL, schema v2")]
     end
 
     subgraph Ext["Effects outside the DB"]
@@ -78,7 +78,7 @@ The design rests on these invariants:
 
 ## 2. Package architecture
 
-`scripts/qs/control_plane/` has 28 modules (~6.6k lines) behind
+`scripts/qs/control_plane/` has 30 modules (~8.1k lines) behind
 `scripts/qs/cp.py`. Arrows point from a module to the modules it imports;
 the infrastructure layer is imported by almost everything.
 
@@ -97,6 +97,7 @@ flowchart TB
         daemon["daemon.py<br/>run loop · ensure · stop path"]
         export["export.py"]
         snapshot["snapshot.py"]
+        ledger["ledger.py<br/>findings, rounds, convergence (#375)"]
         merge_policy["merge_policy.py (seam)"]
     end
 
@@ -114,7 +115,7 @@ flowchart TB
 
     subgraph L1["Infrastructure layer"]
         db["db.py<br/>connect, write/read txns, file_lock, schema check"]
-        migrations["migrations.py + schema_v1.py"]
+        migrations["migrations.py + schema_v1.py + schema_ledger.py"]
         paths["paths.py<br/>path guard, main checkout"]
         liveness["liveness.py<br/>ProcessProbe, ClaudeCli"]
         runner["runner.py (Runner seam)"]
@@ -124,13 +125,14 @@ flowchart TB
         procsetup["procsetup.py (setpgid, signals)"]
     end
 
-    cli --> tools & wait & daemon & export & snapshot & hooks
+    cli --> tools & wait & daemon & export & snapshot & hooks & ledger
     cli --> runs & tasks & nodes & messages & questions & reports & decisions & locks
     hooks --> runs & tasks & messages & tokens & wait & liveness
     tools --> locks & nodes & tasks & tokens & hooks & merge_policy & liveness & runner
     wait --> daemon & messages & tokens
     daemon --> migrations & liveness & procsetup
-    snapshot --> daemon & tasks
+    snapshot --> daemon & tasks & ledger
+    ledger --> export & tasks & tokens
     export --> tasks
     locks --> nodes & tokens & liveness
     nodes --> messages & tasks & tokens
@@ -147,14 +149,15 @@ flowchart TB
 **Seams.** Every external dependency goes through an injectable seam:
 `Clock`, `Runner`, `ProcessProbe`, `ClaudeCli`, `ProcessSetup`, `Popen`,
 `faults`, `merge_policy`, `export.LEDGER_SECTIONS` and the daemon's
-`tick_hooks`. The 918 tests run with no real `claude`, `gh`, `git push` or
+`tick_hooks`. The ~1,190 tests run with no real `claude`, `gh`, `git push` or
 signals.
 
 ---
 
-## 3. Data model (`harness_state.db`, schema v1)
+## 3. Data model (`harness_state.db`, schema v2)
 
-There are 24 tables; the schema version is `PRAGMA user_version`.
+There are 28 tables: schema v1's 24, and the 4 of the finding ledger
+(v2, #375). The schema version is `PRAGMA user_version`.
 Text ids are `R<n>` (run), `T<n>` (task), `N<n>` (node) and `Q<n>`
 (question).
 
@@ -286,6 +289,59 @@ erDiagram
     }
 ```
 
+The finding ledger (v2, #375). A `rounds` row and its `reports` rows
+share the natural key `(task_id, phase, round)`, with no foreign key:
+
+```mermaid
+erDiagram
+    tasks ||--o{ rounds : "per (task, phase): 1, 2, …"
+    tasks ||--o{ findings : "task_id"
+    runs |o--o{ findings : "run_id (the task's, or the writer's)"
+    findings |o--o{ findings : "matched_id"
+    findings ||--o{ finding_events : "classify / state"
+    findings |o--o{ finding_events : "cause_id"
+    integrations |o--o{ findings : "integration_id (gate)"
+    tasks ||--o{ blast_radius : "append-only"
+    rounds ||..o{ reports : "(task_id, phase, round), no FK"
+
+    rounds {
+        text task_id PK
+        text phase PK "plan|build"
+        int round PK ">= 1"
+        text base_sha
+        text head_sha
+    }
+    findings {
+        int id PK
+        text source "reviewer…|ci|gate|detector|orchestrator|maintainer"
+        text severity "must_fix|should_fix|nice_to_have"
+        text classification "+ out_of_scope (NULL at birth)"
+        text fingerprint "sha256(file␟symbol␟category[␟title])"
+        text replay_key UK
+        text flags "JSON: matches|overlaps_fix|relates_to"
+        text state "open|resolved|rejected|deferred|settled"
+        int decided_seq "latest = highest"
+        text reason
+        text resolved_sha
+        text ci_sha
+    }
+    finding_events {
+        int id PK
+        int finding_id FK
+        text kind "classify|state"
+        text from_value
+        text to_value
+        int cause_id FK
+    }
+    blast_radius {
+        int id PK
+        text task_id FK
+        text value "ok|doubt|too_large"
+        text head_sha
+        text review
+    }
+```
+
 ### State machines
 
 ```mermaid
@@ -352,6 +408,30 @@ stateDiagram-v2
     }
 ```
 
+A finding (#375): every transition is free, only the arguments are
+checked; the ledger never refuses one to force convergence.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    state "Finding" as F {
+        [*] --> open : finding open (born open)
+        [*] --> rejected : reviewer re-raise of a same-task<br/>strong match that is rejected
+        [*] --> settled : … that is settled
+        open --> deferred : classify nice_to_have | out_of_scope
+        deferred --> open : classify must_fix | should_fix
+        open --> resolved : state --commit
+        open --> rejected : state --reason
+        open --> settled : state --reason (a flip-flop decided)
+        settled --> open : reopen (--cause, e.g. a red CI finding)
+        note right of open
+            any state → any state with finding state
+            (resolved needs --commit, rejected / settled --reason)
+            convergence blocks on open must_fix / should_fix only
+        end note
+    }
+```
+
 ```mermaid
 stateDiagram-v2
     direction LR
@@ -389,6 +469,7 @@ flowchart LR
         r2["snapshot [--run]"]
         r3["task show --task"]
         r4["export-summary --task --out-worktree"]
+        r5["ledger show --task [--phase] [--family] [--state]"]
     end
     subgraph write["write: waits for self-migration, takes --token"]
         w1["run open · claim · bind-name · set-mode · set-plan · close"]
@@ -400,6 +481,7 @@ flowchart LR
         w7["node stop · take-over · hand-back"]
         w8["lock acquire · release (integration:*)"]
         w9["tool &lt;name&gt; --task --key [--args-file]"]
+        w10["round start · finding open · classify · state · blast-radius set"]
     end
 ```
 
@@ -420,8 +502,8 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    RT["run token<br/>(orchestrator)"] --> A1["everything on its own run:<br/>tasks, criteria, questions, decisions,<br/>msg to anyone, wait, node stop/take-over,<br/>all 8 tools"]
-    NT["node token<br/>(node of task T)"] --> A2["own task only:<br/>task state (node range), question open,<br/>report post, digest put, msg → orchestrator,<br/>node hand-back, lock acquire (own deliverable),<br/>tool gate · push · pr-create"]
+    RT["run token<br/>(orchestrator)"] --> A1["everything on its own run:<br/>tasks, criteria, questions, decisions,<br/>msg to anyone, wait, node stop/take-over,<br/>the ledger, blast-radius set (run only),<br/>all 8 tools"]
+    NT["node token<br/>(node of task T)"] --> A2["own task only:<br/>task state (node range), question open,<br/>report post, digest put, msg → orchestrator,<br/>node hand-back, lock acquire (own deliverable),<br/>round start, finding open · classify · state,<br/>tool gate · push · pr-create"]
     NT -. "stopped node" .-> A3["still: reads, msg pop/ack<br/>refused: gate, push, pr-create, state writes (exit 4)"]
 ```
 
@@ -442,7 +524,7 @@ flowchart LR
 `LOCK_ORDER`: `integration:*` (lexical) → `main-merge` → `main-checkout`
 → gate slot.
 
-### 4.4 Python API frozen for later children (#400, child 7, child 14)
+### 4.4 Python API frozen for later children (#400, #375, child 7, child 14)
 
 ```mermaid
 classDiagram
@@ -492,6 +574,15 @@ classDiagram
     class daemon {
         +tick_hooks: Sequence~TickHook~
         +beat(conn, clock)
+    }
+    class ledger {
+        +writer(conn, token, task_id, kinds) Writer
+        +open_findings(...) ids
+        +classify(...) / set_state(...)
+        +convergence(conn, task_id, phase) dict
+        +blast_radius(conn, task_id, head_sha) dict | None
+        +show(conn, task_id, phase, states, include_family) dict
+        +register_export()
     }
     tools --> ToolSpec
     ToolSpec --> Step

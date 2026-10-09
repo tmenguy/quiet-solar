@@ -7,6 +7,16 @@
     "id",
     "session_id"
   ],
+  "blast_radius": [
+    "actor",
+    "at",
+    "head_sha",
+    "id",
+    "reason",
+    "review",
+    "task_id",
+    "value"
+  ],
   "cap_slots": [
     "acquired_at",
     "cap",
@@ -45,6 +55,52 @@
   "digests": [
     "bytes",
     "task_id",
+    "updated_at"
+  ],
+  "finding_events": [
+    "actor",
+    "at",
+    "cause_id",
+    "commit_sha",
+    "finding_id",
+    "from_value",
+    "id",
+    "kind",
+    "reason",
+    "round",
+    "to_value"
+  ],
+  "findings": [
+    "actor",
+    "body",
+    "category",
+    "ci_sha",
+    "classification",
+    "created_at",
+    "decided_seq",
+    "file",
+    "fingerprint",
+    "flags",
+    "id",
+    "integration_id",
+    "line_end",
+    "line_start",
+    "matched_id",
+    "phase",
+    "reason",
+    "replay_key",
+    "resolved_sha",
+    "reviewer",
+    "round",
+    "run_id",
+    "severity",
+    "source",
+    "state",
+    "symbol",
+    "task_id",
+    "title",
+    "title_norm",
+    "unchanged_lines",
     "updated_at"
   ],
   "integrations": [
@@ -120,6 +176,15 @@
     "round",
     "status",
     "summary",
+    "task_id"
+  ],
+  "rounds": [
+    "actor",
+    "base_sha",
+    "head_sha",
+    "phase",
+    "round",
+    "started_at",
     "task_id"
   ],
   "run_roots": [

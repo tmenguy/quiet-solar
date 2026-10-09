@@ -13,7 +13,19 @@ from typing import Any
 import pytest
 from control_plane import db, faults, locks, merge_policy, tools
 
-from .conftest import ORCH, FakeClaude, FakeProbe, FakeRunner, agent, insert_node, insert_task, open_run, run_cli, sql
+from .conftest import (
+    NEXT,
+    ORCH,
+    FakeClaude,
+    FakeProbe,
+    FakeRunner,
+    agent,
+    insert_node,
+    insert_task,
+    open_run,
+    run_cli,
+    sql,
+)
 from .toolsim import Sim
 
 
@@ -303,7 +315,7 @@ class TestOutcomes:
 
     def test_schema_change_mid_call_is_not_recorded(self, w: W) -> None:
         def migrated(call: Any) -> Any:
-            sql(w.db, "PRAGMA user_version = 2")
+            sql(w.db, f"PRAGMA user_version = {NEXT}")
             from control_plane.runner import RunResult
 
             return RunResult(0, "[]", "")
