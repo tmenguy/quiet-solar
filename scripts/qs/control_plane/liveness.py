@@ -139,8 +139,8 @@ class ClaudeCli:
         self.runner = run or runner.Runner()
         self.exe = exe
 
-    def agents(self) -> list[Agent]:
-        res = self.runner.run([self.exe, "agents", "--json"], timeout=30)
+    def agents(self, timeout: float = 30) -> list[Agent]:
+        res = self.runner.run([self.exe, "agents", "--json"], timeout=timeout)
         if res.returncode != 0:
             raise errors.CpError(
                 "INTERNAL", f"claude agents --json exited {res.returncode}: {res.stderr.strip()[-200:]}"
@@ -168,16 +168,18 @@ class ClaudeCli:
             for e in data
         ]
 
-    def try_agents(self) -> list[Agent] | None:
+    def try_agents(self, timeout: float = 30) -> list[Agent] | None:
         """The listing, or ``None`` when it failed (unknown — never absence)."""
         try:
-            return self.agents()
+            return self.agents(timeout=timeout)
         except errors.CpError:
             return None
 
-    def spawn_bg(self, args: Sequence[str], *, cwd: Path) -> runner.RunResult:
+    def spawn_bg(self, args: Sequence[str], *, cwd: Path, timeout: float = 120) -> runner.RunResult:
         """``claude --bg <args>``, detached, with the run token removed from its environment."""
-        return self.runner.run([self.exe, "--bg", *args], cwd=cwd, env_remove=(TOKEN_ENV,), detach=True, timeout=120)
+        return self.runner.run(
+            [self.exe, "--bg", *args], cwd=cwd, env_remove=(TOKEN_ENV,), detach=True, timeout=timeout
+        )
 
     def resume_bg(self, session_id: str, message: str, *, cwd: Path) -> runner.RunResult:
         """The bare ``claude --bg --resume <id> "<msg>"`` — any extra flag forks a copy."""

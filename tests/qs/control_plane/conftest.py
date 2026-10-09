@@ -68,6 +68,7 @@ MODULES = (
     "detectors",
     "hookroute",
     "ciwatch",
+    "watchdog",
     "cli",
 )
 for _name in MODULES:
@@ -266,10 +267,12 @@ class FakeClaude(liveness.ClaudeCli):
         super().__init__(run)
         self.listing: list[liveness.Agent] | None = []
         self.listings = 0
+        self.last_timeout: float | None = None
         self.before_list: Callable[[], None] | None = None
 
-    def agents(self) -> list[liveness.Agent]:
+    def agents(self, timeout: float = 30) -> list[liveness.Agent]:
         self.listings += 1
+        self.last_timeout = timeout
         if self.before_list is not None:
             self.before_list()
         if self.listing is None:
