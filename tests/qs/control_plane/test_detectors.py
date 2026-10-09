@@ -948,3 +948,38 @@ class TestReviewFix05:
         assert ticks_taken > 1 and not detectors._overlap.walking and not detectors._overlap.failed_refs
         assert sum(1 for c in git.calls if c[0] == "rev-parse" and c[-1] == "refs/heads/QS_9") == 1
         assert capsys.readouterr().err.count("bad ref refs/heads/QS_9") == 3  # once per task (D, A1, Z2)
+
+
+# --------------------------------------------------------------------------- review fix #06 (K1)
+
+
+class TestReviewFix06:
+    @pytest.mark.parametrize("code", [124, 127])
+    def test_a_task_rev_parse_timeout_or_missing_git_aborts_the_walk(
+        self, conn, migrated, git, fake_clock, capsys, code
+    ) -> None:
+        r1, _ = open_run()
+        for i in range(1, 4):
+            insert_task(migrated, f"T{i}", r1, branch=f"QS_{i}", is_deliverable=1)
+            git.refs[f"refs/heads/QS_{i}"] = f"t{i}"
+            git.diffs[("m", f"t{i}")] = ["shared.py"]
+        kinds, _conds = detectors.detect_overlap(conn, fake_clock, activeloop.seams())
+        last = detectors._overlap.last
+        assert kinds and last
+        fake_clock.advance(detectors.OVERLAP_EVERY_S)
+        real = git.__call__
+
+        def respond(call: Call) -> RunResult:  # main resolves; T2's own branch tip does not
+            if call.argv[3] == "rev-parse" and call.argv[-1] == "refs/heads/QS_2":
+                git.calls.append(call.argv[3:])
+                return RunResult(code, "", "timed out")
+            return real(call)
+
+        activeloop.seams().runner.on(("git",), respond)  # type: ignore[attr-defined]
+        git.calls.clear()
+        assert detectors.detect_overlap(conn, fake_clock, activeloop.seams()) == detectors.NONE  # the H4 path
+        assert detectors._overlap.last == last and detectors._overlap.last_at == fake_clock.now()
+        assert not detectors._overlap.walking and not detectors._overlap.failed_refs  # an abort is not a bad ref
+        resolved = [c[-1] for c in git.calls if c[0] == "rev-parse"]
+        assert "refs/heads/main" in resolved and "refs/heads/QS_3" not in resolved  # the walk stopped at T2
+        assert f"exited {code}" in capsys.readouterr().err
