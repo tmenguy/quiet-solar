@@ -112,14 +112,20 @@ def norm_path(file: str | None) -> str | None:
     if ".." in path.split("/"):  # before normpath, which would fold `a/../b` into `b`
         raise errors.CpError("USAGE", f"`file` must be a relative path inside the repo: {file!r}")
     path = posixpath.normpath(unicodedata.normalize("NFC", path))
-    if path.startswith("/") or "\\" in path or _DRIVE.match(path) or _LINE_SUFFIX.search(path):
+    if path.startswith("/") or "\\" in path or _DRIVE.match(path) or _LINE_SUFFIX.search(path.rstrip()):
         raise errors.CpError("USAGE", f"`file` must be a relative path inside the repo, with no line: {file!r}")
     return None if path == "." else path
 
 
 def _text(value: str | None) -> str | None:
-    """Stripped; a blank string is ``None``."""
-    return (value.strip() or None) if value is not None else None
+    """Stripped; a blank string is ``None``; a lone surrogate (argv's ``surrogateescape``) is ``USAGE``."""
+    if value is None:
+        return None
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise errors.CpError("USAGE", f"not valid UTF-8: {value!r}") from exc
+    return value.strip() or None
 
 
 def _nfc(value: str | None) -> str | None:
@@ -282,7 +288,7 @@ def _validate_item(raw: Any, source: str, i: int) -> dict[str, Any]:
         "symbol": _nfc(_str(raw, "symbol", i)),
         "line_start": line_start,
         "line_end": line_end,
-        "reviewer": _str(raw, "reviewer", i),
+        "reviewer": _nfc(_str(raw, "reviewer", i)),
         "unchanged_lines": None if unchanged is None else int(unchanged),
         "relates_to": list(dict.fromkeys(relates)),
         "sha": sha,
@@ -665,7 +671,10 @@ def set_blast_radius(
 
 def blast_radius(conn: sqlite3.Connection, task_id: str, head_sha: str | None = None) -> dict[str, Any] | None:
     """Child 7's reader: the latest rating, or the latest for ``head_sha``; ``None`` when there is none."""
-    head_sha = _text(head_sha)
+    if head_sha is not None:
+        head_sha = _text(head_sha)
+        if head_sha is None:  # given but blank: no rating, never another head's
+            return None
     sql = "SELECT * FROM blast_radius WHERE task_id = ?" + ("" if head_sha is None else " AND head_sha = ?")
     params = (task_id,) if head_sha is None else (task_id, head_sha)
     return db.as_dict(conn.execute(sql + " ORDER BY id DESC LIMIT 1", params).fetchone())
@@ -802,8 +811,8 @@ def _render_blast_radius(conn: sqlite3.Connection, task_id: str) -> str:
     row = blast_radius(conn, task_id)
     if row is None:
         return EMPTY
-    reason = f" — {_plain(row['reason'])}" if row["reason"] else ""  # a paragraph: whitespace folded, no pipe escape
-    return f"`{row['value']}` at `{_code(_plain(row['head_sha']))}` (review {_plain(row['review'])}){reason}"
+    reason = f" — {_code(_plain(row['reason']))}" if row["reason"] else ""  # a paragraph: no pipe escape
+    return f"`{row['value']}` at `{_code(_plain(row['head_sha']))}` (review {_code(_plain(row['review']))}){reason}"
 
 
 def _plain(text: str) -> str:
@@ -811,7 +820,7 @@ def _plain(text: str) -> str:
 
 
 def _code(text: str) -> str:
-    """A value put in a code span: a backtick would close it early."""
+    """No backtick: inside a code span it would close it early, outside one it would open a stray one."""
     return text.replace("`", "")
 
 

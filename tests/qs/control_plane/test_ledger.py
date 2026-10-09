@@ -1124,6 +1124,37 @@ class TestReviewFix02:
         assert sections["Blast radius"](lw.conn, "T1") == "`ok` at `h1` (review G)"
 
 
+class TestReviewFix03:
+    def test_h1_a_blank_head_sha_reads_no_rating(self, lw: L) -> None:
+        ledger.set_blast_radius(
+            lw.conn, lw.clock, token=lw.token, task_id="T1", value="ok", head_sha="h1", review="G", reason=None
+        )
+        assert ledger.blast_radius(lw.conn, "T1", "  ") is None
+        assert ledger.blast_radius(lw.conn, "T1", "") is None
+        assert ledger.blast_radius(lw.conn, "T1") is not None
+
+    @pytest.mark.parametrize("file", ["a.py:42 /", "a.py:10-12 /."])
+    def test_h2_a_line_suffix_before_whitespace(self, lw: L, file: str) -> None:
+        assert code_of(lw.open, "T1", item(file=file)) == "USAGE"
+
+    def test_h3_a_lone_surrogate_in_a_flag(self, lw: L) -> None:
+        a = lw.one("T1")
+        assert code_of(lw.state, a, "rejected", reason="x\udcff") == "USAGE"
+        assert code_of(lw.classify, a, "must_fix", note="\udcff") == "USAGE"
+        assert code_of(lw.round, head="h\udcff") == "USAGE"
+        assert lw.row(a)["state"] == "open"
+
+    def test_h4_the_reviewer_is_nfc(self, lw: L) -> None:
+        (a,) = lw.open("T1", item(reviewer="re\u0301"))
+        assert lw.open("T1", item(reviewer="r\u00e9")) == [a]
+
+    def test_h5_backticks_in_the_blast_radius_text(self, lw: L) -> None:
+        ledger.set_blast_radius(
+            lw.conn, lw.clock, token=lw.token, task_id="T1", value="ok", head_sha="h", review="G`1", reason="a `b"
+        )
+        assert dict(export_sections())["Blast radius"](lw.conn, "T1") == "`ok` at `h` (review G1) — a b"
+
+
 def export_sections() -> list[Any]:
     from control_plane import export
 

@@ -267,7 +267,7 @@ An unknown key, a wrong type, a value off its vocabulary, `line_start > line_end
 
 `ledger.convergence` on an unknown task is `NOT_FOUND`.
 
-**`blast-radius set`** appends a rating and answers `{"ok": true, "id", "task_id", "value", "head_sha"}`. `ledger.blast_radius(conn, task_id, head_sha=None)` is child 7's reader: the latest rating, or the latest for that sha, else `None`.
+**`blast-radius set`** appends a rating and answers `{"ok": true, "id", "task_id", "value", "head_sha"}`. `ledger.blast_radius(conn, task_id, head_sha=None)` is child 7's reader: the latest rating (`head_sha` omitted), or the latest for that sha, else `None`; a given but blank `head_sha` is `None`, never another head's rating.
 
 ### Reading the ledger
 
