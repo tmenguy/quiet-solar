@@ -381,3 +381,24 @@ def test_update_fields_refuses_deliverable_fields_on_an_item(migrated, run, conn
         None,
         "QS_7_1",
     )
+
+
+# --------------------------------------------------------------------------- QS-405 D7: the lane of a task
+
+
+@pytest.mark.parametrize(("kind", "target"), list(itertools.product(tasks.KINDS, ("product", "factory"))))
+def test_derive_lane_matches_the_label_lane(kind: str, target: str) -> None:
+    import targets  # scripts/qs is on sys.path (conftest)
+
+    assert set(targets.TARGETS) == {"product", "factory"}
+    if kind == "epic":
+        labels = [f"target:{target}", "scale:epic"]
+    else:
+        labels = [f"kind:{kind}", f"target:{target}", "scale:task"]
+    assert tasks.derive_lane(kind, target) == targets.parse_axes(labels)["lane"]
+
+
+def test_derive_lane_without_a_target_is_none() -> None:
+    assert tasks.derive_lane("feature", None) is None
+    assert tasks.derive_lane("feature", "") is None
+    assert tasks.derive_lane("feature", "nope") == "feature-nope"  # free text: the policy refuses it (D5)

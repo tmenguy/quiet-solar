@@ -13,7 +13,19 @@ from typing import Any
 import pytest
 from control_plane import db, faults, locks, merge_policy, tools
 
-from .conftest import ORCH, FakeClaude, FakeProbe, FakeRunner, agent, insert_node, insert_task, open_run, run_cli, sql
+from .conftest import (
+    ORCH,
+    FakeClaude,
+    FakeProbe,
+    FakeRunner,
+    agent,
+    insert_node,
+    insert_task,
+    models,
+    open_run,
+    run_cli,
+    sql,
+)
 from .toolsim import Sim
 
 
@@ -459,6 +471,185 @@ class TestSpawn:
         sql(w.db, "UPDATE tasks SET run_id = NULL WHERE id = 'T2'")
         sql(w.db, "UPDATE tasks SET worktree = 'x' WHERE id = 'T2'")
         assert spawn(w, "x", task="T2")[1]["error"] == "INVALID_STATE"  # no run
+
+
+def _launch_argv(w: W) -> list[str]:
+    [launch] = w.runner.matching("claude", "--bg")
+    return list(launch.argv)
+
+
+def _settings(argv: list[str]) -> dict[str, Any]:
+    settings: dict[str, Any] = json.loads(argv[argv.index("--settings") + 1])
+    return settings
+
+
+def _assert_policy_argv(w: W, agent_name: str, lane: str | None) -> dict[str, Any]:
+    """The argv carries the policy's model and effort; the hooks part is untouched."""
+    from control_plane import hooks
+
+    model, effort = models.spawn_policy(agent_name, lane)
+    argv = _launch_argv(w)
+    assert argv[:5] == ["claude", "--bg", "--agent", agent_name, "-n"]
+    assert argv[5].startswith("r1-T") and argv[5].endswith("-g1")
+    assert argv[6:8] == ["--model", model]
+    settings = _settings(argv)
+    assert settings.get("effortLevel") == effort
+    if effort is None:
+        assert "effortLevel" not in settings
+    base = hooks.hooks_settings("node", w.main)
+    assert "effortLevel" not in base
+    assert {k: v for k, v in settings.items() if k != "effortLevel"} == base
+    return settings
+
+
+class TestSpawnPolicy:
+    """QS-405 D8 / AC8 — a spawn with no caller model reads the model policy."""
+
+    @pytest.mark.parametrize(
+        ("cols", "lane"),
+        [
+            ({"lane": "bug-product"}, "bug-product"),
+            ({"target": "factory"}, "feature-factory"),
+            ({}, None),
+        ],
+    )
+    def test_a_deliverable_spawn_takes_the_policy_for_its_lane(self, w: W, cols: dict[str, str], lane: Any) -> None:
+        for col, value in cols.items():
+            sql(w.db, f"UPDATE tasks SET {col} = ? WHERE id = 'T1'", [value])
+        code, out = spawn(w, "s1")
+        assert code == 0, out
+        settings = _assert_policy_argv(w, "qs-node", lane)
+        assert settings["effortLevel"] == "high"
+
+    def test_the_lane_picks_the_class(self) -> None:
+        assert models.spawn_policy("qs-node", "bug-product") != models.spawn_policy("qs-node", "feature-factory")
+
+    def test_an_item_spawn_takes_its_deliverables_lane(self, w: W) -> None:
+        sql(w.db, "UPDATE tasks SET lane = 'bug-product' WHERE id = 'T1'")
+        wt = sql(w.db, "SELECT worktree FROM tasks WHERE id = 'T1'")[0][0]
+        insert_task(w.db, "T2", w.run, deliverable_id="T1", item_k=1, worktree=wt, lane="feature-factory")
+        code, out = spawn(w, "s1", task="T2")
+        assert code == 0, out
+        _assert_policy_argv(w, "qs-node", "bug-product")
+
+    def test_a_fast_row_sends_no_effort(self, w: W) -> None:
+        assert models.resolve(None, "qs-finish-task") == "fast"
+        code, out = tool(
+            w, "spawn", "s1", prompt_file=w.files["prompt"], agent="qs-finish-task", permission_mode="auto"
+        )
+        assert code == 0, out
+        settings = _assert_policy_argv(w, "qs-finish-task", None)
+        assert "effortLevel" not in settings
+
+    def test_a_caller_model_wins_and_sends_no_effort(self, w: W) -> None:
+        from control_plane import hooks
+
+        sql(w.db, "UPDATE tasks SET lane = 'bug-product' WHERE id = 'T1'")
+        code, out = spawn(w, "s1", model="claude-sonnet-5")
+        assert code == 0, out
+        argv = _launch_argv(w)
+        assert argv[6:8] == ["--model", "claude-sonnet-5"]
+        assert _settings(argv) == hooks.hooks_settings("node", w.main)
+
+    def _assert_released_usage(self, w: W, code: int, out: Any, match: str) -> None:
+        assert code == 2 and out["error"] == "USAGE", out
+        assert match in out["detail"]
+        assert call_row(w, "spawn", "s1") is None  # the claim was released
+        assert sql(w.db, "SELECT count(*) FROM nodes")[0][0] == 0
+        assert w.sim.effects("claude", "--bg") == 0
+
+    def test_an_invalid_lane_is_refused_before_any_effect(self, w: W) -> None:
+        sql(w.db, "UPDATE tasks SET lane = 'bogus' WHERE id = 'T1'")
+        code, out = spawn(w, "s1")
+        self._assert_released_usage(w, code, out, "lane 'bogus' is not one of models.LANES")
+        sql(w.db, "UPDATE tasks SET lane = NULL WHERE id = 'T1'")
+        assert spawn(w, "s1")[0] == 0  # the same key works again
+
+    def test_an_unknown_agent_is_refused_before_any_effect(self, w: W) -> None:
+        code, out = tool(w, "spawn", "s1", prompt_file=w.files["prompt"], agent="qs-nope", permission_mode="auto")
+        self._assert_released_usage(w, code, out, "no model policy row for agent 'qs-nope'")
+
+    def test_no_resolver_is_refused_before_any_effect(self, w: W, deps: Any) -> None:
+        deps.resolve_model = None
+        code, out = spawn(w, "s1")
+        self._assert_released_usage(w, code, out, "no model policy resolver")
+        assert spawn(w, "s2", model="claude-sonnet-5")[0] == 0  # a caller model needs no resolver
+
+    def test_a_resolution_failing_at_launch_spends_the_key(self, w: W, deps: Any) -> None:
+        calls: list[tuple[str, str | None]] = []
+
+        def flaky(stem: str, lane: str | None) -> tuple[str, str | None]:
+            calls.append((stem, lane))
+            if len(calls) > 1:
+                raise ValueError("policy changed under the takeover")
+            return models.spawn_policy(stem, lane)
+
+        deps.resolve_model = flaky
+        code, out = spawn(w, "s1")
+        assert code == 1 and out["result"]["error"] == "TOOL_FAILED", out
+        assert "policy changed under the takeover" in out["detail"]
+        assert call_row(w, "spawn", "s1")["state"] == "failed"
+        assert w.sim.effects("claude", "--bg") == 0
+        node = node_row(w, "N1")
+        assert node["state"] == "spawning" and node["launch_at"] is None
+        assert len(calls) == 2
+        # Recovery, as for any failed launch: the key is spent, a new key needs --replace.
+        deps.resolve_model = models.spawn_policy
+        assert spawn(w, "s1")[1]["result"]["error"] == "TOOL_FAILED"
+        assert spawn(w, "s2")[1]["result"]["error"] == "CONFLICT"
+        resumed = tool(w, "resume", "r1", message_file=w.files["msg"])[1]
+        assert resumed["result"]["error"] == "INVALID_STATE" and "is spawning" in resumed["detail"], resumed
+        code, out = spawn(w, "s3", replace=True)
+        assert code == 0, out
+        assert node_row(w, "N1")["state"] == "superseded" and out["result"]["generation"] == 2
+
+    @staticmethod
+    def _broken(stem: str, lane: str | None) -> tuple[str, str | None]:
+        raise ImportError("models is half-edited")
+
+    @pytest.mark.parametrize("broken", [False, True])
+    def test_a_takeover_that_adopts_a_late_launch_ignores_a_policy_refusal(self, w: W, deps: Any, broken: bool) -> None:
+        """The adoption launches nothing, so the policy has no say in it (review fixes #01, #02)."""
+        w.sim.list_on_launch = False
+        assert spawn(w, "s1")[0] == 6
+        w.clock.advance(61)
+        reap(w)
+        assert node_row(w, "N1")["state"] == "reaped"
+        w.claude.listing = [agent("S-first", "r1-T1-g1", id="first")]  # the first launch came up late
+        # A takeover through a Ctx without a resolver, or a policy that fails to import.
+        deps.resolve_model = self._broken if broken else None
+        code, out = spawn(w, "s1")
+        assert code == 0, out
+        assert w.sim.effects("claude", "--bg") == 1  # adopted: no relaunch
+        assert node_row(w, "N1")["state"] == "running"
+
+    def test_a_takeover_that_relaunches_still_needs_the_policy(self, w: W, deps: Any) -> None:
+        w.sim.list_on_launch = False
+        assert spawn(w, "s1")[0] == 6
+        w.clock.advance(61)
+        reap(w)
+        deps.resolve_model = None
+        code, out = spawn(w, "s1")
+        assert code == 2 and out["error"] == "USAGE" and "no model policy resolver" in out["detail"], out
+        assert node_row(w, "N1")["state"] == "reaped"  # the re-take rolled back
+        assert w.sim.effects("claude", "--bg") == 1
+        deps.resolve_model = models.spawn_policy
+        w.sim.list_on_launch = True
+        assert spawn(w, "s1")[0] == 0
+        assert node_row(w, "N1")["state"] == "running" and w.sim.effects("claude", "--bg") == 2
+
+    def test_a_non_policy_failure_still_propagates_where_a_launch_follows(self, w: W, deps: Any) -> None:
+        """D6: nothing is mapped — an import failure is INTERNAL, deferred only past the adopt branch."""
+        deps.resolve_model = self._broken
+        code, out = spawn(w, "s1")
+        assert out["error"] == "INTERNAL", out
+        assert sql(w.db, "SELECT count(*) FROM nodes")[0][0] == 0
+        assert w.sim.effects("claude", "--bg") == 0
+        assert call_row(w, "spawn", "s1")["state"] == "started"  # left for a takeover (D6)
+        deps.resolve_model = models.spawn_policy  # main's models.py is fixed
+        code, out = spawn(w, "s1")  # the holder has exited: the same key takes the claim over
+        assert code == 0, out
+        assert w.sim.effects("claude", "--bg") == 1
 
 
 class TestResume:

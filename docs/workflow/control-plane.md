@@ -220,7 +220,7 @@ Every tool runs through `run_recorded`:
 1. Every `*_file` argument is read **once**, when the call starts (before the token check), into a cache. Then verify the token. A call already finished under the key is replayed at once, before its steps are built: a deleted argument file or a task column cleared meanwhile cannot break the replay. Otherwise a non-regular file (a FIFO, `/dev/stdin`) or a file that is not UTF-8 is `USAGE`, and a fresh call with a missing file is `USAGE`, before the claim and before any effect. A call whose in-flight holder released the key meanwhile becomes a fresh call at the claim, and needs every file too.
 2. Claim `tool_calls(tool, key)` before any effect.
 3. Probe: the probe is authoritative for each step it reports, done or not done.
-4. Run the missing steps under the locks or the cap, re-checking the token and lock ownership before each step. A step reads its file from the cache only when it runs, so a takeover whose effect step is already recorded (or found by the probe) never needs the file again. `spawn` and `resume` read their file before they stamp `launch_at`, so a takeover with the file gone is `USAGE` with nothing launched, and the same key works once the file is back.
+4. Run the missing steps under the locks or the cap, re-checking the token and lock ownership before each step. A step reads its file from the cache only when it runs, so a takeover whose effect step is already recorded (or found by the probe) never needs the file again. `spawn` and `resume` read their file before they stamp `launch_at`, so a takeover with the file gone is `USAGE` with nothing launched, and the same key works once the file is back. A `spawn` with no caller `model` also resolves its model policy again there, before `launch_at` (QS-405): a refusal at that point fails the call (`TOOL_FAILED`, nothing launched).
 5. Record the call `succeeded` or `failed`.
 
 **Keys** are chosen by the caller: `msg:<id>` for a popped message, or `task:<id>:<purpose>` otherwise. A key is 1 to 200 characters out of `[A-Za-z0-9._:/-]` (`USAGE` otherwise), so it can never break a `gh` search query. Replaying the same key never repeats an effect. The key's `args_hash` covers the arguments and the content of every `*_file` argument: the same key with an edited file is a `CONFLICT`.
@@ -232,7 +232,7 @@ A probe that cannot tell (a failed or unparseable `gh` listing or `gh pr view`) 
 | `worktree-create` (`phase`) | run | `<MAIN>` | `main-checkout` | none; `setup_task.py` is idempotent |
 | `worktree-cleanup` | run | `<MAIN>` | `main-checkout` | directory absent and unregistered. Refuses the main checkout and a directory whose `.git` is not a file (`POLICY_REFUSED`); a path another non-terminal task shares only clears this task's column (`shared_with`) |
 | `gate` (`mode`, `paths`) | run, or node (own task) | worktree | `gates` slot | none; safe to re-run |
-| `spawn` (`agent`, `model?`, `permission_mode`, `prompt_file`, `replace?`) | run | worktree | node cap (`--replace` frees the replaced node's place first) | the reserved row through `spawn_tool_key`, and the listing by name. A launch never listed within `LAUNCH_SETTLE_S` is reaped. If the replay that re-takes the reaped row sees its launch listed after all, it adopts it (same name, same nonce). Otherwise it relaunches: the relaunch rotates the row's nonce (the first launch's token is `STALE_TOKEN`) and its name (`<name>-r<n>`), so a late first launch is never adopted, and a listing that shows it later gets it a best-effort `claude stop <id>` (an adopted launch too stops its listed earlier launches). Only a listed session whose `cwd` resolves to the task's worktree is stopped: a same-named session of another checkout or DB, or one listed without a `cwd`, is left alone |
+| `spawn` (`agent`, `model?`, `permission_mode`, `prompt_file`, `replace?`) | run | worktree | node cap (`--replace` frees the replaced node's place first) | **The model (QS-405).** A caller `model?` is an override: passed as `--model` verbatim, with no `effortLevel` sent. Otherwise the policy (`models.spawn_policy`, of the running tree — `<MAIN>`'s) gives the `--model` and the `--settings` `effortLevel` for the agent under the task's lane: the deliverable's `lane`, else derived from its `kind` and `target` (`nodes.lane_of`). It is checked first in `reserve` (an unknown agent or an invalid lane is `USAGE`, released, and any other failure is re-raised unchanged (an import failure is `INTERNAL`), both raised before a re-take or a new row; adopting a late launch launches nothing and needs no policy) and resolved again in `launch`. With no `effortLevel` sent, the session inherits the worktree's pinned effort (`.claude/settings.local.json`) or the user's: the spawn cannot clear a pinned effort. A stem whose row exists only on an unmerged branch is `USAGE`. **The probe:** the reserved row through `spawn_tool_key`, and the listing by name. A launch never listed within `LAUNCH_SETTLE_S` is reaped. If the replay that re-takes the reaped row sees its launch listed after all, it adopts it (same name, same nonce). Otherwise it relaunches: the relaunch rotates the row's nonce (the first launch's token is `STALE_TOKEN`) and its name (`<name>-r<n>`), so a late first launch is never adopted, and a listing that shows it later gets it a best-effort `claude stop <id>` (an adopted launch too stops its listed earlier launches). Only a listed session whose `cwd` resolves to the task's worktree is stopped: a same-named session of another checkout or DB, or one listed without a `cwd`, is left alone |
 | `resume` (`message_file`) | run | worktree | node cap | the row through `spawn_tool_key`, and the listing by name and `startedAt` |
 | `issue-create` (`title`, `body_file`, `labels`) | run | `<MAIN>` | — | the exact `<!-- qs-cp-key: … -->` marker in the issue bodies: first a consistent listing of the 100 newest issues (the search index lags), then, on a miss, `gh issue list --search` (`--limit 100`) |
 | `pr-create` (`title`, `summary_file`) | run, or node (own task) | worktree | — | the marker in the PR bodies of the branch |
@@ -340,7 +340,7 @@ leftovers are cleaned by `item-cleanup`, item by item.
 | what happened | the call | the caller sees |
 |---|---|---|
 | a step failed, or the state drifted | recorded `failed`; the key is spent | `TOOL_FAILED` (exit 1), with `result.error` |
-| `BUSY`, `POLICY_REFUSED`, `STALE_TOKEN`, `STOPPED` or `USAGE` (an argument file gone on a takeover) before any effect | claim released, so the same key can be retried | that code |
+| `BUSY`, `POLICY_REFUSED`, `STALE_TOKEN`, `STOPPED` or `USAGE` (an argument file gone on a takeover; the model policy refuses the agent or lane — `tool spawn` with no caller model) before any effect | claim released, so the same key can be retried | that code |
 | the same codes after an effect | left `started`; a same-key replay takes it over once this process has exited | that code |
 | another process took the claim over mid-call | left to that process | `CONFLICT` (exit 8) with `claim_taken_over: true` — never `STALE_TOKEN`, whose exit 3 tells a session to end |
 
@@ -378,6 +378,8 @@ def register(spec: ToolSpec) -> None   # CONFLICT if the name exists
 def invoke(name, *, key, task_id, args, token, actor, ctx=None) -> dict
 ```
 
+- `invoke(ctx=None)` builds `default_ctx()`, which has **no model-policy resolver** (QS-405): a `spawn` through it with no caller `model` is `USAGE`. Pass a `Ctx` with `resolve_model` set (the CLI passes `Deps.resolve_model`).
+
 - `argv_step(...)`, `task_state_guard(...)` and `compose(...)` are helpers. They are not frozen.
 - Every registered tool is reachable as `cp.py tool <name> --task T --key K [--args-file F] --token …`.
 
@@ -386,7 +388,7 @@ def invoke(name, *, key, task_id, args, token, actor, ctx=None) -> dict
 | hook | wired | input → output | failure |
 |---|---|---|---|
 | `Stop` (orchestrator) | child 9 writes `hooks-settings --role orchestrator` into main's pin; **6a must not ship before** | stdin `session_id` → `{"decision": "block", "reason": …}` when a message waits (pop it), or once when no `wait` runs; a loop guard allows and records a `hook_events` `alert` | fail open |
-| `PreToolUse` (every registered session; matcher `Bash\|Edit\|Write\|SendMessage`) | nodes: `claude --bg --settings '<hooks-settings --role node>'` at spawn | `tool_name`, `tool_input` → `hookSpecificOutput.permissionDecision: "deny"` for DB access outside `cp.py` (any session), `gh pr merge` (registered sessions), `SendMessage` from a superseded or stopped session | fail open |
+| `PreToolUse` (every registered session; matcher `Bash\|Edit\|Write\|SendMessage`) | nodes: `claude --bg --model <m> --settings '<hooks-settings --role node, plus the policy's effortLevel>'` at spawn | `tool_name`, `tool_input` → `hookSpecificOutput.permissionDecision: "deny"` for DB access outside `cp.py` (any session), `gh pr merge` (registered sessions), `SendMessage` from a superseded or stopped session | fail open |
 | `pre-push` (git) | a common-dir shim installed by `tool worktree-create` (marker `# qs-control-plane pre-push shim v2`) | git's ref lines → exit 1 refuses `QS_<N>_<k>` refs everywhere, and, in a registered worktree, a stopped node, a foreign ref, or a missing or stale `QS_CP_TOKEN`. On a path several tasks registered, it judges a non-terminal task first, newest first | fail closed only for a proven-registered worktree |
 
 **The DB-access rule** (`PreToolUse`, Bash): a segment that names `harness_state.db` is denied unless it starts with a read-only program (`grep`, `rg`, `git`, `ls`, `sed -n`, `cat`, `head`, `tail`, `wc`, `find`, `echo`) or is a `cp.py` call. Even then:
@@ -394,7 +396,7 @@ def invoke(name, *, key, task_id, args, token, actor, ctx=None) -> dict
 - a redirect onto the DB file itself (`harness_state.db`, `-wal`, `-shm`) is denied, inside a `cp.py` segment too; a sibling such as `> harness_state.db.json`, `.bak`, `-wal.bak` or `-backup.sql` is allowed;
 - `find` stays read-only only without `-delete`, `-exec`, `-execdir`, `-ok`, `-okdir`, `-fprint`, `-fprint0`, `-fprintf` or `-fls`, quoted or not (`'-delete'` is `-delete`).
 
-Whether `--settings` hooks survive a bare `claude --bg --resume` is unverified, an open point for 6b. `pre-push` is git-level, so it applies regardless.
+Whether `--settings` hooks survive a bare `claude --bg --resume` is unverified, an open point for 6b. So are two model points (QS-405), which 6b answers and records here: whether a resumed node keeps the model and effort it was spawned with (`resume` passes no flag — any flag forks a copy), and whether `effortLevel` through `--settings` takes effect on a `--bg` session at all. `pre-push` is git-level, so it applies regardless.
 
 The shim and the settings commands run `<MAIN>/venv/bin/python`. Without it they fall back to `python3` only if it is 3.14 or newer (the package's syntax); otherwise they print one warning line and allow.
 
@@ -445,6 +447,7 @@ Most are overridable by a function argument. These are module-level only (tests 
 | `Popen` | `subprocess.Popen`, for `ensure` | a recorder |
 | `faults.hit(name)` | no-op | `faults.arm(name, exc, skip=n)` |
 | `merge_policy` | refuses | `install(fn)` |
+| `Deps.resolve_model` → `Ctx.resolve_model` (QS-405) | `cli._policy_resolver`: `models.spawn_policy`, imported at call time — the Control Plane's one import outside the standard library (a test pins it) | the same resolver, or a stand-in; child 15 reuses the seam |
 | `export.LEDGER_SECTIONS` | empty: "No ledger recorded." | #375 fills it |
 | the daemon's `tick_hooks` | none | child 14's active loop. A tick hook must return within `STALE_AFTER_S` or beat the lease itself (`daemon.beat(conn, clock)`); the daemon beats before and after every hook. `ensure` SIGKILLs only a daemon whose heartbeat is at least `STALE_AFTER_S` old, so a hook that keeps this contract is never killed |
 
@@ -468,4 +471,5 @@ Most are overridable by a function argument. These are module-level only (tests 
 - **A permanently unknown `ps`.** When `ps` keeps failing, an older daemon's liveness stays unknown. If nothing holds the singleton `flock`, `ensure` knows it is gone and starts the new daemon; while the `flock` is held, it never signals it and answers `restart_pending` (or starts a new daemon for a stale same-schema lease) until `ps` answers again.
 - **The hook `session_id` assumption.** The hook's stdin `session_id`, `$CLAUDE_CODE_SESSION_ID` and the `sessionId` of `claude agents --json` are assumed to be the same identifier. The last two were verified equal on 2026-10-04; the hook field is unverified.
 - **`--settings` hooks after a bare resume:** unverified.
+- **The model and effort of a resumed node, and `effortLevel` through `--settings` on a `--bg` session:** unverified (QS-405; 6b's resume check records the result).
 - **The orchestrator's hooks are unwired until child 9.**

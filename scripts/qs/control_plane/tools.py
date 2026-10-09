@@ -47,6 +47,10 @@ GH_LIST_LIMIT = "100"
 _RELAUNCH_RE = re.compile(r"(?P<base>.*?)(?:-r(?P<n>\d+))?")  # spawn names end in -g<generation>
 NON_TERMINAL_STATES = frozenset(set(tasks.TRANSITIONS) - tasks.TERMINAL)
 
+# ``(agent, lane) -> (model, effort)``: the model policy a no-model ``tool spawn`` reads (QS-405 D6).
+# Raises ``ValueError`` for an agent with no policy row or a lane outside the policy's lanes.
+ResolveModel = Callable[[str, str | None], tuple[str, str | None]]
+
 
 class StepFailed(Exception):
     """A step's own failure: the call is recorded ``failed`` and the key is spent."""
@@ -68,6 +72,7 @@ class Ctx:
     probe: liveness.ProcessProbe
     claude: liveness.ClaudeCli
     main: Path
+    resolve_model: ResolveModel | None = None  # the model policy of a no-model spawn (QS-405 D6)
 
 
 class _StepRunner(runner.Runner):
@@ -996,6 +1001,22 @@ def _node_token(conn: sqlite3.Connection, node_id: str) -> str:
     return tokens.mint("node", row["id"], row["generation"], row["nonce"])
 
 
+def _spawn_policy(ctx: StepCtx) -> tuple[str, str | None]:
+    """``(model, effort)`` of a no-model spawn: the policy for the agent under the task's lane (QS-405 D8).
+
+    Raises ``ValueError`` with no resolver; the resolver's own ``ValueError`` (an unknown agent, an
+    invalid lane) propagates unchanged. The lane is read in a transaction, the resolver called after it:
+    no DB lock is held across its import.
+    """
+    resolver = ctx._call.ctx.resolve_model
+    if resolver is None:
+        raise ValueError("no model policy resolver")
+    with ctx.write() as conn:
+        lane = nodes.lane_of(conn, ctx.task["id"])
+    policy: tuple[str, str | None] = resolver(str(ctx.args["agent"]), lane)
+    return policy
+
+
 def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
     wt = Path(_need(task, "worktree"))
     run_id = _need(task, "run_id")
@@ -1007,13 +1028,27 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
     replace = bool(args.get("replace", False))
 
     def reserve(ctx: StepCtx) -> None:
+        # A pre-check, resolved outside the transaction: a refusal is USAGE before any effect, so the
+        # claim is released. Any failure is raised only where a launch follows — an adoption launches
+        # nothing. A non-ValueError (an import failure) is re-raised unchanged: INTERNAL (D6).
+        refusal: Exception | None = None
+        if not model:
+            try:
+                _spawn_policy(ctx)
+            except ValueError as exc:
+                refusal = errors.CpError("USAGE", str(exc))
+                refusal.__cause__ = exc
+            except Exception as exc:  # noqa: BLE001 — deferred past the adopt branch, then re-raised as is
+                refusal = exc
         listing, alive = _reserve_prelude(ctx)
-        adopted = reserve_tx(ctx, listing, alive)
+        adopted = reserve_tx(ctx, listing, alive, refusal)
         if adopted is not None:  # after the write transaction; best-effort, the stop never raises
             assert listing is not None
             _stop_superseded(ctx, listing, adopted)
 
-    def reserve_tx(ctx: StepCtx, listing: list[liveness.Agent] | None, alive: dict[str, bool]) -> str | None:
+    def reserve_tx(
+        ctx: StepCtx, listing: list[liveness.Agent] | None, alive: dict[str, bool], refusal: Exception | None
+    ) -> str | None:
         """The reservation transaction; returns the adopted launch's name, else ``None``."""
         skey = f"{ctx.tool}/{ctx.key}"
         with ctx.write() as conn:
@@ -1029,6 +1064,8 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
                 ctx._call.outputs["identify"] = {"session_id": late.session_id, "short_id": late.id}
                 ctx.record_output({"node_id": own["id"], "name": own["name"]})
                 return str(own["name"])
+            if refusal is not None:  # both branches below launch: the policy must allow it
+                raise refusal
             if own is not None:  # our own row, reaped meanwhile: re-take it (the guard allows only this)
                 locks.admit_node(conn, ctx.clock, listing=listing, holders_alive=alive, limit=limit)
                 # A new nonce voids the first launch's token, a new name keeps a late first launch from being
@@ -1091,18 +1128,28 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
 
     def launch(ctx: StepCtx) -> dict[str, Any]:
         prompt = arg_file_text(ctx, "prompt_file")  # before `_launch` writes launch_at: a bad file launches nothing
+        # A caller model wins and sends no effort. Otherwise the policy is resolved again here, before
+        # `_launch` writes launch_at: the probe rewrites reserve's output, so nothing is carried over.
+        launch_model: str | None = str(model) if model else None
+        effort: str | None = None
+        if launch_model is None:
+            try:
+                launch_model, effort = _spawn_policy(ctx)
+            except ValueError as exc:  # like a failed `claude --bg`: the key is spent, nothing launched
+                raise StepFailed(f"model policy: {exc}") from exc
 
         def start(row: sqlite3.Row) -> runner.RunResult:
             with ctx.write() as conn:
                 token = _node_token(conn, row["id"])
-            settings = json.dumps(hooks.hooks_settings("node", ctx.main), sort_keys=True)
+            settings = json.dumps(
+                {**hooks.hooks_settings("node", ctx.main), **({"effortLevel": effort} if effort else {})},
+                sort_keys=True,
+            )
             text = (
                 f"{prompt}\n\nControl Plane: {ctx.main}/scripts/qs/cp.py · run {row['run_id']} · task {row['task_id']}"
                 f" · token {token}"
             )
-            argv = ["--agent", str(args["agent"]), "-n", row["name"]]
-            if model:
-                argv += ["--model", str(model)]
+            argv = ["--agent", str(args["agent"]), "-n", row["name"], "--model", str(launch_model)]
             argv += [
                 "--permission-mode",
                 str(args["permission_mode"]),

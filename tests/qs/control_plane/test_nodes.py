@@ -128,3 +128,24 @@ class TestCommands:
     def test_node_cannot_stop_or_take_over(self, world) -> None:
         assert run_cli("node", "stop", "--task", "T1", "--token", world["node"])[1]["error"] == "CONFLICT"
         assert run_cli("node", "take-over", "--task", "T1", "--token", world["node"])[1]["error"] == "CONFLICT"
+
+
+# --------------------------------------------------------------------------- QS-405 D7: lane_of
+
+
+def test_lane_of_reads_the_deliverable(migrated: Path, conn) -> None:
+    run_id, _ = open_run()
+    insert_task(migrated, "D1", run_id, is_deliverable=1, lane="bug-product", target="factory")
+    insert_task(migrated, "D2", run_id, is_deliverable=1, target="factory")
+    insert_task(migrated, "S1", run_id)  # standalone: is_deliverable=0, no deliverable_id
+    insert_task(migrated, "I1", run_id, deliverable_id="D1", item_k=1, lane="feature-factory", target="product")
+    assert nodes.lane_of(conn, "D1") == "bug-product"  # the lane column wins over kind/target
+    assert nodes.lane_of(conn, "D2") == "feature-factory"  # derived from kind + target
+    assert nodes.lane_of(conn, "S1") is None  # neither
+    assert nodes.lane_of(conn, "I1") == "bug-product"  # an item: its deliverable's lane, its own ignored
+
+
+def test_lane_of_an_empty_lane_column_derives(migrated: Path, conn) -> None:
+    run_id, _ = open_run()
+    insert_task(migrated, "D1", run_id, is_deliverable=1, lane="", kind="bug", target="product")
+    assert nodes.lane_of(conn, "D1") == "bug-product"
