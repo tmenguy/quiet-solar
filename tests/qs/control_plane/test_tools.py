@@ -597,19 +597,29 @@ class TestSpawnPolicy:
         deps.resolve_model = models.spawn_policy
         assert spawn(w, "s1")[1]["result"]["error"] == "TOOL_FAILED"
         assert spawn(w, "s2")[1]["result"]["error"] == "CONFLICT"
+        resumed = tool(w, "resume", "r1", message_file=w.files["msg"])[1]
+        assert resumed["result"]["error"] == "INVALID_STATE" and "is spawning" in resumed["detail"], resumed
         code, out = spawn(w, "s3", replace=True)
         assert code == 0, out
         assert node_row(w, "N1")["state"] == "superseded" and out["result"]["generation"] == 2
 
-    def test_a_takeover_that_adopts_a_late_launch_ignores_a_policy_refusal(self, w: W, deps: Any) -> None:
-        """The adoption launches nothing, so the policy has no say in it (review fix #01)."""
+    @staticmethod
+    def _broken(stem: str, lane: str | None) -> tuple[str, str | None]:
+        raise ImportError("models is half-edited")
+
+    @pytest.mark.parametrize("broken", [False, True])
+    def test_a_takeover_that_adopts_a_late_launch_ignores_a_policy_refusal(
+        self, w: W, deps: Any, broken: bool
+    ) -> None:
+        """The adoption launches nothing, so the policy has no say in it (review fixes #01, #02)."""
         w.sim.list_on_launch = False
         assert spawn(w, "s1")[0] == 6
         w.clock.advance(61)
         reap(w)
         assert node_row(w, "N1")["state"] == "reaped"
         w.claude.listing = [agent("S-first", "r1-T1-g1", id="first")]  # the first launch came up late
-        deps.resolve_model = None  # e.g. a takeover through a Ctx without a resolver
+        # A takeover through a Ctx without a resolver, or a policy that fails to import.
+        deps.resolve_model = self._broken if broken else None
         code, out = spawn(w, "s1")
         assert code == 0, out
         assert w.sim.effects("claude", "--bg") == 1  # adopted: no relaunch
@@ -629,6 +639,14 @@ class TestSpawnPolicy:
         w.sim.list_on_launch = True
         assert spawn(w, "s1")[0] == 0
         assert node_row(w, "N1")["state"] == "running" and w.sim.effects("claude", "--bg") == 2
+
+    def test_a_non_policy_failure_still_propagates_where_a_launch_follows(self, w: W, deps: Any) -> None:
+        """D6: nothing is mapped — an import failure is INTERNAL, deferred only past the adopt branch."""
+        deps.resolve_model = self._broken
+        code, out = spawn(w, "s1")
+        assert out["error"] == "INTERNAL", out
+        assert sql(w.db, "SELECT count(*) FROM nodes")[0][0] == 0
+        assert w.sim.effects("claude", "--bg") == 0
 
 
 class TestResume:

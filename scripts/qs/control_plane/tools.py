@@ -1029,13 +1029,16 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
 
     def reserve(ctx: StepCtx) -> None:
         # A pre-check, resolved outside the transaction: a refusal is USAGE before any effect, so the
-        # claim is released. It is raised only where a launch follows — an adoption launches nothing.
-        refusal: errors.CpError | None = None
+        # claim is released. Any failure is raised only where a launch follows — an adoption launches
+        # nothing. A non-ValueError (an import failure) is re-raised unchanged: INTERNAL (D6).
+        refusal: Exception | None = None
         if not model:
             try:
                 _spawn_policy(ctx)
             except ValueError as exc:
                 refusal = errors.CpError("USAGE", str(exc))
+            except Exception as exc:  # noqa: BLE001 — deferred past the adopt branch, then re-raised as is
+                refusal = exc
         listing, alive = _reserve_prelude(ctx)
         adopted = reserve_tx(ctx, listing, alive, refusal)
         if adopted is not None:  # after the write transaction; best-effort, the stop never raises
@@ -1043,7 +1046,7 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
             _stop_superseded(ctx, listing, adopted)
 
     def reserve_tx(
-        ctx: StepCtx, listing: list[liveness.Agent] | None, alive: dict[str, bool], refusal: errors.CpError | None
+        ctx: StepCtx, listing: list[liveness.Agent] | None, alive: dict[str, bool], refusal: Exception | None
     ) -> str | None:
         """The reservation transaction; returns the adopted launch's name, else ``None``."""
         skey = f"{ctx.tool}/{ctx.key}"

@@ -82,7 +82,7 @@ def _policy_resolver(stem: str, lane: str | None) -> tuple[str, str | None]:
     model ever runs it, so the hooks, ``wait`` and the daemon never touch
     the policy.
     """
-    import models  # type: ignore[import-not-found]  # lazy on purpose (D6)
+    import models  # lazy on purpose (D6)
 
     result: tuple[str, str | None] = models.spawn_policy(stem, lane)
     return result
