@@ -608,9 +608,7 @@ class TestSpawnPolicy:
         raise ImportError("models is half-edited")
 
     @pytest.mark.parametrize("broken", [False, True])
-    def test_a_takeover_that_adopts_a_late_launch_ignores_a_policy_refusal(
-        self, w: W, deps: Any, broken: bool
-    ) -> None:
+    def test_a_takeover_that_adopts_a_late_launch_ignores_a_policy_refusal(self, w: W, deps: Any, broken: bool) -> None:
         """The adoption launches nothing, so the policy has no say in it (review fixes #01, #02)."""
         w.sim.list_on_launch = False
         assert spawn(w, "s1")[0] == 6
@@ -647,6 +645,11 @@ class TestSpawnPolicy:
         assert out["error"] == "INTERNAL", out
         assert sql(w.db, "SELECT count(*) FROM nodes")[0][0] == 0
         assert w.sim.effects("claude", "--bg") == 0
+        assert call_row(w, "spawn", "s1")["state"] == "started"  # left for a takeover (D6)
+        deps.resolve_model = models.spawn_policy  # main's models.py is fixed
+        code, out = spawn(w, "s1")  # the holder has exited: the same key takes the claim over
+        assert code == 0, out
+        assert w.sim.effects("claude", "--bg") == 1
 
 
 class TestResume:

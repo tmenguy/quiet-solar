@@ -1037,6 +1037,7 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
                 _spawn_policy(ctx)
             except ValueError as exc:
                 refusal = errors.CpError("USAGE", str(exc))
+                refusal.__cause__ = exc
             except Exception as exc:  # noqa: BLE001 — deferred past the adopt branch, then re-raised as is
                 refusal = exc
         listing, alive = _reserve_prelude(ctx)
