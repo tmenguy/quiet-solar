@@ -15,20 +15,20 @@ from typing import Any
 import pytest
 from control_plane import cli, migrations, tools
 
-from .conftest import ORCH, V_NEXT, agent, insert_node, insert_task, open_run, run_cli, sql
+from .conftest import NEXT, ORCH, agent, insert_node, insert_task, open_run, run_cli, sql
 
 EXEMPT = {
     "version",
-    "restore",
     "daemon",
     "ensure",
     "halt clear",
+    "restore",
     "hook stop",
     "hook pre-tool-use",
     "hook pre-push",
     "hooks-settings",
 }
-READ = {"session status", "snapshot", "task show", "export-summary"}
+READ = {"session status", "snapshot", "task show", "export-summary", "ledger show"}
 NO_TOKEN_WRITES = {"run open", "run claim"}
 TOOL_ARGS: dict[str, dict[str, Any]] = {
     "worktree-create": {"phase": "/create-plan"},
@@ -94,6 +94,33 @@ def samples(f: dict[str, str]) -> dict[str, list[str]]:
         "node hand-back": ["node", "hand-back", "--task", "T1", "--summary-file", f["text"]],
         "lock acquire": ["lock", "acquire", "--name", "integration:QS_11", "--purpose", "p", "--session-id", ORCH],
         "lock release": ["lock", "release", "--name", "integration:QS_11", "--session-id", ORCH],
+        "round start": ["round", "start", "--task", "T1", "--phase", "build", "--head", "h1"],
+        "finding open": [
+            "finding",
+            "open",
+            "--task",
+            "T1",
+            "--phase",
+            "build",
+            "--source",
+            "reviewer",
+            "--input",
+            f["finding"],
+        ],
+        "finding classify": ["finding", "classify", "1", "--class", "nice_to_have"],
+        "finding state": ["finding", "state", "1", "--to", "rejected", "--reason", "r"],
+        "blast-radius set": [
+            "blast-radius",
+            "set",
+            "--task",
+            "T1",
+            "--value",
+            "ok",
+            "--head-sha",
+            "h",
+            "--review",
+            "R",
+        ],
     }
     for name in tools.REGISTRY:
         out[f"tool {name}"] = ["tool", name, "--task", "T1", "--key", "k", "--args-file", f[f"tool:{name}"]]
@@ -118,6 +145,10 @@ NODE_OK = {
     "tool integrate-start",
     "tool integrate-finish",
     "tool integrate-drop",
+    "round start",
+    "finding open",
+    "finding classify",
+    "finding state",
 }
 # The node-token variant of a sample (own queue, own session), and an out-of-bounds variant (another task).
 NODE_OWN = {
@@ -135,14 +166,14 @@ def _other_task(argv: list[str]) -> list[str]:
         swapped[swapped.index("--as") + 1] = "node:T2"
     if swapped[:2] == ["lock", "acquire"]:
         swapped[swapped.index("--name") + 1] = "integration:QS_99"
+    if swapped[:2] in (["finding", "classify"], ["finding", "state"]):
+        swapped[2] = "2"  # finding 2 is on T2
     return swapped
 
 
 def counts(path: Path) -> dict[str, int]:
-    tables = [
-        r[0] for r in sql(path, "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
-    ]
-    return {t: sql(path, f"SELECT count(*) FROM {t}")[0][0] for t in tables}
+    tables = sql(path, "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+    return {t: sql(path, f"SELECT count(*) FROM {t}")[0][0] for (t,) in tables}
 
 
 @pytest.fixture
@@ -155,8 +186,23 @@ def world(migrated: Path, tmp_path: Path, fake_claude, fake_runner, fake_popen) 
     )
     insert_task(migrated, "T2", run_id, worktree=str(wt), branch="QS_12", is_deliverable=1)
     node = insert_node(migrated, "N1", run_id, "T1", session_id="S-n1", name="n1")
+    for fid, task in ((1, "T1"), (2, "T2")):  # #375: one finding per task, seeded below the decision counter
+        sql(
+            migrated,
+            "INSERT INTO findings (id, run_id, task_id, phase, round, source, severity, category, title, body,"
+            " fingerprint, title_norm, replay_key, state, decided_seq, actor, created_at, updated_at)"
+            " VALUES (?, ?, ?, 'build', 0, 'reviewer', 'should_fix', 'test', 't', 'b', ?, 't', ?, 'open', ?, 'x', 'x', 'x')",
+            [fid, run_id, task, f"fp{fid}", f"rk{fid}", fid],
+        )
+    sql(migrated, "INSERT INTO counters (kind, next) VALUES ('finding_decision', 3)")
     fake_claude.listing = [agent(ORCH, pid=101), agent("S-n1", "n1", pid=201)]
-    files = {"text": tmp_path / "t.md", "json": tmp_path / "p.json", "prompt": tmp_path / "prompt.md"}
+    files = {
+        "text": tmp_path / "t.md",
+        "json": tmp_path / "p.json",
+        "prompt": tmp_path / "prompt.md",
+        "finding": tmp_path / "finding.json",
+    }
+    files["finding"].write_text(json.dumps({"severity": "should_fix", "category": "test", "title": "t", "body": "b"}))
     files["text"].write_text("one\n")
     files["json"].write_text("{}")
     files["prompt"].write_text("go")
@@ -188,7 +234,7 @@ def _stale(world: dict[str, Any], fake_runner, fake_popen) -> str:
 
 
 @pytest.mark.parametrize(
-    "name", sorted(samples(dict.fromkeys(["text", "json"] + [f"tool:{t}" for t in TOOL_ARGS], "x")))
+    "name", sorted(samples(dict.fromkeys(["text", "json", "finding"] + [f"tool:{t}" for t in TOOL_ARGS], "x")))
 )
 def test_stale_run_token_changes_nothing(world, name: str, fake_runner, fake_popen) -> None:
     stale = _stale(world, fake_runner, fake_popen)
@@ -214,7 +260,7 @@ def test_stale_node_generation_changes_nothing(world, name: str, fake_runner, fa
 
 
 @pytest.mark.parametrize(
-    "name", sorted(set(samples(dict.fromkeys(["text", "json"] + [f"tool:{t}" for t in TOOL_ARGS], "x"))))
+    "name", sorted(set(samples(dict.fromkeys(["text", "json", "finding"] + [f"tool:{t}" for t in TOOL_ARGS], "x"))))
 )
 def test_node_token_out_of_bounds_conflicts(world, name: str, fake_runner) -> None:
     if name == "msg ack":  # a message of another node's queue
@@ -248,17 +294,20 @@ def _all_non_exempt(f: dict[str, str]) -> dict[str, list[str]]:
     table["snapshot"] = ["snapshot"]
     table["task show"] = ["task", "show", "--task", "T1"]
     table["export-summary"] = ["export-summary", "--task", "T1", "--out-worktree", "/tmp"]
+    table["ledger show"] = ["ledger", "show", "--task", "T1"]
     return table
 
 
-ALL_NON_EXEMPT = sorted(_all_non_exempt(dict.fromkeys(["text", "json"] + [f"tool:{t}" for t in TOOL_ARGS], "x")))
+ALL_NON_EXEMPT = sorted(
+    _all_non_exempt(dict.fromkeys(["text", "json", "finding"] + [f"tool:{t}" for t in TOOL_ARGS], "x"))
+)
 
 
 @pytest.mark.parametrize("name", ALL_NON_EXEMPT)
 def test_db_newer_than_the_code_refuses_every_non_exempt_command(
     world, name: str, fake_runner, fake_popen, fake_clock
 ) -> None:
-    sql(world["db"], f"PRAGMA user_version = {migrations.SCHEMA_VERSION + 1}")
+    sql(world["db"], f"PRAGMA user_version = {NEXT}")
     fake_runner.calls.clear()
     fake_popen.calls.clear()
     before = counts(world["db"])
@@ -269,7 +318,7 @@ def test_db_newer_than_the_code_refuses_every_non_exempt_command(
 
 
 def test_exempt_commands_under_a_newer_db(world, fake_popen, fake_clock) -> None:
-    sql(world["db"], f"PRAGMA user_version = {migrations.SCHEMA_VERSION + 1}")
+    sql(world["db"], f"PRAGMA user_version = {NEXT}")
     assert run_cli("version")[0] == 0
     assert run_cli("hooks-settings", "--role", "node")[0] == 0
     assert run_cli("hook", "stop", stdin=json.dumps({"session_id": ORCH})) == (0, None)
@@ -291,9 +340,17 @@ def test_read_commands_never_wait(world, name: str, fake_popen, fake_clock) -> N
 
 
 def test_an_older_db_with_a_migrating_daemon_proceeds(world, fake_popen, monkeypatch) -> None:
-    v2 = migrations.Migration(V_NEXT, "test v2", ("CREATE TABLE extra (a INTEGER)",))
+    v2 = migrations.Migration(NEXT, "test v2", ("CREATE TABLE extra (a INTEGER)",))
     monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, v2))
     fake_popen.on_call = lambda argv, kw: migrations.migrate(world["db"], role="test")
     code, out = run_cli("decision", "add", "--text", "t", "--reason", "r", "--source", "s", "--token", world["token"])
     assert code == 0, out
     assert len(fake_popen.calls) == 1
+
+
+def test_the_seeded_findings_never_tie_with_a_new_decision(world) -> None:
+    """#375 AC3: a hand-seeded row's ``decided_seq`` stays below the counter, so a new one is strictly newer."""
+    code, out = run_cli(*samples(world["f"])["finding open"], "--token", world["token"])
+    assert code == 0 and out == {"ok": True, "ids": [3]}
+    seqs = dict(sql(world["db"], "SELECT id, decided_seq FROM findings"))
+    assert seqs == {1: 1, 2: 2, 3: 3}

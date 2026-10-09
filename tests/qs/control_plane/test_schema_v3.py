@@ -1,4 +1,4 @@
-"""QS-406 T2: migration v2 — the ``alerts`` table and the ``hook_events`` cursor (§11)."""
+"""QS-406 T2: migration v3 (v2 is #375's ledger) — the ``alerts`` table and the ``hook_events`` cursor (§11)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from control_plane import migrations, schema_v2
+from control_plane import migrations, schema_v3
 
 from .conftest import sql
 
@@ -21,10 +21,10 @@ def _cursor(path: Path) -> str:
     return str(sql(path, "SELECT value FROM meta WHERE key = 'hook_events_cursor'")[0][0])
 
 
-def test_v2_is_registered() -> None:
-    assert [m.version for m in migrations.MIGRATIONS][:2] == [1, 2]
-    assert migrations.MIGRATIONS[1].statements == schema_v2.STATEMENTS
-    assert migrations.current_schema_version() >= 2
+def test_v3_is_registered() -> None:
+    assert [m.version for m in migrations.MIGRATIONS][:3] == [1, 2, 3]
+    assert migrations.MIGRATIONS[2].statements == schema_v3.STATEMENTS
+    assert migrations.current_schema_version() >= 3
 
 
 def test_fresh_db_has_alerts_and_a_zero_cursor(migrated: Path) -> None:

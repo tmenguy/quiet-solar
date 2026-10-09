@@ -77,7 +77,8 @@ Kinds:
 | `hooks-settings` | `--role node\|orchestrator` | — | exempt |
 | `session status` | `[--session-id]` | — | read |
 | `snapshot` | `[--run R]` | — | read |
-| `task show` | `--task T` | — | read |
+| `task show` | `--task T` (the task in full, its ledger and `convergence` included) | — | read |
+| `ledger show` | `--task T [--phase plan\|build] [--family] [--state S[,S…]]` (see [The ledger](#the-ledger-375)) | — | read |
 | `export-summary` | `--task T --out-worktree WT` | — | read |
 | `run open` | `--name SLUG --title … [--session-id] [--session-name] [--permission-mode] [--full-grant]` | returns run | write |
 | `run claim` | `RUN [--session-id] [--session-name] [--permission-mode] [--full-grant] [--takeover]` | returns run | write |
@@ -86,7 +87,7 @@ Kinds:
 | `run set-plan` | `--run R --file F` | run | write |
 | `run close` | — | run | write |
 | `task add` | `[--run R] --title --kind epic\|feature\|bug [--target] [--parent T] [--issue N] [--lane L] [--deliverable] [--item-of T]` (`--parent` / `--item-of` must be a task of the caller's run, or of none: `CONFLICT` otherwise; `--item-of` with `--deliverable` or `--issue` is `USAGE` — a work item lands in its deliverable's PR, a deliverable is its own issue `QS_<M>`, #400) | run | write |
-| `task set` | `--task T [--issue] [--worktree] [--branch] [--pr-number --pr-url] [--ci-state --ci-sha]` (`--issue` / `--pr-number` / `--pr-url` on a work item is `INVALID_STATE`, #400) | run | write |
+| `task set` | `--task T [--issue] [--worktree] [--branch] [--pr-number --pr-url] [--ci-state --ci-sha]` (`--issue` / `--pr-number` / `--pr-url` on a work item is `INVALID_STATE`, #400; the `ci_state` vocabulary `pending\|green\|red` is child 14's contract, not checked by the schema) | run | write |
 | `task state` | `--task T --to STATE\|unblock [--note]` | run, or node (own task, node range) | write |
 | `task dep` / `task root` / `task work-list` | `add\|remove …` (both tasks of a `task dep` must be of the caller's run, or of none: `CONFLICT` otherwise) | run | write |
 | `criteria set` / `validate` / `state` | `--task T …` | run | write |
@@ -101,6 +102,11 @@ Kinds:
 | `node stop` / `node take-over` | `--task T` (`stop` on a stopped node is a noop) | run | write |
 | `node hand-back` | `--task T --summary-file F` | run, or node (own task) | write |
 | `lock acquire` / `lock release` | `--name integration:<branch> [--purpose] [--session-id] [--timeout S]` | run, or node (own deliverable, own session) | write |
+| `round start` | `--task T --phase plan\|build [--head SHA] [--base SHA]` (`--head` required for `build`) | run, or node (own task) | write |
+| `finding open` | `--task T --phase P --source S [--round R] --input F\|-` | run, or node (own task) | write |
+| `finding classify` | `ID --class must_fix\|should_fix\|nice_to_have\|out_of_scope [--note]` | run, or node (own task) | write |
+| `finding state` | `ID --to open\|resolved\|rejected\|deferred\|settled [--reason] [--commit] [--cause ID]` | run, or node (own task) | write |
+| `blast-radius set` | `--task T --value ok\|doubt\|too_large --head-sha S --review R [--reason]` | run | write |
 | `tool <name>` | `--task T --key K [--args-file F]` | per tool | write |
 
 Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 and at most 86400 seconds; `lock acquire --timeout` may be 0 (try once). `wait --poll` must also be at least 0.05 and, when both are given, no more than `--timeout`. Anything else is `USAGE`.
@@ -114,7 +120,7 @@ Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 
 - **`daemon`.** It migrates.
 - **`ensure`.** It reads the daemon lease defensively.
 - **`halt clear` and `restore`** (#406). The maintainer's commands: no token, since the DB may have no open run, or be lost. A newer DB is `SCHEMA_TOO_NEW` before anything else; see [The merge gate](#the-merge-gate-and-the-self-check) and [Backups and restore](#backups-and-restore).
-- **The read commands** (`session status`, `snapshot`, `task show`, `export-summary`):
+- **The read commands** (`session status`, `snapshot`, `task show`, `ledger show`, `export-summary`):
   - a missing DB is an empty answer;
   - an older DB is `SCHEMA_PENDING` at once;
   - a newer DB is `SCHEMA_TOO_NEW`.
@@ -123,7 +129,7 @@ Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 
 
 ### Tables
 
-`harness_state.db` holds, at schema v2:
+`harness_state.db` holds, at schema v3 (v1: the tables below except the ledger and `alerts`; v2: the finding ledger of #375; v3: the active loop's `alerts`, #406):
 
 | group | tables |
 |---|---|
@@ -132,10 +138,11 @@ Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 
 | nodes | `nodes`: one row per generation |
 | queues and records | `messages`, `questions`, `decisions`, `digests`, `reports`, `integrations` |
 | coordination | `locks`, `cap_slots`, `tool_calls`, `waiters`, `daemon_lease`, `hook_events` |
-| active loop (v2, #406) | `alerts`: one row per (run, occurrence) |
+| active loop (v3, #406) | `alerts`: one row per (run, occurrence) |
 | bookkeeping | `meta`, `counters` |
+| the ledger (v2) | `rounds`, `findings`, `finding_events`, `blast_radius` (see [The ledger](#the-ledger-375)) |
 
-Migration v2 (#406) adds `alerts` and seeds `meta.hook_events_cursor` past the existing `hook_events`. The active loop also keeps these `meta` keys, written at runtime: `selfcheck`, `selfcheck_override`, `selfcheck_pending`, `last_backup_at`, `last_backup_error`.
+Migration v3 (#406) adds `alerts` and seeds `meta.hook_events_cursor` past the existing `hook_events` (so history is never replayed). The active loop also keeps these `meta` keys, written at runtime: `selfcheck`, `selfcheck_override`, `selfcheck_pending`, `last_backup_at`, `last_backup_error`.
 
 The schema version is `PRAGMA user_version`.
 
@@ -164,10 +171,10 @@ Before migrating an existing DB, the daemon backs it up to `backups.db_dir(db_pa
 
 ### Migration recipe for later children (#375 and others)
 
-1. **Append** `Migration(n + 1, "<name>", (<single statements>…))` to `MIGRATIONS` in `migrations.py`.
+1. **Append** `Migration(n + 1, "<name>", (<single statements>…))` to `MIGRATIONS` in `migrations.py` (v2 is #375's `Migration(2, "the finding ledger (#375)", schema_ledger.STATEMENTS)`).
    - Use single statements only, never `executescript`.
-   - A test pins the versions as `1..N`.
-   - Tests name versions through the conftest's `CUR` (the code's schema) and `V_NEXT` (`CUR + 1`, "newer"), never a literal (#406).
+   - Keep the statements in a module named by what it holds (`schema_ledger.py`), so a renumbering at a catch-up leaves no wrong name.
+   - A test pins the versions as `1..N`. The tests use `conftest.CUR` / `NEXT` (the current and a newer version), never a literal, so a renumbering needs no test edit.
 2. **Land it on `main`.** The next `ensure` sees a lower-schema daemon lease, stops the old daemon (or SIGKILLs a hung one, see below; details in [The daemon and `ensure`](#the-daemon-and-ensure)), and starts one that backs up and migrates. If the old daemon cannot be proven gone after `DAEMON_RESTART_WAIT_S`, `ensure` answers `restart_pending` and starts nothing; `wait` then exits 5 with `restart_wait`.
 3. **If the migration fails,** the daemon writes `<db>.migrate-error.json`. `ensure` does not respawn the daemon for `MIGRATE_BACKOFF_S`, and waiting commands get `SCHEMA_PENDING` with the error.
 
@@ -221,7 +228,7 @@ Kinds (`alerts.KINDS`, each 1–32 characters; `CROSS_RUN_KINDS` for child 15): 
 
 **The read path.** `snapshot["alerts"]` lists every open alert row, then the `ALERTS_LIMIT` newest cleared ones (after the `--run` filter). The raw `hook_events` alerts are in `snapshot["hook_alerts"]`, so an unroutable one stays visible.
 
-**Hook routing.** `meta.hook_events_cursor` (seeded by migration v2, so history is never replayed) marks the last event read. Each tick routes the next `alert` events to their run (`detail.run_id`, else the run of `detail.task_id`) as one-shot alerts with subject `hook:<id>`, and moves the cursor, routable or not.
+**Hook routing.** `meta.hook_events_cursor` (seeded by migration v3, so history is never replayed) marks the last event read. Each tick routes the next `alert` events to their run (`detail.run_id`, else the run of `detail.task_id`) as one-shot alerts with subject `hook:<id>`, and moves the cursor, routable or not.
 
 ### Restart on new code
 
@@ -283,6 +290,126 @@ Verified on 2026-10-09 (QS-406 T1): the messenger wakes an idle desktop session.
 The live `waiters` rows and the `selfcheck` / `selfcheck_override` / `selfcheck_pending` keys are carried across (they describe the processes and the code on disk, not the data), the daemon lease is cleared, and every exit path removes the marker, releases the locks and calls `ensure`. **Everything recorded after the backup is lost; run tokens issued since then are stale (each orchestrator must `run claim` again);** the next ticks re-sync CI and liveness, and an older-schema backup is migrated by the daemon that starts. To restore an **older** backup, move the newer files aside first. While a restore holds the migrate lock, read commands and hooks see `SCHEMA_PENDING`, or fail open.
 
 
+## The ledger (#375)
+
+The finding ledger is the shared, durable record of the review findings of both loops (plan and build) of the second pipeline's nodes (6b). It **recognises, records and flags by code**; the node judges. It refuses only malformed input (`USAGE`), a token used out of its scope (`CONFLICT`), and a red-CI finding off the task's red sha (`INVALID_STATE`). Nothing is refused to force convergence. Code: [`ledger.py`](../../scripts/qs/control_plane/ledger.py), schema [`schema_ledger.py`](../../scripts/qs/control_plane/schema_ledger.py); design: [`docs/stories/QS-375.story.md`](../stories/QS-375.story.md).
+
+### The tables
+
+| table | one row per | notes |
+|---|---|---|
+| `rounds` | review pass of one phase of one task: `(task_id, phase, round)` | `base_sha..head_sha` is the round's diff. It shares the natural key `(task_id, phase, round)` with its `reports` rows, with no foreign key |
+| `findings` | finding | its `source`, `reviewer`, `severity`, `classification`, `category`, `title`, `body`, `file` / `symbol` / lines, `fingerprint`, `replay_key`, `matched_id`, `flags` (JSON), `unchanged_lines`, `state`, `decided_seq`, `reason`, `resolved_sha`, `ci_sha`, `integration_id`, `actor` |
+| `finding_events` | `classify` or `state` change | `from_value` / `to_value`, `reason`, `commit_sha`, `cause_id`, the phase's latest `round` at the time, `actor`. A finding's opening is its row, so there is no `open` event |
+| `blast_radius` | rating, append-only | `value` (`ok\|doubt\|too_large`), `head_sha`, `review` (the id of the review it came from), `reason`, `actor` |
+
+The vocabularies live in `schema_ledger`: `PHASES` (`plan`, `build`), `SOURCES` (reviewer-type `reviewer`, `coderabbit`, `global_review`, `cross_run_review`; authority `ci`, `gate`, `detector`, `orchestrator`, `maintainer`), `SEVERITIES`, `CLASSES` (the severities plus `out_of_scope`), `STATES` (`open`, `resolved`, `rejected`, `deferred`, `settled`) and `CATEGORIES` (`correctness`, `edge-case`, `test`, `security`, `performance`, `design`, `scope`, `docs`, `style`, `ci`, `gate`, `other`). `CATEGORIES` is checked in Python, not by SQL, so a later child extends it without a migration.
+
+### Rounds
+
+`round start` numbers rounds `1, 2, …` per `(task, phase)` and answers `{"ok": true, "task_id", "phase", "round", "base_sha", "head_sha"}`.
+
+- **The base.** Round 1 takes the node's `--base` (NULL allowed): `git merge-base origin/main QS_<N>` for a deliverable, the fork point on the local `QS_<N>` for a work item. A later round defaults to the previous round's head; after a catch-up with `main`, the node passes `--base <the catch-up merge commit>`, so `main`'s changes stay out of the delta.
+- **`--head`** is required for `build` rounds, optional for `plan`.
+- **What is not a round:** a catch-up's conflict-resolution delta. Every `round start` call is a new round (no idempotency key); a restarted node, or one that lost `round start`'s answer, reads `latest_round` and its head through `ledger show` before calling it again.
+- `--head` and `--base` are stripped; a blank one is absent.
+
+### Opening findings
+
+`finding open` reads one JSON object, or a non-empty list, from a file or from stdin (`--input -`), and opens it in one transaction. It answers **only the ids**, one per item in order: `{"ok": true, "ids": [...]}`. `--round` defaults to the phase's latest round, or `0` before any round; a given `--round` must be `>= 1` and exist (`NOT_FOUND`).
+
+| key | type | required |
+|---|---|---|
+| `severity` | `must_fix\|should_fix\|nice_to_have` | yes, except `ci` / `gate` (overridden to `must_fix`) |
+| `category` | one of `CATEGORIES` | yes |
+| `title` | string holding at least one letter or digit | yes |
+| `body` | string | yes |
+| `file`, `symbol` | string; `file` repo-relative and normalised (NFC, each segment stripped, `a//b/ ./c` → `a/b/c`; absolute, a drive letter, `..`, a backslash or a `:<line>` suffix is `USAGE`: lines go in `line_start` / `line_end`), `symbol` trimmed and NFC | no |
+| `line_start`, `line_end` | int `>= 1`; `line_end` defaults to `line_start` | no |
+| `reviewer` | string, trimmed and NFC (the lens, e.g. `qs-review-blind-hunter`) | no |
+| `unchanged_lines` | bool, recorded as given (`1` / `0` / NULL) | no |
+| `relates_to` | list of finding ids, de-duplicated (`NOT_FOUND` if one is unknown, or of another run) | no |
+| `sha` | string | `ci` only, required there |
+| `integration_id` | int | `gate` only, required there |
+
+An unknown key, a wrong type, a value off its vocabulary, `line_start > line_end`, `line_end` alone, a bad path, an integer beyond SQLite's range, a lone surrogate in any string, the separator U+001F in `title`, `file`, `symbol`, `reviewer` or `sha`, non-JSON or non-UTF-8 input (file or stdin) and an empty object or list are all `USAGE`. The optional key fields (`file`, `symbol`, `reviewer`, `sha`) are stripped, and a blank one is absent; `title` and `body` are stored as given.
+
+- **`ci` findings** need `sha` equal to `tasks.ci_sha` while `tasks.ci_state = 'red'`, else `INVALID_STATE`. They are stored with `ci_sha`, `must_fix` / `must_fix`.
+- **`gate` findings** need `integration_id`, an `integrations` row whose item or deliverable is the task (`NOT_FOUND` / `CONFLICT`), and are stored `must_fix` / `must_fix`.
+- **Exact replay.** `replay_key` is a `sha256` over task, phase, round, source, `reviewer`, the fingerprint, the normalised title, the lines, `ci_sha` and `integration_id` (the round is left out for `ci` and `gate`). A replayed item returns its existing id, even after a new round started or the CI turned green; its other fields (`severity`, `body`) are ignored: **the first write wins**. Two findings on one symbol, a second reviewer and a red CI on a new sha are never merged.
+
+### Matching, flags and the born state
+
+- **The fingerprint** is `sha256(file␟symbol␟category)` (`␟` is U+001F, NULL encoded as ""), plus `␟norm(title)` when both `file` and `symbol` are empty. `norm` applies NFKC, case-folds, and folds every run of non-alphanumerics into one space. Task and lines are left out.
+- **The family:** the task's deliverable (or the task itself) and every work item of that deliverable. Matching looks across the family and across phases; inside a batch, item 2 can match item 1.
+- **Flags** are computed at open and stored on the row: `{"kind", "id", "state", "reason", "commit", "source", "strong", "cross_task", "escalated"}`. They record what was true at open; `ledger show` adds each flagged row's `current_state`.
+  - `matches`: an earlier family row with the same fingerprint. `strong` when the normalised title is equal too; `escalated` on a strong match when the new item is `must_fix` and the flagged row's effective class (`classification`, else `severity`) is not.
+  - `overlaps_fix`: an earlier family row, `resolved` or `settled`, with the same `file` and the same non-empty `symbol` but another fingerprint: the code-detected flip-flop candidates.
+  - `relates_to`: the rows the item names. This is how a reviewer holding the ledger excerpt, or the orchestrator opening a CI finding, points at a settled or resolved row that has no shared symbol.
+  - `cross_task` is true on any kind whose row is on another task; `strong` and `escalated` are false off `matches`.
+- **"Latest"** is the most recent state decision: the highest `decided_seq`, a monotonic number drawn from `counters` (kind `finding_decision`, `db.next_seq`) at birth and at every state change, never on a state-preserving classify, a noop or a replay.
+- **`matched_id`** is the first hit of: the latest same-task strong match, the latest family strong match, the latest weak match.
+- **Born closed.** A reviewer-type item whose latest **same-task** strong match is `rejected` or `settled` is born in that state, whatever its severity, with the reason `matches #<id>: <reason>` (a reason already starting with `matches #` is reused verbatim, so it names the root and never nests). It stays closed until the node reopens it.
+- **Born open:** everything else, with its `reason` NULL and the earlier rationale in its flag: a weak match, a cross-task strong match with no same-task one (the node re-assesses it in the deliverable's wider context; once decided, that decision is the task's own), a same-task strong match that is `open`, `deferred` or `resolved`, an overlap or a relation alone, and **every** authority source (`ci`, `gate`, `detector`, `orchestrator`, `maintainer`). A red CI check reopens a settled decision, never the reverse.
+
+### States and classification
+
+- **`finding state`**: free transitions between `open`, `resolved`, `rejected`, `deferred` and `settled`. `resolved` needs `--commit`; `rejected` and `settled` need `--reason`; a reopen (`open`) and `deferred` take an optional `--reason` (blank is none); `--commit` on any other target is `USAGE`. `--cause <id>` (any target, `NOT_FOUND` if unknown or of another run, `USAGE` if it is the finding itself) records why, e.g. the red CI finding that reopened a settled row. The same state is a noop (`"changed": false`, no event), checked after the arguments and `--cause`. The row holds only the latest state (`reason` the new `--reason` or NULL, `resolved_sha` set on `resolved` only); the history is in `finding_events`. Answers `{"ok": true, "finding_id", "state", "changed"}`.
+- **`finding classify`** records the class in any state, with a `classify` event (its reason is `--note`), and drives open ⇄ deferred: an open row classed `nice_to_have` or `out_of_scope` moves to `deferred`; a deferred row classed `must_fix` or `should_fix` moves back to `open` (a reopening, so it blocks again). A move also writes a `state` event and sets the row's `reason`, both `classified <class>`. The same class is a noop. Answers `{"ok": true, "finding_id", "state", "classification", "changed"}`. At birth `classification` is NULL, except `ci` / `gate` (`must_fix`).
+- **Deferred rows** stay in `findings`, with their class: `ledger show --state deferred`, `task show`, `snapshot` and the exported summary show them, and the run's final review (child 13) reads them.
+
+### Who writes
+
+`ledger.writer(conn, token, task_id, *, kinds)` is the one check, the point child 15 extends: a node token writes on its own task, a run token on any task of its run (another run's task is `CONFLICT`). The arguments are validated first (`USAGE`); then the ID-taking commands check the token, then the finding (`NOT_FOUND`), then its task's scope, so a stale token is `STALE_TOKEN`, never `NOT_FOUND`. `relates_to` and `--cause` read only findings of the writer's run (`NOT_FOUND` otherwise). The CLI flags (`--head`, `--base`, `--commit`, `--reason`, `--note`, `--head-sha`, `--review`) are stripped; a blank optional one is absent, but a blank `--commit` on another target than `resolved` is still `USAGE`. A task with no run is written with a run token and records the principal's `run_id`. Every row and event records its `actor` (`orchestrator` for a run token, `node:<task>` for a node token); `source` is recorded as given. `blast-radius set` takes a run token only: a node never rates its own blast radius, which feeds the merge's second human gate. Cross-run writes wait on child 15.
+
+### Convergence
+
+`ledger.convergence(conn, task_id, phase)` → `{converged, consistent, blocking, latest_round, counts}`, shown under `convergence: {plan, build}` by `task show` and `ledger show`.
+
+- **`converged`**: the node has declared it. `latest_round >= 1` and the latest `reports` row (highest id) of `(task, phase, latest_round)` has `status = 'converged'`; a report posted with the run token counts too. A round still in review never reads as converged, a later non-converged report of the same round withdraws the declaration, and a report counts only when its `phase` is exactly `plan` or `build`.
+- **`blocking`**: the task's rows of that phase that are `open` with an effective class of `must_fix` or `should_fix` (round-0 rows and unclassified should-fixes included; an open nice-to-have or `out_of_scope` row never blocks).
+- **`consistent`**: `blocking == []`. A node that declares convergence with blocking rows still open is converged and **not** consistent; nothing overrides it, so a flip-flop left open (for example while it waits for another perspective) never stalls the loop by code. The orchestrator, child 7's merge conditions and child 17 read the discrepancy.
+- No hard round stop here: `ROUNDS_ALERT` stays child 14's.
+
+`ledger.convergence` on an unknown task is `NOT_FOUND`.
+
+**`blast-radius set`** appends a rating and answers `{"ok": true, "id", "task_id", "value", "head_sha"}`. `ledger.blast_radius(conn, task_id, head_sha=None)` is child 7's reader: the latest rating (`head_sha` omitted), or the latest for that sha, else `None`; a given but blank `head_sha` is `None`, never another head's rating.
+
+### Reading the ledger
+
+`ledger show --task T [--phase P] [--family] [--state S[,S…]]` answers `{"ok": true, "task_id", "rounds", "findings", "finding_events", "blast_radius", "convergence": {"plan", "build"}}`:
+
+- `findings` are the rows (flags parsed), each flag with the flagged row's `current_state`; `finding_events` are those rows' events;
+- `--phase` filters `rounds` and `findings`; `--state` filters `findings` (an unknown or empty state list is `USAGE`); `--family` widens `findings` and their events to the family;
+- `rounds` and `blast_radius` (every rating, oldest first) stay per task; no DB is `NOT_FOUND`, as for `task show`.
+
+`task show` carries the same ledger keys (`rounds`, `findings`, `finding_events`, `blast_radius`, `convergence`), unfiltered, next to its `task`.
+
+### The focused-reviewer contract
+
+**What a reviewer receives** in its prompt from the node:
+
+- **the diff:** `git diff <base>..<head>` from `round start`'s answer (round 1 is the full integrated diff; later rounds are the delta);
+- **the acceptance criteria:** `task show` → `criteria`;
+- **the ledger excerpt:** for example `ledger show --task T --phase P --family --state open,rejected,settled,deferred` (6b may tune the filter), so it does not raise them again. `--family` widens only `findings` and their events to the family; `rounds`, `blast_radius` and `convergence` stay per task. A re-raise of a work item's closed row on the deliverable is born `open`, `cross_task`, and blocks until the node triages it;
+- **the write coordinates:** `--task`, `--phase`, `--round` and the node's `--token` (the reviewer runs inside the node's session, so a superseded node's reviewers get `STALE_TOKEN` too);
+- **its instructions:** apply a relevance-to-this-task test; suggest no refactor outside the scope; in a later round raise no finding on lines the round did not change (a red CI is the exception); set `unchanged_lines` from the diff; put the ids of the excerpt rows a finding touches in `relates_to`. These are instructions only: the ledger records and refuses nothing for them.
+
+**What it writes:** one heredoc call, `finding open --source reviewer --input -`, with the items above. **What it returns** to the node: only the ids. It calls no other ledger command (the token would allow `finding state` / `finding classify` on its task: an accepted risk, forbidden by this contract and by 6b's reviewer templates, with every write's actor recorded; a reviewer-scoped token is 6b's / 15's).
+
+**Then the node:**
+
+1. reads the rows and flags with `ledger show`, the `escalated`, `cross_task` and weak-match flags first;
+2. triages them (`finding classify`, `finding state`). On a flip-flop it may ask the orchestrator for another perspective (`question open` or `msg post`) instead of deciding alone; that decision lands as `finding state --to settled` with its rationale, written with the run token (actor `orchestrator`);
+3. reads `convergence.blocking`;
+4. posts its report with the round number, `converged` when it judges the loop done, with its `blocking` ids in the report's fields. The orchestrator does the same when it declares with the run token.
+
+**A correction from the orchestrator:** `finding open` (`ci`, `gate`, `detector`, `orchestrator` or `maintainer`, with `relates_to` when it touches a settled row), then `msg post --kind fix` with `{"finding_id": <id>, …}` in the payload (a convention; `messages` does not check it).
+
+### What child 17 reads
+
+From the tables alone: the rounds; the findings per round with `source` and `reviewer`; `unchanged_lines`; the classification and its changes (`classify` events); the reopenings (`state` events to `open`, with `cause_id`); the convergence declarations (`consistent` is computed live, so the node's `converged` report carries its `blocking` ids); the flip-flops (`overlaps_fix` / `relates_to` flags, `matches` on a resolved row, `settled` rows and their rationale).
+
 ## Locks and caps
 
 | name | holder | purpose |
@@ -327,7 +454,7 @@ Every tool runs through `run_recorded`:
 1. Every `*_file` argument is read **once**, when the call starts (before the token check), into a cache. Then verify the token. A call already finished under the key is replayed at once, before its steps are built: a deleted argument file or a task column cleared meanwhile cannot break the replay. Otherwise a non-regular file (a FIFO, `/dev/stdin`) or a file that is not UTF-8 is `USAGE`, and a fresh call with a missing file is `USAGE`, before the claim and before any effect. A call whose in-flight holder released the key meanwhile becomes a fresh call at the claim, and needs every file too.
 2. Claim `tool_calls(tool, key)` before any effect.
 3. Probe: the probe is authoritative for each step it reports, done or not done.
-4. Run the missing steps under the locks or the cap, re-checking the token and lock ownership before each step. A step reads its file from the cache only when it runs, so a takeover whose effect step is already recorded (or found by the probe) never needs the file again. `spawn` and `resume` read their file before they stamp `launch_at`, so a takeover with the file gone is `USAGE` with nothing launched, and the same key works once the file is back.
+4. Run the missing steps under the locks or the cap, re-checking the token and lock ownership before each step. A step reads its file from the cache only when it runs, so a takeover whose effect step is already recorded (or found by the probe) never needs the file again. `spawn` and `resume` read their file before they stamp `launch_at`, so a takeover with the file gone is `USAGE` with nothing launched, and the same key works once the file is back. A `spawn` with no caller `model` also resolves its model policy again there, before `launch_at` (QS-405): a refusal at that point fails the call (`TOOL_FAILED`, nothing launched).
 5. Record the call `succeeded` or `failed`.
 
 **Keys** are chosen by the caller: `msg:<id>` for a popped message, or `task:<id>:<purpose>` otherwise. A key is 1 to 200 characters out of `[A-Za-z0-9._:/-]` (`USAGE` otherwise), so it can never break a `gh` search query. Replaying the same key never repeats an effect. The key's `args_hash` covers the arguments and the content of every `*_file` argument: the same key with an edited file is a `CONFLICT`.
@@ -339,7 +466,7 @@ A probe that cannot tell (a failed or unparseable `gh` listing or `gh pr view`) 
 | `worktree-create` (`phase`) | run | `<MAIN>` | `main-checkout` | none; `setup_task.py` is idempotent |
 | `worktree-cleanup` | run | `<MAIN>` | `main-checkout` | directory absent and unregistered. Refuses the main checkout and a directory whose `.git` is not a file (`POLICY_REFUSED`); a path another non-terminal task shares only clears this task's column (`shared_with`) |
 | `gate` (`mode`, `paths`) | run, or node (own task) | worktree | `gates` slot | none; safe to re-run |
-| `spawn` (`agent`, `model?`, `permission_mode`, `prompt_file`, `replace?`) | run | worktree | node cap (`--replace` frees the replaced node's place first) | the reserved row through `spawn_tool_key`, and the listing by name. A launch never listed within `LAUNCH_SETTLE_S` is reaped. If the replay that re-takes the reaped row sees its launch listed after all, it adopts it (same name, same nonce). Otherwise it relaunches: the relaunch rotates the row's nonce (the first launch's token is `STALE_TOKEN`) and its name (`<name>-r<n>`), so a late first launch is never adopted, and a listing that shows it later gets it a best-effort `claude stop <id>` (an adopted launch too stops its listed earlier launches). Only a listed session whose `cwd` resolves to the task's worktree is stopped: a same-named session of another checkout or DB, or one listed without a `cwd`, is left alone |
+| `spawn` (`agent`, `model?`, `permission_mode`, `prompt_file`, `replace?`) | run | worktree | node cap (`--replace` frees the replaced node's place first) | **The model (QS-405).** A caller `model?` is an override: passed as `--model` verbatim, with no `effortLevel` sent. Otherwise the policy (`models.spawn_policy`, of the running tree — `<MAIN>`'s) gives the `--model` and the `--settings` `effortLevel` for the agent under the task's lane: the deliverable's `lane`, else derived from its `kind` and `target` (`nodes.lane_of`). It is checked first in `reserve` (an unknown agent or an invalid lane is `USAGE`, released, and any other failure is re-raised unchanged (an import failure is `INTERNAL`), both raised before a re-take or a new row; adopting a late launch launches nothing and needs no policy) and resolved again in `launch`. With no `effortLevel` sent, the session inherits the worktree's pinned effort (`.claude/settings.local.json`) or the user's: the spawn cannot clear a pinned effort. A stem whose row exists only on an unmerged branch is `USAGE`. **The probe:** the reserved row through `spawn_tool_key`, and the listing by name. A launch never listed within `LAUNCH_SETTLE_S` is reaped. If the replay that re-takes the reaped row sees its launch listed after all, it adopts it (same name, same nonce). Otherwise it relaunches: the relaunch rotates the row's nonce (the first launch's token is `STALE_TOKEN`) and its name (`<name>-r<n>`), so a late first launch is never adopted, and a listing that shows it later gets it a best-effort `claude stop <id>` (an adopted launch too stops its listed earlier launches). Only a listed session whose `cwd` resolves to the task's worktree is stopped: a same-named session of another checkout or DB, or one listed without a `cwd`, is left alone |
 | `resume` (`message_file`) | run | worktree | node cap | the row through `spawn_tool_key`, and the listing by name and `startedAt` |
 | `issue-create` (`title`, `body_file`, `labels`) | run | `<MAIN>` | — | the exact `<!-- qs-cp-key: … -->` marker in the issue bodies: first a consistent listing of the 100 newest issues (the search index lags), then, on a miss, `gh issue list --search` (`--limit 100`) |
 | `pr-create` (`title`, `summary_file`) | run, or node (own task) | worktree | — | the marker in the PR bodies of the branch |
@@ -448,7 +575,7 @@ leftovers are cleaned by `item-cleanup`, item by item.
 | what happened | the call | the caller sees |
 |---|---|---|
 | a step failed, or the state drifted | recorded `failed`; the key is spent | `TOOL_FAILED` (exit 1), with `result.error` |
-| `BUSY`, `POLICY_REFUSED`, `STALE_TOKEN`, `STOPPED` or `USAGE` (an argument file gone on a takeover) before any effect | claim released, so the same key can be retried | that code |
+| `BUSY`, `POLICY_REFUSED`, `STALE_TOKEN`, `STOPPED` or `USAGE` (an argument file gone on a takeover; the model policy refuses the agent or lane — `tool spawn` with no caller model) before any effect | claim released, so the same key can be retried | that code |
 | the same codes after an effect | left `started`; a same-key replay takes it over once this process has exited | that code |
 | another process took the claim over mid-call | left to that process | `CONFLICT` (exit 8) with `claim_taken_over: true` — never `STALE_TOKEN`, whose exit 3 tells a session to end |
 
@@ -486,6 +613,8 @@ def register(spec: ToolSpec) -> None   # CONFLICT if the name exists
 def invoke(name, *, key, task_id, args, token, actor, ctx=None) -> dict
 ```
 
+- `invoke(ctx=None)` builds `default_ctx()`, which has **no model-policy resolver** (QS-405): a `spawn` through it with no caller `model` is `USAGE`. Pass a `Ctx` with `resolve_model` set (the CLI passes `Deps.resolve_model`).
+
 - `argv_step(...)`, `task_state_guard(...)` and `compose(...)` are helpers. They are not frozen.
 - Every registered tool is reachable as `cp.py tool <name> --task T --key K [--args-file F] --token …`.
 
@@ -494,7 +623,7 @@ def invoke(name, *, key, task_id, args, token, actor, ctx=None) -> dict
 | hook | wired | input → output | failure |
 |---|---|---|---|
 | `Stop` (orchestrator) | child 9 writes `hooks-settings --role orchestrator` into main's pin; **6a must not ship before** | stdin `session_id` → `{"decision": "block", "reason": …}` when a message waits (pop it), or once when no `wait` runs; a loop guard allows and records a `hook_events` `alert` | fail open |
-| `PreToolUse` (every registered session; matcher `Bash\|Edit\|Write\|SendMessage`) | nodes: `claude --bg --settings '<hooks-settings --role node>'` at spawn | `tool_name`, `tool_input` → `hookSpecificOutput.permissionDecision: "deny"` for DB access outside `cp.py` (any session), `gh pr merge` (registered sessions), `SendMessage` from a superseded or stopped session; **`"ask"`** for `cp.py halt clear` / `cp.py restore` (#406) | fail open (the `ask` survives a DB failure) |
+| `PreToolUse` (every registered session; matcher `Bash\|Edit\|Write\|SendMessage`) | nodes: `claude --bg --model <m> --settings '<hooks-settings --role node, plus the policy's effortLevel>'` at spawn | `tool_name`, `tool_input` → `hookSpecificOutput.permissionDecision: "deny"` for DB access outside `cp.py` (any session), `gh pr merge` (registered sessions), `SendMessage` from a superseded or stopped session; **`"ask"`** for `cp.py halt clear` / `cp.py restore` (#406) | fail open (the `ask` survives a DB failure) |
 | `pre-push` (git) | a common-dir shim installed by `tool worktree-create` (marker `# qs-control-plane pre-push shim v2`) | git's ref lines → exit 1 refuses `QS_<N>_<k>` refs everywhere, and, in a registered worktree, a stopped node, a foreign ref, or a missing or stale `QS_CP_TOKEN`. On a path several tasks registered, it judges a non-terminal task first, newest first | fail closed only for a proven-registered worktree |
 
 **The DB-access rule** (`PreToolUse`, Bash): a segment that names `harness_state.db` is denied unless it starts with a read-only program (`grep`, `rg`, `git`, `ls`, `sed -n`, `cat`, `head`, `tail`, `wc`, `find`, `echo`) or is a `cp.py` call. Even then:
@@ -504,7 +633,7 @@ def invoke(name, *, key, task_id, args, token, actor, ctx=None) -> dict
 
 **The maintainer's approval** (`PreToolUse`, Bash, #406): a segment whose unquoted words contain `cp.py` (or a path ending in `/cp.py`) followed by `halt clear` or `restore` gets `permissionDecision: "ask"`, so the app shows the maintainer an approval prompt and nothing runs until he approves. It holds with no DB and under a newer DB, and a deny elsewhere in the command wins (`… && gh pr merge 5` from a registered session is denied). It answers `ask` only in the permission modes of `hooks.ASK_MODES` — `default`, `acceptEdits`, `auto`, `bypassPermissions`: verified on 2026-10-09 that a hook's `ask` shows a real prompt even in `bypassPermissions` — and `deny` elsewhere (`plan`, `dontAsk`), with the hint "switch this session to default mode in the app, then ask again". It is recorded in `hook_events` as an `allow` of kind `maintainer_ask`. Fallback: the maintainer can run the command himself by typing `!` in the app (a pasted `!…` is sent as a message).
 
-Whether `--settings` hooks survive a bare `claude --bg --resume` is unverified, an open point for 6b. `pre-push` is git-level, so it applies regardless.
+Whether `--settings` hooks survive a bare `claude --bg --resume` is unverified, an open point for 6b. So are two model points (QS-405), which 6b answers and records here: whether a resumed node keeps the model and effort it was spawned with (`resume` passes no flag — any flag forks a copy), and whether `effortLevel` through `--settings` takes effect on a `--bg` session at all. `pre-push` is git-level, so it applies regardless.
 
 The shim and the settings commands run `<MAIN>/venv/bin/python`. Without it they fall back to `python3` only if it is 3.14 or newer (the package's syntax); otherwise they print one warning line and allow.
 
@@ -568,7 +697,8 @@ Most are overridable by a function argument. These are module-level only (tests 
 | `Popen` | `subprocess.Popen`, for `ensure` | a recorder |
 | `faults.hit(name)` | no-op | `faults.arm(name, exc, skip=n)` |
 | `merge_policy` | refuses | `install(fn)` |
-| `export.LEDGER_SECTIONS` | empty: "No ledger recorded." | #375 fills it |
+| `Deps.resolve_model` → `Ctx.resolve_model` (QS-405) | `cli._policy_resolver`: `models.spawn_policy`, imported at call time — the Control Plane's one import outside the standard library (a test pins it) | the same resolver, or a stand-in; child 15 reuses the seam |
+| `export.LEDGER_SECTIONS` | the ledger's three sections (`Rounds`, `Findings`, `Blast radius`), registered by `cli` at import (`ledger.register_export()`); an empty registry renders "No ledger recorded." | the conftest teardown clears it and registers it again |
 | the daemon's `tick_hooks` | `ticks.hooks()`: the built-in hooks of [The active loop](#the-active-loop-406) | `ticks.hooks` returns `[]` (a hook-less daemon); the `active_loop` fixture restores it. A tick hook must return within `STALE_AFTER_S` or beat the lease itself; `ensure` SIGKILLs only a daemon whose heartbeat is at least `STALE_AFTER_S` old |
 | `activeloop.make_seams` | `Seams(Runner, ProcessProbe, ClaudeCli, paths.main(), ciwatch.GitHub)` | the test `Deps`, the fake main checkout and a `FakeGitHub` |
 | `codever.loaded_version` | the hash at `cli._daemon` entry | the fake main checkout's `code_version`; the `real_loaded_version` fixture restores it |
@@ -594,6 +724,7 @@ Most are overridable by a function argument. These are module-level only (tests 
 - **A permanently unknown `ps`.** When `ps` keeps failing, an older daemon's liveness stays unknown. If nothing holds the singleton `flock`, `ensure` knows it is gone and starts the new daemon; while the `flock` is held, it never signals it and answers `restart_pending` (or starts a new daemon for a stale same-schema lease) until `ps` answers again.
 - **The hook `session_id` assumption.** The hook's stdin `session_id`, `$CLAUDE_CODE_SESSION_ID` and the `sessionId` of `claude agents --json` are assumed to be the same identifier. The last two were verified equal on 2026-10-04; the hook field is unverified.
 - **`--settings` hooks after a bare resume:** unverified.
+- **The model and effort of a resumed node, and `effortLevel` through `--settings` on a `--bg` session:** unverified (QS-405; 6b's resume check records the result).
 - **The orchestrator's hooks are unwired until child 9.**
 - **The watchdog messenger** is the one exception to "only a task's node is spawned" (#406). `claude --bg` runs in Claude Code's background service with **the CLI's own login**: with an expired CLI login the launch still exits 0 and the messenger then stops ("Login expired"), so the run ends up `orchestrator_not_listening`. Keep the CLI logged in (run `claude`, then `/login`).
 - **The `ask` guard is matched per Bash segment.** A wrapper (`bash -c '…'`, `env`, a script) is not caught; the guard covers agent mistakes, like the other matchers. In `plan` / `dontAsk` mode the command is denied instead.

@@ -1,4 +1,4 @@
-"""Schema v2 (QS-406 §11): the active loop's ``alerts`` table and the ``hook_events`` cursor.
+"""Schema v3 (QS-406 §11; v2 is #375's ledger): the active loop's ``alerts`` table and the ``hook_events`` cursor.
 
 Single SQL statements, run one by one with ``execute`` (see ``migrations``). ``selfcheck``,
 ``selfcheck_override``, ``selfcheck_pending``, ``last_backup_at`` and ``last_backup_error`` are

@@ -81,7 +81,7 @@ def test_unroutable_rows_move_the_cursor(conn, migrated, fake_clock) -> None:
 def test_the_cursor_persists_and_history_is_not_replayed(conn, migrated, fake_clock) -> None:
     r1, _ = open_run()
     old = _event(migrated, {"kind": "k", "run_id": r1})
-    sql(migrated, "UPDATE meta SET value = ? WHERE key = 'hook_events_cursor'", [str(old)])  # as migration v2 seeds it
+    sql(migrated, "UPDATE meta SET value = ? WHERE key = 'hook_events_cursor'", [str(old)])  # as migration v3 seeds it
     hookroute.hook_route_hook(conn, fake_clock)  # a new daemon: reads from the stored cursor
     assert _queue(migrated, r1) == []
     new = _event(migrated, {"kind": "k", "run_id": r1})

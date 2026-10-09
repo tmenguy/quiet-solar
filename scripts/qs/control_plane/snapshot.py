@@ -10,7 +10,7 @@ import json
 import sqlite3
 from typing import Any
 
-from . import alerts, daemon, db, errors, migrations, tasks
+from . import alerts, daemon, db, errors, ledger, migrations, tasks
 from . import clock as clock_mod
 
 SECRET_COLUMNS = frozenset({"nonce"})
@@ -31,6 +31,10 @@ KEYS = (
     "digests",
     "reports",
     "integrations",
+    "rounds",
+    "findings",
+    "finding_events",
+    "blast_radius",
     "tool_calls_in_flight",
     "locks",
     "cap_slots",
@@ -44,7 +48,7 @@ def _rows(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> l
     out = []
     for row in conn.execute(sql, params).fetchall():
         item = {k: row[k] for k in row.keys() if k not in SECRET_COLUMNS}  # noqa: SIM118 — sqlite3.Row
-        for key in ("payload", "fields", "detail"):
+        for key in ("payload", "fields", "detail", "flags"):
             if isinstance(item.get(key), str):
                 try:
                     item[key] = json.loads(item[key])
@@ -93,6 +97,15 @@ def snapshot(conn: sqlite3.Connection | None, clock: clock_mod.Clock, run_id: st
     flt = "" if run_id is None else "AND run_id = ?"
     p: tuple[Any, ...] = () if run_id is None else (run_id,)
     task_flt = "" if run_id is None else "AND task_id IN (SELECT id FROM tasks WHERE run_id = ?)"
+    # A finding of a task with no run shows in the run that wrote it (#375).
+    finding_flt = "" if run_id is None else "AND (run_id = ? OR task_id IN (SELECT id FROM tasks WHERE run_id = ?))"
+    event_flt = (
+        ""
+        if run_id is None
+        else "AND finding_id IN (SELECT id FROM findings WHERE run_id = ? OR task_id IN"
+        " (SELECT id FROM tasks WHERE run_id = ?))"
+    )
+    pp: tuple[Any, ...] = () if run_id is None else (run_id, run_id)
     with db.read(conn):
         runs = _rows(conn, f"SELECT * FROM runs WHERE 1 = 1 {flt.replace('run_id', 'id')} ORDER BY rowid", p)
         leases = {r["run_id"]: r for r in _rows(conn, "SELECT * FROM run_leases")}
@@ -125,6 +138,10 @@ def snapshot(conn: sqlite3.Connection | None, clock: clock_mod.Clock, run_id: st
                 + " ORDER BY id",
                 p,
             ),
+            "rounds": _rows(conn, f"SELECT * FROM rounds WHERE 1 = 1 {task_flt} ORDER BY task_id, phase, round", p),
+            "findings": _rows(conn, f"SELECT * FROM findings WHERE 1 = 1 {finding_flt} ORDER BY id", pp),
+            "finding_events": _rows(conn, f"SELECT * FROM finding_events WHERE 1 = 1 {event_flt} ORDER BY id", pp),
+            "blast_radius": _rows(conn, f"SELECT * FROM blast_radius WHERE 1 = 1 {task_flt} ORDER BY id", p),
             "tool_calls_in_flight": [
                 {**c, "age_s": clock_mod.age(clock, c["started_at"])}
                 for c in _rows(
@@ -183,4 +200,5 @@ def task_show(conn: sqlite3.Connection | None, task_id: str) -> dict[str, Any]:
                 conn, "SELECT * FROM questions WHERE task_id = ? ORDER BY created_at, rowid", (task_id,)
             ),
             "decisions": _rows(conn, "SELECT * FROM decisions WHERE task_id = ? ORDER BY id", (task_id,)),
+            **{k: v for k, v in ledger.show(conn, task_id).items() if k != "task_id"},  # #375: the full ledger
         }

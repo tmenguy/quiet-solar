@@ -31,6 +31,7 @@ from . import (
     export,
     hooks,
     items,
+    ledger,
     liveness,
     locks,
     mergegate,
@@ -44,6 +45,7 @@ from . import (
     restore,
     runner,
     runs,
+    schema_ledger,
     snapshot,
     tasks,
     ticks,
@@ -53,6 +55,7 @@ from . import (
 from . import clock as clock_mod
 
 items.register_item_tools()  # #400's tools: the parser and the parametrized tests read REGISTRY at import
+ledger.register_export()  # #375's summary sections; the export is reachable only through this module
 activeloop.register_builtin()  # QS-406: the daemon's tick hooks (idempotent; main() calls it again)
 
 
@@ -74,6 +77,25 @@ class Deps:
     claude: liveness.ClaudeCli
     popen: Callable[..., Any]
     kill: Callable[[int, int], None]
+    resolve_model: tools.ResolveModel
+
+
+def _policy_resolver(stem: str, lane: str | None) -> tuple[str, str | None]:
+    """``models.spawn_policy(stem, lane)``, imported at call time (QS-405 D6).
+
+    The single import outside the standard library in the Control Plane
+    (the purity test allows exactly this one). ``models`` resolves from
+    ``sys.path[0]`` — ``cp.py``'s own ``scripts/qs``, i.e. the running
+    Control Plane's tree (always ``<MAIN>``). Nothing is caught: an import
+    failure or a refusal propagates (``tool spawn`` maps a ``ValueError`` to
+    ``USAGE``; anything else is ``INTERNAL``). Only a spawn with no caller
+    model ever runs it, so the hooks, ``wait`` and the daemon never touch
+    the policy.
+    """
+    import models  # lazy on purpose (D6)
+
+    result: tuple[str, str | None] = models.spawn_policy(stem, lane)
+    return result
 
 
 def make_deps() -> Deps:
@@ -85,6 +107,7 @@ def make_deps() -> Deps:
         claude=liveness.ClaudeCli(run),
         popen=subprocess.Popen,
         kill=os.kill,
+        resolve_model=_policy_resolver,
     )
 
 
@@ -254,8 +277,19 @@ def read_file(path: str) -> str:
     try:
         with open(path, encoding="utf-8") as handle:
             return handle.read()
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise errors.CpError("USAGE", f"cannot read {path}: {exc}") from exc
+
+
+def _sql_id(text: str) -> int:
+    """A positive id within SQLite's INTEGER range (a larger one is USAGE, never an INTERNAL overflow)."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not an integer: {text!r}") from None
+    if not 1 <= value <= ledger.MAX_INT:
+        raise argparse.ArgumentTypeError(f"must be between 1 and {ledger.MAX_INT}: {text!r}")
+    return value
 
 
 def _token(p: argparse.ArgumentParser) -> None:
@@ -793,6 +827,130 @@ def _export_summary(args: argparse.Namespace, io: Io) -> dict[str, Any]:
         return {"path": str(export.write_summary(conn, args.task, args.out_worktree))}
 
 
+def _conf_round_start(p: argparse.ArgumentParser) -> None:
+    _conf_task_token(p)
+    p.add_argument("--phase", required=True, choices=schema_ledger.PHASES)
+    p.add_argument("--head")
+    p.add_argument("--base")
+
+
+def _round_start(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    return _write(
+        io,
+        ledger.start_round,
+        io.deps.clock,
+        token=args.token,
+        task_id=args.task,
+        phase=args.phase,
+        head=args.head,
+        base=args.base,
+    )
+
+
+def _conf_finding_open(p: argparse.ArgumentParser) -> None:
+    _conf_task_token(p)
+    p.add_argument("--phase", required=True, choices=schema_ledger.PHASES)
+    p.add_argument("--source", required=True, choices=schema_ledger.SOURCES)
+    p.add_argument("--round", type=_sql_id)
+    p.add_argument("--input", required=True, help="a JSON file, or `-` for stdin")
+
+
+def _read_stdin(io: Io) -> str:
+    try:
+        return io.stdin.read()
+    except UnicodeDecodeError as exc:
+        raise errors.CpError("USAGE", f"stdin is not UTF-8: {exc}") from exc
+
+
+def _finding_open(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    items = ledger.parse_items(_read_stdin(io) if args.input == "-" else read_file(args.input))
+    return _write(
+        io,
+        ledger.open_findings,
+        io.deps.clock,
+        token=args.token,
+        task_id=args.task,
+        phase=args.phase,
+        source=args.source,
+        round_=args.round,
+        items=items,
+    )
+
+
+def _conf_finding_classify(p: argparse.ArgumentParser) -> None:
+    p.add_argument("id", type=_sql_id)
+    p.add_argument("--class", dest="cls", required=True, choices=schema_ledger.CLASSES)
+    p.add_argument("--note")
+    _token(p)
+
+
+def _finding_classify(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    return _write(
+        io, ledger.classify, io.deps.clock, token=args.token, finding_id=args.id, cls=args.cls, note=args.note
+    )
+
+
+def _conf_finding_state(p: argparse.ArgumentParser) -> None:
+    p.add_argument("id", type=_sql_id)
+    p.add_argument("--to", required=True, choices=schema_ledger.STATES)
+    p.add_argument("--reason")
+    p.add_argument("--commit")
+    p.add_argument("--cause", type=_sql_id)
+    _token(p)
+
+
+def _finding_state(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    return _write(
+        io,
+        ledger.set_state,
+        io.deps.clock,
+        token=args.token,
+        finding_id=args.id,
+        to=args.to,
+        reason=args.reason,
+        commit=args.commit,
+        cause=args.cause,
+    )
+
+
+def _conf_blast_radius_set(p: argparse.ArgumentParser) -> None:
+    _conf_task_token(p)
+    p.add_argument("--value", required=True, choices=schema_ledger.BLAST_VALUES)
+    p.add_argument("--head-sha", required=True)
+    p.add_argument("--review", required=True)
+    p.add_argument("--reason")
+
+
+def _blast_radius_set(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    return _write(
+        io,
+        ledger.set_blast_radius,
+        io.deps.clock,
+        token=args.token,
+        task_id=args.task,
+        value=args.value,
+        head_sha=args.head_sha,
+        review=args.review,
+        reason=args.reason,
+    )
+
+
+def _conf_ledger_show(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--task", required=True)
+    p.add_argument("--phase", choices=schema_ledger.PHASES)
+    p.add_argument("--family", dest="include_family", action="store_true")
+    p.add_argument("--state", help="a comma-separated list of states")
+
+
+def _ledger_show(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    states = None if args.state is None else [s.strip() for s in args.state.split(",") if s.strip()]
+    with connection(io, "read") as conn:
+        if conn is None:
+            raise errors.CpError("NOT_FOUND", f"unknown task {args.task} (no DB yet)")
+        with db.read(conn):
+            return ledger.show(conn, args.task, phase=args.phase, states=states, include_family=args.include_family)
+
+
 COMMANDS: dict[str, Command] = {
     c.name: c
     for c in (
@@ -831,6 +989,14 @@ COMMANDS: dict[str, Command] = {
         Command("snapshot", "read", _snapshot, _conf_snapshot, help="the board-complete read-only view"),
         Command("task show", "read", _task_show, _conf_task_show, help="one task in full, digest included"),
         Command("export-summary", "read", _export_summary, _conf_export, help="write the task summary into a worktree"),
+        Command("ledger show", "read", _ledger_show, _conf_ledger_show, help="a task's finding ledger (filtered)"),
+        Command("round start", "write", _round_start, _conf_round_start, help="start a review round → its base..head"),
+        Command("finding open", "write", _finding_open, _conf_finding_open, help="open findings (JSON) → their ids"),
+        Command("finding classify", "write", _finding_classify, _conf_finding_classify, help="classify a finding"),
+        Command("finding state", "write", _finding_state, _conf_finding_state, help="move a finding to a state"),
+        Command(
+            "blast-radius set", "write", _blast_radius_set, _conf_blast_radius_set, help="rate a task's blast radius"
+        ),
         Command("msg post", "write", _msg_post, _conf_msg_post, help="post a message to a queue"),
         Command("msg pop", "write", _msg_pop, _conf_msg_pop, help="pop the next visible message (with a receipt)"),
         Command("msg ack", "write", _msg_ack, _conf_msg_ack, help="acknowledge a popped message"),
@@ -884,6 +1050,7 @@ def _tool_handler(name: str) -> Callable[[argparse.Namespace, Io], dict[str, Any
             probe=d.probe,
             claude=d.claude,
             main=paths.main(),
+            resolve_model=d.resolve_model,
         )
         return tools.invoke(name, key=args.key, task_id=args.task, args=tool_args, token=args.token, actor="", ctx=ctx)
 

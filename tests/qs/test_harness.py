@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import pytest
 
-
 # --------------------------------------------------------------------------- #
 # N8 — canonicalize() helper maps legacy aliases to canonical names
 # --------------------------------------------------------------------------- #

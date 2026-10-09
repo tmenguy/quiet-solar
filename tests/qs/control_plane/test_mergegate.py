@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from control_plane import activeloop, alerts, cli, codever, daemon, db, mergegate, runner, selfcheck, ticks, tools
 
-from .conftest import CUR, ORCH, V_NEXT, FakeRunner, open_run, run_cli, sql
+from .conftest import CUR, NEXT, ORCH, FakeRunner, open_run, run_cli, sql
 from .test_tools import W, _prep_merge, call_row, tool, w  # noqa: F401 — `w` is a fixture
 
 # --------------------------------------------------------------------------- helpers
@@ -239,7 +239,7 @@ class TestAskGuard:
         assert _decision(_pre("python cp.py halt clear --reason r", session=ORCH)) == "ask"
         [row] = [dict(r) for r in sql(migrated, "SELECT * FROM hook_events")]
         assert row["decision"] == "allow" and json.loads(row["detail"])["kind"] == "maintainer_ask"
-        sql(migrated, f"PRAGMA user_version = {V_NEXT}")
+        sql(migrated, f"PRAGMA user_version = {NEXT}")
         assert _decision(_pre("python cp.py halt clear --reason r", session=ORCH)) == "ask"
 
     def test_an_orchestrator_chaining_a_merge_is_denied(self, migrated: Path) -> None:
@@ -313,7 +313,7 @@ class TestSelfCheck:
             runner.RunResult(1, "", "boom"),
             json.dumps({"schema_version": CUR, "tools": ["merge"], "tick_hooks": sorted(activeloop.BUILTIN_NAMES)}),
             json.dumps({"schema_version": CUR, "tools": sorted(tools.REGISTRY), "tick_hooks": ["code_version"]}),
-            json.dumps({"schema_version": V_NEXT, "tools": [], "tick_hooks": []}),
+            json.dumps({"schema_version": NEXT, "tools": [], "tick_hooks": []}),
             "not json",
         ],
     )
@@ -324,7 +324,7 @@ class TestSelfCheck:
         assert rec["ok"] is False and rec["tries"] == 1 and [f["step"] for f in rec["failures"]] == ["entry"]
 
     def test_the_schema_step_fails_on_a_wrong_version(self, check, fake_clock, monkeypatch) -> None:
-        monkeypatch.setattr(selfcheck, "migrations", SimpleNamespace(current_schema_version=lambda: V_NEXT))
+        monkeypatch.setattr(selfcheck, "migrations", SimpleNamespace(current_schema_version=lambda: NEXT))
         selfcheck.selfcheck_hook(check.conn, fake_clock)
         assert "schema" in [f["step"] for f in _meta(check.db, mergegate.RECORD)["failures"]]
 

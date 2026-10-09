@@ -26,4 +26,14 @@ PR #42 (https://x/pull/42) · merge f00d
 
 ## Ledger
 
-No ledger recorded.
+### Rounds
+
+_None recorded._
+
+### Findings
+
+_None recorded._
+
+### Blast radius
+
+_None recorded._

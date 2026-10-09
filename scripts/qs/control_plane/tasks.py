@@ -31,6 +31,15 @@ KINDS = ("epic", "feature", "bug")
 UNBLOCK = "unblock"
 
 
+def derive_lane(kind: str, target: str | None) -> str | None:
+    """The lane a task's ``kind`` and ``target`` name: ``None`` with no target, else ``<kind>-<target>``.
+
+    Mirrors ``targets.parse_axes`` (the label ``scale:epic`` ↔ the task kind ``epic``). A free-text
+    target derives to a lane the model policy refuses (QS-405 D7).
+    """
+    return f"{kind}-{target}" if target else None
+
+
 def get(conn: sqlite3.Connection, task_id: str) -> sqlite3.Row:
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if row is None:

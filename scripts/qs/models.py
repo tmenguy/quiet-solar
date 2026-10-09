@@ -2,11 +2,18 @@
 """Per-phase model policy by lane (QS-358).
 
 The single source of truth for which model — and how much thinking
-effort — each pipeline agent runs on. The renderer
-(``render_agents.py``) resolves every agent's frontmatter from here;
-the Claude launcher's GUI pin writes the phase's ``effortLevel`` from
-here. This module imports nothing from the renderer (one-way
-dependency).
+effort — each pipeline agent runs on. Three consumers read it:
+
+- the renderer (``render_agents.py``) resolves every agent's frontmatter
+  from here;
+- the Claude launcher's GUI pin writes the phase's ``effortLevel`` from
+  here;
+- the Control Plane's ``tool spawn`` passes a ``--bg`` node its
+  ``--model`` and ``effortLevel`` through :func:`spawn_policy` (QS-405),
+  importing this module lazily, at call time.
+
+This module imports nothing from the renderer or the Control Plane
+(one-way dependency).
 
 Vocabulary (D18): the policy speaks five harness-agnostic **classes**;
 each harness owns one complete ``class → model`` row in
@@ -82,8 +89,18 @@ CLASS_EFFORT: dict[str, str | None] = {
 }
 
 # --- the table -------------------------------------------------------------
-# The planning orchestrators are the only lane-dependent rows (D1).
+# D1 (rewritten by QS-405 D4) — which rows may depend on the lane. Besides
+# the two planning orchestrators (``_PLANNING``), a row may depend on the
+# lane ONLY for a stem that a Control Plane tool launches (the node and the
+# reviews of the second pipeline; the test-local ``CP_LAUNCHED`` set in
+# ``tests/qs/test_models.py`` is that domain). Every other row is flat —
+# the node's sub-agents included: they render with no task facts, so their
+# frontmatter cannot know a lane. Today the only Control-Plane-launched
+# row that depends on the lane is ``qs-node``.
 _PLANNING: frozenset[str] = frozenset({"qs-create-plan", "qs-diagnose-task"})
+
+# The lane-dependent stems; all share the planning orchestrators' rule.
+_BY_LANE: frozenset[str] = _PLANNING | {"qs-node"}
 
 # Lane-invariant rows (D2: reviewers deliberately mixed across classes).
 _FLAT: dict[str, str] = {
@@ -107,9 +124,16 @@ _FLAT: dict[str, str] = {
     "qs-finish-task": "fast",
     "qs-setup-task": "light",
     "qs-release": "fast",
+    # QS-405 D3 — the second pipeline's flat roles (``qs-node`` is in
+    # ``_BY_LANE``). A starting point; a retune is a one-row edit here plus
+    # its line in ``tests/qs/test_models.py``.
+    "qs-orchestrator": "frontier",  # the run's planning conversation and judgment
+    "qs-global-review": "frontier",  # coherence judgment over one run
+    "qs-cross-run-review": "deep",  # code-grounded overlap; mixed with the global review on purpose
+    "qs-final-review": "frontier",  # the run's readable verdict
 }
 
-STEMS: frozenset[str] = frozenset(_FLAT) | _PLANNING
+STEMS: frozenset[str] = frozenset(_FLAT) | _BY_LANE
 
 
 class ModelPolicyError(ValueError):
@@ -148,12 +172,32 @@ def resolve(lane: str | None, stem: str) -> str:
     Raises:
         ModelPolicyError: for an unknown ``stem`` (a stem is code, not data).
     """
-    if stem in _PLANNING:
+    if stem in _BY_LANE:
         return _planning_class(lane)
     try:
         return _FLAT[stem]
     except KeyError:
         raise ModelPolicyError(stem) from None
+
+
+def spawn_policy(stem: str, lane: str | None) -> tuple[str, str | None]:
+    """``(model, effort)`` for a Claude ``--bg`` spawn of ``stem`` under ``lane`` (QS-405 D5).
+
+    The model is the ``claude`` row's (the spawn is ``claude --bg``); the
+    effort is :func:`effort_for` the class — ``"high"``, ``"medium"`` or
+    ``None`` (send no ``effortLevel``).
+
+    Unlike :func:`resolve`, which never raises on lane data, a spawn's lane
+    comes from the Control Plane's task row and is validated here.
+
+    Raises:
+        ModelPolicyError: for an unknown ``stem``.
+        ValueError: for a ``lane`` that is neither ``None`` nor in :data:`LANES`.
+    """
+    if lane is not None and lane not in LANES:
+        raise ValueError(f"lane {lane!r} is not one of models.LANES")
+    cls = resolve(lane, stem)
+    return model_for("claude", cls), effort_for(cls)
 
 
 def model_for(harness: str, cls: str) -> str:

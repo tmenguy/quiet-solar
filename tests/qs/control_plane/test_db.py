@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from control_plane import db, errors, migrations, paths
 
-from .conftest import CUR, V_NEXT
+from .conftest import CUR, NEXT
 
 
 class TestConnect:
@@ -44,11 +44,11 @@ class TestWrite:
 
     def test_write_after_a_migration_is_refused(self, conn: sqlite3.Connection, migrated: Path) -> None:
         other = sqlite3.connect(migrated)
-        other.execute(f"PRAGMA user_version = {V_NEXT}")
+        other.execute(f"PRAGMA user_version = {NEXT}")
         other.close()
         with pytest.raises(errors.CpError) as exc, db.write(conn):
             conn.execute("INSERT INTO meta (key, value) VALUES ('a', '1')")
-        assert exc.value.code == "SCHEMA_TOO_NEW" and exc.value.extra == {"db_version": V_NEXT, "code_version": CUR}
+        assert exc.value.code == "SCHEMA_TOO_NEW" and exc.value.extra == {"db_version": NEXT, "code_version": CUR}
         assert conn.execute("SELECT count(*) FROM meta WHERE key = 'a'").fetchone()[0] == 0
 
     def test_busy(self, conn: sqlite3.Connection, migrated: Path) -> None:
@@ -116,7 +116,7 @@ class TestCheckSchema:
 
     @pytest.mark.parametrize("wait", [False, True])
     def test_newer_refuses(self, migrated: Path, fake_clock, wait: bool) -> None:
-        _set_version(migrated, V_NEXT)
+        _set_version(migrated, NEXT)
         calls: list[int] = []
         with pytest.raises(errors.CpError) as exc:
             db.check_schema(migrated, wait=wait, clock=fake_clock, ensure=lambda: calls.append(1) or {})
@@ -156,7 +156,7 @@ class TestCheckSchema:
 
     def test_becomes_newer_while_waiting(self, migrated: Path, fake_clock) -> None:
         _set_version(migrated, 0)
-        fake_clock.sleep = lambda s: _set_version(migrated, 5)
+        fake_clock.sleep = lambda s: _set_version(migrated, NEXT)
         with pytest.raises(errors.CpError) as exc:
             db.check_schema(migrated, wait=True, clock=fake_clock)
         assert exc.value.code == "SCHEMA_TOO_NEW"
@@ -167,6 +167,9 @@ def test_next_id_and_helpers(conn: sqlite3.Connection, fake_clock) -> None:
         assert db.next_id(conn, "run", "R") == "R1"
         assert db.next_id(conn, "run", "R") == "R2"
         assert db.next_id(conn, "task", "T") == "T1"
+        assert db.next_seq(conn, "finding_decision") == 1  # QS-375: the bare number, same counters table
+        assert db.next_seq(conn, "finding_decision") == 2
+        assert db.next_id(conn, "run", "R") == "R3"  # each kind counts on its own
     assert db.as_dict(None) is None
     assert db.as_dict(conn.execute("SELECT 1 AS a").fetchone()) == {"a": 1}
     assert db.now(fake_clock) == "2026-10-03T12:00:00.000000Z"

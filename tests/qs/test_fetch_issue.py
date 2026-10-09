@@ -24,6 +24,7 @@ def _run_main(
     issue_payload: dict[str, Any],
 ) -> dict[str, Any]:
     import fetch_issue
+
     import utils
 
     def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -150,6 +151,7 @@ def test_malformed_label_entries_degrade_to_structured_error(
     comprehension inside the guarded block; this one was a level
     shallower."""
     import fetch_issue
+
     import utils
 
     payload = json.dumps(
@@ -193,6 +195,7 @@ def test_incomplete_or_non_dict_json_degrades_to_structured_error(
       (finding 4).
     """
     import fetch_issue
+
     import utils
 
     monkeypatch.setattr(utils, "run", lambda cmd, **kw: _completed(stdout=stdout))
@@ -208,6 +211,7 @@ def test_gh_failure_exits_nonzero(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     import fetch_issue
+
     import utils
 
     monkeypatch.setattr(

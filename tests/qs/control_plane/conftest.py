@@ -41,7 +41,8 @@ MODULES = (
     "backups",
     "liveness",
     "schema_v1",
-    "schema_v2",
+    "schema_ledger",
+    "schema_v3",
     "migrations",
     "db",
     "daemon",
@@ -60,6 +61,7 @@ MODULES = (
     "tools",
     "items",
     "export",
+    "ledger",
     "alerts",
     "snapshot",
     "ticks",
@@ -75,6 +77,7 @@ MODULES = (
 for _name in MODULES:
     importlib.import_module(f"control_plane.{_name}")
 
+import models  # type: ignore[import-not-found]  # noqa: E402, F401 — re-exported: the policy the spawn tests expect (QS-405)
 from control_plane import (  # noqa: E402
     activeloop,
     ciwatch,
@@ -86,6 +89,7 @@ from control_plane import (  # noqa: E402
     export,
     faults,
     items,
+    ledger,
     liveness,
     merge_policy,
     mergegate,
@@ -97,8 +101,8 @@ from control_plane import (  # noqa: E402
 )
 from control_plane.runner import RunResult  # noqa: E402
 
-CUR = migrations.current_schema_version()  # the schema this code writes (QS-406 §11: pins rebased on it)
-V_NEXT = CUR + 1  # a schema newer than the code
+CUR = migrations.current_schema_version()  # the schema this code writes (QS-375 / QS-406: rebased tests)
+NEXT = CUR + 1  # a schema newer than the code
 
 REAL_PROCSETUP_GET = procsetup.get
 REAL_CODE_ROOT = paths.code_root
@@ -349,7 +353,13 @@ def fake_kill() -> FakeKill:
 @pytest.fixture
 def deps(fake_clock, fake_runner, fake_probe, fake_claude, fake_popen, fake_kill) -> cli.Deps:
     return cli.Deps(
-        clock=fake_clock, runner=fake_runner, probe=fake_probe, claude=fake_claude, popen=fake_popen, kill=fake_kill
+        clock=fake_clock,
+        runner=fake_runner,
+        probe=fake_probe,
+        claude=fake_claude,
+        popen=fake_popen,
+        kill=fake_kill,
+        resolve_model=cli._policy_resolver,
     )
 
 
@@ -422,6 +432,7 @@ def _cp_isolation(
         tools.reset()
         items.register_item_tools()
         export.LEDGER_SECTIONS.clear()
+        ledger.register_export()  # #375: the sections cli registers at import, whole again for the next test
 
 
 @pytest.fixture

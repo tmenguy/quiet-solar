@@ -1,6 +1,6 @@
 """Hook-event routing (QS-406 §7): ``hook_events`` alerts reach their run's orchestrator queue.
 
-A cursor in ``meta.hook_events_cursor`` (seeded by migration v2 past the existing history) marks the
+A cursor in ``meta.hook_events_cursor`` (seeded by migration v3 past the existing history) marks the
 last event read. Each tick, in one ``db.write``, the next events are read; every ``alert`` row whose
 run is known and open becomes a one-shot alert (``alerts.event_locked``, subject ``hook:<id>``); the
 cursor moves to the last id read, routable or not. Unroutable rows stay visible in

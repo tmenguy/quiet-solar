@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from control_plane import clock, wait
 
-from .conftest import CUR, ORCH, V_NEXT, insert_node, insert_task, open_run, run_cli, sql
+from .conftest import CUR, NEXT, ORCH, insert_node, insert_task, open_run, run_cli, sql
 
 
 def _hook(fake_clock: clock.FakeClock, fn: Callable[[int], None]) -> None:
@@ -125,7 +125,7 @@ def test_fresh_daemon_is_not_reensured(migrated, run, fake_popen, fake_clock) ->
 
 def test_migration_mid_wait_exits_5_restart_wait(migrated, run, fake_clock) -> None:
     run_id, token = run
-    _hook(fake_clock, lambda n: sql(migrated, f"PRAGMA user_version = {V_NEXT}"))
+    _hook(fake_clock, lambda n: sql(migrated, f"PRAGMA user_version = {NEXT}"))
     code, out = run_cli("wait", "--run", run_id, "--token", token)
     assert code == 5 and out["restart_wait"] is True
     assert _waiters(migrated) == 0

@@ -36,8 +36,6 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
-import models  # type: ignore[import-not-found]  # scripts/qs is on sys.path (cp.py, the conftest)
-
 from . import activeloop, alerts, daemon, db, liveness, messages, nodes, paths, tasks, ticks, wait
 from . import clock as clock_mod
 
@@ -205,13 +203,21 @@ def messenger_prompt(run_name: str, text: str) -> str:
     )
 
 
+def _messenger_model() -> str:
+    """``models``' fast class, imported at call time (QS-405 D6: the purity test allows exactly these lazy imports)."""
+    import models  # lazy on purpose: the Control Plane imports only the standard library and itself
+
+    model: str = models.model_for("claude", "fast")
+    return model
+
+
 def messenger_args(run_id: str, head: int, prompt: str) -> list[str]:
     """``claude --bg`` arguments (D12, with T1's fixes: ``--allowedTools=`` is one word, or it swallows the prompt)."""
     return [
         "-n",
         f"qs-wake-{run_id}-m{head}",
         "--model",
-        models.model_for("claude", "fast"),
+        _messenger_model(),
         "--permission-mode",
         "auto",
         "--allowedTools=SendMessage",

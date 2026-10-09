@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from control_plane import activeloop, alerts, backups, ciwatch, clock, daemon, db, migrations, paths, restore, ticks
 
-from .conftest import CUR, ORCH, V_NEXT, agent, insert_node, insert_task, open_run, run_cli, sql
+from .conftest import CUR, NEXT, ORCH, agent, insert_node, insert_task, open_run, run_cli, sql
 
 
 def _hook(conn: sqlite3.Connection, fake_clock: clock.FakeClock) -> None:
@@ -276,14 +276,14 @@ class TestRestore:
         }.get(case, "CONFLICT")
         src = backed_up["src"]
         if case == "newer_live":
-            sql(migrated, f"PRAGMA user_version = {V_NEXT}")
+            sql(migrated, f"PRAGMA user_version = {NEXT}")
         elif case == "no_backup":
             src.unlink()
         elif case == "corrupt_backup":
             src.write_bytes(os.urandom(4096))
         elif case == "newer_backup":
             c = sqlite3.connect(src)
-            c.execute(f"PRAGMA user_version = {V_NEXT}")
+            c.execute(f"PRAGMA user_version = {NEXT}")
             c.close()
         elif case == "page_size":
             src.unlink()

@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from control_plane import hooks, runner
 
-from .conftest import ORCH, V_NEXT, FakeRunner, insert_node, insert_task, open_run, run_cli, sql
+from .conftest import NEXT, ORCH, FakeRunner, insert_node, insert_task, open_run, run_cli, sql
 
 
 def stop(session: str) -> tuple[int, Any]:
@@ -142,7 +142,7 @@ class TestStop:
 
     def test_fails_open_on_a_schema_mismatch(self, world, capsys) -> None:
         post(world)
-        sql(world["db"], f"PRAGMA user_version = {V_NEXT}")
+        sql(world["db"], f"PRAGMA user_version = {NEXT}")
         assert stop(ORCH) == (0, None)
         assert "stop hook failed open" in capsys.readouterr().err
 
@@ -219,7 +219,7 @@ class TestPreToolUse:
 
     def test_fails_open(self, world, monkeypatch, capsys) -> None:
         assert run_cli("hook", "pre-tool-use", stdin="nope") == (0, None)
-        sql(world["db"], f"PRAGMA user_version = {V_NEXT}")
+        sql(world["db"], f"PRAGMA user_version = {NEXT}")
         assert not denied(pre_tool(ORCH, "Bash", command="gh pr merge 5"))
         assert "failed open" in capsys.readouterr().err
 
@@ -248,7 +248,7 @@ class TestPrePush:
         from control_plane import migrations
 
         migrations.migrate(db_path, role="test")
-        sql(db_path, "PRAGMA user_version = 3")
+        sql(db_path, f"PRAGMA user_version = {NEXT}")
         assert self._push(w, fake_runner, "refs/heads/QS_11 a refs/heads/QS_11 b") == (0, "")
         assert "failed open" in capsys.readouterr().err
 
