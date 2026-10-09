@@ -39,7 +39,7 @@ class TestWrite:
         with pytest.raises(RuntimeError), db.write(conn):
             conn.execute("INSERT INTO meta (key, value) VALUES ('b', '2')")
             raise RuntimeError
-        assert [r[0] for r in conn.execute("SELECT key FROM meta")] == ["a"]
+        assert [r[0] for r in conn.execute("SELECT key FROM meta WHERE key IN ('a', 'b')")] == ["a"]
         assert not conn.in_transaction
 
     def test_write_after_a_migration_is_refused(self, conn: sqlite3.Connection, migrated: Path) -> None:
@@ -49,7 +49,7 @@ class TestWrite:
         with pytest.raises(errors.CpError) as exc, db.write(conn):
             conn.execute("INSERT INTO meta (key, value) VALUES ('a', '1')")
         assert exc.value.code == "SCHEMA_TOO_NEW" and exc.value.extra == {"db_version": NEXT, "code_version": CUR}
-        assert conn.execute("SELECT count(*) FROM meta").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM meta WHERE key = 'a'").fetchone()[0] == 0
 
     def test_busy(self, conn: sqlite3.Connection, migrated: Path) -> None:
         holder = db.connect(migrated)

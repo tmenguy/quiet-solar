@@ -33,7 +33,7 @@ flowchart LR
         CLI["cp.py CLI<br/>(one JSON object per call)"]
         HK["Hooks<br/>Stop · PreToolUse · pre-push"]
         D["Daemon<br/>(singleton, ticks, migrates)"]
-        DB[("harness_state.db<br/>SQLite WAL, schema v2")]
+        DB[("harness_state.db<br/>SQLite WAL, schema v3")]
     end
 
     subgraph Ext["Effects outside the DB"]
@@ -78,8 +78,8 @@ The design rests on these invariants:
 
 ## 2. Package architecture
 
-`scripts/qs/control_plane/` has 30 modules (~8.1k lines) behind
-`scripts/qs/cp.py`. Arrows point from a module to the modules it imports;
+`scripts/qs/control_plane/` has 44 modules (~11.1k lines) behind
+`scripts/qs/cp.py`, the finding ledger (#375) and the active loop (#406) included. Arrows point from a module to the modules it imports;
 the infrastructure layer is imported by almost everything.
 
 ```mermaid
@@ -101,6 +101,18 @@ flowchart TB
         merge_policy["merge_policy.py (seam)"]
     end
 
+    subgraph L3b["Active loop (#406): the daemon's tick hooks"]
+        activeloop["activeloop.py<br/>Seams · register_builtin"]
+        ticks["ticks.py<br/>registry · Throttle"]
+        selfcheck["selfcheck.py<br/>code_version · selfcheck hooks"]
+        detectors["detectors.py<br/>overlap · stalls · rounds · anomalies · cycles · duplicates"]
+        hookroute["hookroute.py<br/>hook_events cursor"]
+        ciwatch["ciwatch.py<br/>GitHub · CiWatcher"]
+        watchdog["watchdog.py<br/>liveness · wake-up ladder"]
+        restore["restore.py<br/>backup hook · restore"]
+        alerts["alerts.py<br/>kinds · occurrence engine"]
+    end
+
     subgraph L2["Domain layer"]
         runs["runs.py<br/>leases, takeover"]
         tasks["tasks.py<br/>tree, transitions"]
@@ -115,7 +127,10 @@ flowchart TB
 
     subgraph L1["Infrastructure layer"]
         db["db.py<br/>connect, write/read txns, file_lock, schema check"]
-        migrations["migrations.py + schema_v1.py + schema_ledger.py"]
+        migrations["migrations.py + schema_v1.py + schema_ledger.py + schema_v3.py"]
+        codever["codever.py (leaf)<br/>code version"]
+        mergegate["mergegate.py (leaf)<br/>merge gate"]
+        backups["backups.py (leaf)<br/>write_copy · rotate"]
         paths["paths.py<br/>path guard, main checkout"]
         liveness["liveness.py<br/>ProcessProbe, ClaudeCli"]
         runner["runner.py (Runner seam)"]
@@ -126,6 +141,16 @@ flowchart TB
     end
 
     cli --> tools & wait & daemon & export & snapshot & hooks & ledger
+    cli --> activeloop & restore & codever & mergegate & alerts
+    activeloop --> ticks
+    activeloop -.->|"lazy: register_builtin()"| selfcheck & detectors & hookroute & ciwatch & watchdog & restore
+    selfcheck & detectors & hookroute & ciwatch & watchdog & restore --> activeloop & alerts
+    selfcheck --> codever & mergegate
+    restore --> daemon & backups
+    tools --> mergegate & codever
+    migrations --> backups
+    snapshot --> alerts
+    alerts --> messages
     cli --> runs & tasks & nodes & messages & questions & reports & decisions & locks
     hooks --> runs & tasks & messages & tokens & wait & liveness
     tools --> locks & nodes & tasks & tokens & hooks & merge_policy & liveness & runner
@@ -148,16 +173,17 @@ flowchart TB
 
 **Seams.** Every external dependency goes through an injectable seam:
 `Clock`, `Runner`, `ProcessProbe`, `ClaudeCli`, `ProcessSetup`, `Popen`,
-`faults`, `merge_policy`, `export.LEDGER_SECTIONS` and the daemon's
-`tick_hooks`. The ~1,190 tests run with no real `claude`, `gh`, `git push` or
-signals.
+`faults`, `merge_policy`, `export.LEDGER_SECTIONS`, the daemon's
+`tick_hooks`, and the active loop's `Seams` (with a `GitHub` for the CI
+watcher). The tests run with no real `claude`, `gh`, `git push`, signals,
+subprocess or socket under the daemon (a guard test bans them).
 
 ---
 
-## 3. Data model (`harness_state.db`, schema v2)
+## 3. Data model (`harness_state.db`, schema v3)
 
-There are 28 tables: schema v1's 24, and the 4 of the finding ledger
-(v2, #375). The schema version is `PRAGMA user_version`.
+There are 29 tables: schema v1's 24, the 4 of the finding ledger
+(v2, #375) and `alerts` (v3, #406). The schema version is `PRAGMA user_version`.
 Text ids are `R<n>` (run), `T<n>` (task), `N<n>` (node) and `Q<n>`
 (question).
 
@@ -183,6 +209,8 @@ erDiagram
     nodes |o--o{ reports : "node_id"
     tasks ||--o{ integrations : "item_task_id / deliverable_id"
     runs ||--o{ decisions : ""
+    runs ||--o{ alerts : "one row per occurrence (v3)"
+    messages |o--o| alerts : "message_id"
 
     runs {
         text id PK
@@ -222,6 +250,18 @@ erDiagram
         text state "spawning…superseded"
         text spawn_tool_key
         text launch_at
+    }
+    alerts {
+        int id PK
+        text run_id FK
+        text kind "1-32 chars"
+        text subject
+        text fingerprint UK "kind:sha16:n, per run"
+        text payload
+        int message_id FK
+        text first_seen
+        text last_seen
+        text cleared_at "NULL while open"
     }
     messages {
         int id PK

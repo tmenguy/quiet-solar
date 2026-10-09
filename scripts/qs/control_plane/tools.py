@@ -23,17 +23,34 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import stat
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from . import clock as clock_mod
-from . import db, errors, faults, hooks, liveness, locks, merge_policy, nodes, paths, runner, tasks, tokens
+from . import (
+    codever,
+    db,
+    errors,
+    faults,
+    hooks,
+    liveness,
+    locks,
+    merge_policy,
+    mergegate,
+    nodes,
+    paths,
+    runner,
+    tasks,
+    tokens,
+)
 
 TaskRow = sqlite3.Row
 TOKEN_ENV = "QS_CP_TOKEN"
@@ -1437,6 +1454,7 @@ def _merge_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
     pr = str(_need(task, "pr_number"))
 
     def policy(ctx: StepCtx) -> dict[str, Any]:
+        _merge_gate(ctx)
         verdict = merge_policy.check(ctx.task)
         if not verdict.ok:
             raise errors.CpError("POLICY_REFUSED", verdict.reason)
@@ -1458,6 +1476,34 @@ def _merge_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
         return {"merge_sha": _merge_sha(ctx, pr, _gh_json(ctx, ["gh", "pr", "view", pr, "--json", "mergeCommit"]))}
 
     return (Step("policy", policy), Step("head", head), Step("merge", merge))
+
+
+def _git_busy_clause(main: Path) -> str:
+    busy = codever.git_busy(main, ignore_stale=False)
+    if busy is None:
+        return ""
+    try:
+        since = clock_mod.iso(datetime.fromtimestamp(os.stat(busy).st_mtime, UTC))
+    except OSError:
+        since = "?"
+    return f" (a git operation has been in progress in the main checkout since {since}: {busy})"
+
+
+def _merge_gate(ctx: StepCtx) -> None:
+    """QS-406 §4.2: refuse before the merge policy unless the self-check passed for the code on disk.
+
+    The version is hashed before the write (no file read under the writer lock); the verdict's
+    transaction commits (``selfcheck_pending.since``) before anything is raised.
+    """
+    version = codever.code_version(ctx.main)
+    with ctx.write() as conn:
+        verdict = mergegate.merge_allowed(conn, version, ctx.clock)
+    if verdict.state in (mergegate.PENDING_STATE, mergegate.RETRYING):
+        raise errors.CpError("BUSY", verdict.reason, gate=verdict.state, next_retry_at=verdict.next_retry_at)
+    if verdict.state == mergegate.STUCK:
+        raise errors.CpError("POLICY_REFUSED", f"{verdict.reason}{_git_busy_clause(ctx.main)}; ask the maintainer")
+    if verdict.state == mergegate.FAILED:
+        raise errors.CpError("POLICY_REFUSED", verdict.reason)
 
 
 def _merge_probe(ctx: StepCtx) -> dict[str, Any | None]:

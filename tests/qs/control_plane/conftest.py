@@ -36,9 +36,13 @@ MODULES = (
     "runner",
     "procsetup",
     "paths",
+    "codever",
+    "mergegate",
+    "backups",
     "liveness",
     "schema_v1",
     "schema_ledger",
+    "schema_v3",
     "migrations",
     "db",
     "daemon",
@@ -58,7 +62,16 @@ MODULES = (
     "items",
     "export",
     "ledger",
+    "alerts",
     "snapshot",
+    "ticks",
+    "activeloop",
+    "selfcheck",
+    "detectors",
+    "hookroute",
+    "ciwatch",
+    "watchdog",
+    "restore",
     "cli",
 )
 for _name in MODULES:
@@ -66,8 +79,12 @@ for _name in MODULES:
 
 import models  # type: ignore[import-not-found]  # noqa: E402, F401 — re-exported: the policy the spawn tests expect (QS-405)
 from control_plane import (  # noqa: E402
+    activeloop,
+    ciwatch,
     cli,
     clock,
+    codever,
+    daemon,
     db,
     export,
     faults,
@@ -75,14 +92,16 @@ from control_plane import (  # noqa: E402
     ledger,
     liveness,
     merge_policy,
+    mergegate,
     migrations,
     paths,
     procsetup,
+    ticks,
     tools,
 )
 from control_plane.runner import RunResult  # noqa: E402
 
-CUR = migrations.current_schema_version()  # the schema this code writes (QS-375: rebased tests)
+CUR = migrations.current_schema_version()  # the schema this code writes (QS-375 / QS-406: rebased tests)
 NEXT = CUR + 1  # a schema newer than the code
 
 REAL_PROCSETUP_GET = procsetup.get
@@ -90,9 +109,15 @@ REAL_CODE_ROOT = paths.code_root
 REAL_MAIN_CHECKOUT = paths.main_checkout
 REAL_MAIN_HEAD_BRANCH = paths.main_head_branch
 REAL_MAKE_DEPS = cli.make_deps
+REAL_MAKE_SEAMS = activeloop.make_seams
+REAL_LOADED_VERSION = codever.loaded_version
+REAL_MERGE_ALLOWED = mergegate.merge_allowed
+REAL_TICK_HOOKS = ticks.hooks
 
 ENV_CLEARED = (
     "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
     "QS_CP_TOKEN",
     "QS_CP_MAX_GATES",
     "QS_CP_MAX_NODES",
@@ -247,10 +272,12 @@ class FakeClaude(liveness.ClaudeCli):
         super().__init__(run)
         self.listing: list[liveness.Agent] | None = []
         self.listings = 0
+        self.last_timeout: float | None = None
         self.before_list: Callable[[], None] | None = None
 
-    def agents(self) -> list[liveness.Agent]:
+    def agents(self, timeout: float = 30) -> list[liveness.Agent]:
         self.listings += 1
+        self.last_timeout = timeout
         if self.before_list is not None:
             self.before_list()
         if self.listing is None:
@@ -279,6 +306,28 @@ class FakeKill:
         self.calls.append((pid, sig))
         if self.on_call is not None:
             self.on_call(pid, sig)
+
+
+class FakeGitHub(ciwatch.GitHub):
+    """Scripted ``prs``: a ``PrCi`` per PR number (absent → ``None``), a rate, or a ``CiFailure``; counts calls."""
+
+    def __init__(self) -> None:
+        super().__init__(FakeRunner(), Path("/nonexistent"))
+        self.prs_by_number: dict[int, ciwatch.PrCi] = {}
+        self.rate = ciwatch.Rate(5000, None)
+        self.fail: ciwatch.CiFailure | None = None
+        self.calls: list[list[int]] = []
+
+    def prs(self, numbers: Sequence[int]) -> tuple[dict[int, ciwatch.PrCi | None], ciwatch.Rate]:
+        self.calls.append(list(numbers))
+        if self.fail is not None:
+            raise self.fail
+        return {n: self.prs_by_number.get(n) for n in numbers}, self.rate
+
+
+@pytest.fixture
+def fake_github() -> FakeGitHub:
+    return FakeGitHub()
 
 
 @pytest.fixture
@@ -335,11 +384,14 @@ def conn(migrated: Path) -> Iterator[Any]:
 
 
 @pytest.fixture(autouse=True)
-def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deps: cli.Deps) -> Iterator[FakeProcessSetup]:
+def _cp_isolation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deps: cli.Deps, fake_github: FakeGitHub
+) -> Iterator[FakeProcessSetup]:
     for name in ENV_CLEARED:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("QS_CP_DB", str(tmp_path / "state" / "test_state.db"))
     monkeypatch.setenv("QS_CP_BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("QS_CP_MESSENGER_DIR", str(tmp_path / "messenger"))
     (tmp_path / "state").mkdir()
     # A fake main checkout, identical locally (a linked worktree) and in CI.
     fake_main = tmp_path / "main"
@@ -351,16 +403,52 @@ def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deps: cli.Dep
     setup = FakeProcessSetup()
     monkeypatch.setattr(procsetup, "get", lambda: setup)
     monkeypatch.setattr(cli, "make_deps", lambda: deps)
+    # QS-406: hook-less daemons by default (`active_loop` opts in); hooks get seams over the test deps.
+    monkeypatch.setattr(ticks, "hooks", lambda: [])
+    monkeypatch.setattr(codever, "loaded_version", lambda: codever.code_version(fake_main))
+    monkeypatch.setattr(mergegate, "merge_allowed", lambda conn, version, clk: mergegate.Verdict("open", "test"))
+    monkeypatch.setattr(
+        activeloop,
+        "make_seams",
+        lambda: activeloop.Seams(
+            runner=deps.runner, probe=deps.probe, claude=deps.claude, main=fake_main, github=fake_github
+        ),
+    )
     faults.reset()
+    # A whole registry for every test, built before the test patches anything (the teardown below runs
+    # while the test's monkeypatches are still in place).
+    ticks._reset_for_tests()
+    activeloop._reset_for_tests()
+    activeloop.register_builtin()
     try:
         yield setup
     finally:
         faults.reset()
+        ticks._reset_for_tests()
+        activeloop._reset_for_tests()
+        codever._reset_for_tests()
+        daemon._reset_for_tests()
         merge_policy.reset()
         tools.reset()
         items.register_item_tools()
         export.LEDGER_SECTIONS.clear()
         ledger.register_export()  # #375: the sections cli registers at import, whole again for the next test
+
+
+@pytest.fixture
+def active_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt in to the real tick hooks under ``cp.py daemon`` / ``daemon.run``."""
+    monkeypatch.setattr(ticks, "hooks", REAL_TICK_HOOKS)
+
+
+@pytest.fixture
+def real_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mergegate, "merge_allowed", REAL_MERGE_ALLOWED)
+
+
+@pytest.fixture
+def real_loaded_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(codever, "loaded_version", REAL_LOADED_VERSION)
 
 
 @pytest.fixture

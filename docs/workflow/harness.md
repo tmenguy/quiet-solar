@@ -427,7 +427,7 @@ hand-sets a model.
   | `deep` | `claude-opus-5-5` | `claude-opus-5.5` | `high` |
   | `frontier` | `claude-fable-5-1` | `gpt-6-astra` | `high` |
   | `light` | `claude-sonnet-5` | `claude-sonnet-5` | `medium` |
-  | `fast` | `claude-haiku-4-5` | `claude-haiku-4.5` | — |
+  | `fast` | `claude-haiku-5-5` | `claude-haiku-4.5` | — |
 
   `deep` → Opus 5.5 for analysis/review; `build` → Opus 5.5 too since
   2026-10-04 (maintainer; it kept Opus 4.8 for implementer footprint
@@ -441,7 +441,7 @@ hand-sets a model.
   sub-agents get frontmatter `effort:`, the GUI main session gets the
   pin's `effortLevel`; a `--bg` node gets the spawn's `--settings`
   `effortLevel`, or none for a caller model or a `fast` row, in which
-  case it inherits the worktree's pin; `fast` (Haiku 4.5) sets none.
+  case it inherits the worktree's pin; `fast` (`claude-haiku-5-5`) sets none.
 - **Why full IDs, and no repo-wide alias pin.** The documented settings
   `env` pins (`ANTHROPIC_DEFAULT_OPUS_MODEL`, …) are **not applied** to
   the process (observed on 2.1.278), so aliases float to the provider

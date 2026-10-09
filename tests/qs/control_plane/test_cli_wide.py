@@ -17,7 +17,17 @@ from control_plane import cli, migrations, tools
 
 from .conftest import NEXT, ORCH, agent, insert_node, insert_task, open_run, run_cli, sql
 
-EXEMPT = {"version", "daemon", "ensure", "hook stop", "hook pre-tool-use", "hook pre-push", "hooks-settings"}
+EXEMPT = {
+    "version",
+    "daemon",
+    "ensure",
+    "halt clear",
+    "restore",
+    "hook stop",
+    "hook pre-tool-use",
+    "hook pre-push",
+    "hooks-settings",
+}
 READ = {"session status", "snapshot", "task show", "export-summary", "ledger show"}
 NO_TOKEN_WRITES = {"run open", "run claim"}
 TOOL_ARGS: dict[str, dict[str, Any]] = {
@@ -315,6 +325,8 @@ def test_exempt_commands_under_a_newer_db(world, fake_popen, fake_clock) -> None
     pre = {"session_id": ORCH, "tool_name": "Bash", "tool_input": {"command": "gh pr merge 1"}}
     assert run_cli("hook", "pre-tool-use", stdin=json.dumps(pre)) == (0, None)
     assert run_cli("hook", "pre-push", stdin="refs/heads/QS_1_2 a refs/heads/QS_1_2 b\n")[0] == 1  # still refused
+    assert run_cli("halt", "clear", "--reason", "r")[1]["error"] == "SCHEMA_TOO_NEW"
+    assert run_cli("restore", "--confirm")[1]["error"] == "SCHEMA_TOO_NEW"  # before any stop: no popen, no sleep
     assert fake_popen.calls == [] and fake_clock.sleeps == []
 
 

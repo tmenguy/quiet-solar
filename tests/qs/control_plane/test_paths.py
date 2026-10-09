@@ -151,3 +151,68 @@ class TestBackupDir:
         with pytest.raises(errors.CpError) as exc:
             paths.backup_dir()
         assert exc.value.code == "POLICY_REFUSED"
+
+
+# --------------------------------------------------------------------------- QS-406 T3: state_dir, ensure_private_dir
+
+
+class TestStateDir:
+    def test_defaults_are_outside_every_checkout(self, monkeypatch, tmp_path: Path) -> None:
+        monkeypatch.delenv("QS_CP_BACKUP_DIR")
+        monkeypatch.delenv("QS_CP_MESSENGER_DIR", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        state = (tmp_path / "home" / ".local/state/quiet-solar").resolve()
+        assert paths.backup_dir() == state / "cp-backups"
+        assert paths.messenger_dir() == state / "cp-messenger"
+
+    def test_messenger_env(self, tmp_path: Path) -> None:
+        assert paths.messenger_dir() == (tmp_path / "messenger").resolve()
+
+    @pytest.mark.parametrize("where", ["main", "code", "worktree"])
+    def test_refusals_name_the_variable(self, monkeypatch, tmp_path: Path, fake_main: Path, where: str) -> None:
+        code = tmp_path / "wt-code"
+        monkeypatch.setattr(paths, "code_root", lambda: code)
+        linked = tmp_path / "linked"
+        (fake_main / ".git" / "worktrees" / "QS_9").mkdir(parents=True)
+        (fake_main / ".git" / "worktrees" / "QS_9" / "gitdir").write_text(f"{linked}/.git\n")
+        target = {"main": fake_main / "s", "code": code / "s", "worktree": linked / "deep" / "s"}[where]
+        monkeypatch.setenv("QS_CP_MESSENGER_DIR", str(target))
+        with pytest.raises(errors.CpError) as exc:
+            paths.messenger_dir()
+        assert exc.value.code == "POLICY_REFUSED" and "QS_CP_MESSENGER_DIR" in exc.value.payload()["hint"]
+
+    def test_an_unrelated_git_ancestor_is_accepted(self, monkeypatch, tmp_path: Path, fake_main: Path) -> None:
+        dotfiles = tmp_path / "home"
+        (dotfiles / ".git").mkdir(parents=True)
+        (fake_main / ".git" / "worktrees" / "broken" / "gitdir").mkdir(parents=True)  # unreadable: skipped
+        monkeypatch.setenv("QS_CP_BACKUP_DIR", str(dotfiles / "bk"))
+        assert paths.backup_dir() == (dotfiles / "bk").resolve()
+
+
+class TestEnsurePrivateDir:
+    def test_creates_0700(self, tmp_path: Path) -> None:
+        d = tmp_path / "a" / "b"
+        assert paths.ensure_private_dir(d) == d
+        assert d.stat().st_mode & 0o777 == 0o700
+
+    def test_tightens_a_user_owned_0755(self, tmp_path: Path) -> None:
+        d = tmp_path / "cp-backups"
+        d.mkdir(mode=0o755)
+        d.chmod(0o755)
+        paths.ensure_private_dir(d)
+        assert d.stat().st_mode & 0o777 == 0o700
+
+    def test_refuses_a_foreign_owner(self, tmp_path: Path, monkeypatch) -> None:
+        d = tmp_path / "theirs"
+        d.mkdir()
+        monkeypatch.setattr(paths.os, "getuid", lambda: d.stat().st_uid + 1)
+        with pytest.raises(errors.CpError) as exc:
+            paths.ensure_private_dir(d)
+        assert exc.value.code == "POLICY_REFUSED"
+
+    def test_refuses_a_file(self, tmp_path: Path) -> None:
+        f = tmp_path / "f"
+        f.write_text("")
+        with pytest.raises(errors.CpError) as exc:
+            paths.ensure_private_dir(f)
+        assert exc.value.code == "POLICY_REFUSED"

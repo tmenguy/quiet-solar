@@ -10,14 +10,13 @@ already at the current schema is a noop for anyone (no authorisation needed).
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import errors, faults, paths, schema_ledger, schema_v1
+from . import backups, errors, faults, paths, schema_ledger, schema_v1, schema_v3
 
 MIGRATE_LOCK_TIMEOUT_S = 120.0
 
@@ -32,6 +31,7 @@ class Migration:
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "schema v1: the task tree, queues, tools and hooks", schema_v1.STATEMENTS),
     Migration(2, "the finding ledger (#375)", schema_ledger.STATEMENTS),
+    Migration(3, "the active loop: alerts (#406)", schema_v3.STATEMENTS),
 )
 SCHEMA_VERSION = MIGRATIONS[-1].version
 
@@ -60,22 +60,10 @@ def _authorise(db_path: Path, role: str) -> None:
     )
 
 
-def _backup(conn: sqlite3.Connection, version: int) -> Path:
-    target_dir = paths.backup_dir()
-    target_dir.mkdir(parents=True, exist_ok=True)
+def _backup(conn: sqlite3.Connection, db_path: Path, version: int) -> Path:
+    """The pre-migration copy, ``db_dir(db_path)/harness_state.v<version>.<stamp>.db`` (QS-406 §10)."""
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    dest = target_dir / f"harness_state.v{version}.{stamp}.db"
-    copy = sqlite3.connect(dest)
-    try:
-        conn.backup(copy)
-    finally:
-        copy.close()
-    fd = os.open(dest, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    return dest
+    return backups.write_copy(conn, backups.db_dir(db_path) / f"harness_state.v{version}.{stamp}.db")
 
 
 def _is_busy(exc: sqlite3.OperationalError) -> bool:
@@ -115,7 +103,7 @@ def _migrate(db_path: Path, *, role: str, lock_timeout: float) -> dict[str, Any]
             _authorise(db_path, role)  # only an actual migration (or creation) needs it
             if conn is None:
                 conn = db.connect(db_path, mode="rwc")
-            backup = _backup(conn, current) if existed and current > 0 else None
+            backup = _backup(conn, db_path, current) if existed and current > 0 else None
             for step in MIGRATIONS:
                 if step.version <= current:
                     continue

@@ -1,11 +1,15 @@
 {
   "alerts": [
-    "at",
-    "decision",
-    "detail",
-    "hook",
+    "cleared_at",
+    "fingerprint",
+    "first_seen",
     "id",
-    "session_id"
+    "kind",
+    "last_seen",
+    "message_id",
+    "payload",
+    "run_id",
+    "subject"
   ],
   "blast_radius": [
     "actor",
@@ -102,6 +106,14 @@
     "title_norm",
     "unchanged_lines",
     "updated_at"
+  ],
+  "hook_alerts": [
+    "at",
+    "decision",
+    "detail",
+    "hook",
+    "id",
+    "session_id"
   ],
   "integrations": [
     "at",

@@ -10,11 +10,10 @@ import json
 import sqlite3
 from typing import Any
 
+from . import alerts, daemon, db, errors, ledger, migrations, tasks
 from . import clock as clock_mod
-from . import daemon, db, errors, ledger, migrations, tasks
 
 SECRET_COLUMNS = frozenset({"nonce"})
-ALERTS_LIMIT = 50
 
 KEYS = (
     "schema_version",
@@ -41,6 +40,7 @@ KEYS = (
     "cap_slots",
     "daemon",
     "alerts",
+    "hook_alerts",
 )
 
 
@@ -160,8 +160,18 @@ def snapshot(conn: sqlite3.Connection | None, clock: clock_mod.Clock, run_id: st
                 "heartbeat_age_s": clock_mod.age(clock, lease["heartbeat_at"]),
                 "code_schema_version": migrations.current_schema_version(),
             },
-            "alerts": _rows(
-                conn, "SELECT * FROM hook_events WHERE decision = 'alert' ORDER BY id DESC LIMIT ?", (ALERTS_LIMIT,)
+            # QS-406 D5: every open alert, then the ALERTS_LIMIT newest cleared ones (after the --run filter)
+            "alerts": _rows(conn, f"SELECT * FROM alerts WHERE cleared_at IS NULL {flt} ORDER BY id DESC", p)
+            + _rows(
+                conn,
+                f"SELECT * FROM alerts WHERE cleared_at IS NOT NULL {flt} ORDER BY id DESC LIMIT ?",
+                (*p, alerts.ALERTS_LIMIT),
+            ),
+            # the raw hook alerts, routable or not (§7)
+            "hook_alerts": _rows(
+                conn,
+                "SELECT * FROM hook_events WHERE decision = 'alert' ORDER BY id DESC LIMIT ?",
+                (alerts.ALERTS_LIMIT,),
             ),
         }
 
