@@ -41,6 +41,7 @@ from . import (
     procsetup,
     questions,
     reports,
+    restore,
     runner,
     runs,
     snapshot,
@@ -223,6 +224,18 @@ def _halt_clear(args: argparse.Namespace, io: Io) -> dict[str, Any]:
     finally:
         conn.close()
     return {"override": override, "previous": previous}
+
+
+def _conf_restore(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--confirm", action="store_true", help="required: everything recorded after the backup is lost")
+
+
+def _restore(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    """The maintainer restores the newest backup in place (QS-406 D14; exempt: the DB may be lost)."""
+    if not args.confirm:
+        raise errors.CpError("USAGE", "restore discards everything recorded since the backup: pass --confirm")
+    d = io.deps
+    return restore.restore(paths.select_db(), clock=d.clock, probe=d.probe, kill=d.kill, popen=d.popen)
 
 
 def _ensure(args: argparse.Namespace, io: Io) -> dict[str, Any]:
@@ -792,6 +805,13 @@ COMMANDS: dict[str, Command] = {
             _halt_clear,
             _conf_halt_clear,
             help="the maintainer reopens automatic merges for the code on disk (asks for approval)",
+        ),
+        Command(
+            "restore",
+            "exempt",
+            _restore,
+            _conf_restore,
+            help="the maintainer restores the newest DB backup in place (asks for approval)",
         ),
         Command("hook stop", "exempt", _hook_stop, help="the orchestrator's Stop hook (stdin: hook JSON)"),
         Command("hook pre-tool-use", "exempt", _hook_pre_tool_use, help="the PreToolUse hook (stdin: hook JSON)"),

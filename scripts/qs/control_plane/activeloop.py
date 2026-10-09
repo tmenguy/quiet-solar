@@ -58,7 +58,7 @@ def seams() -> Seams:
 
 def _builtin() -> list[tuple[str, ticks.Hook]]:
     """The built-in hooks, in tick order (each task adds its own, and its name to ``BUILTIN_NAMES``)."""
-    from . import ciwatch, detectors, hookroute, selfcheck, watchdog
+    from . import ciwatch, detectors, hookroute, restore, selfcheck, watchdog
 
     return [
         (selfcheck.CODE_VERSION, selfcheck.code_version_hook),
@@ -67,11 +67,12 @@ def _builtin() -> list[tuple[str, ticks.Hook]]:
         (hookroute.HOOK_ROUTE, hookroute.hook_route_hook),
         (ciwatch.CI_WATCH, ciwatch.ci_watch_hook),
         (watchdog.LIVENESS_WATCHDOG, watchdog.liveness_watchdog_hook),
+        (restore.BACKUP, restore.backup_hook),
     ]
 
 
 BUILTIN_NAMES: frozenset[str] = frozenset(
-    {"code_version", "selfcheck", "detectors", "hook_route", "ci_watch", "liveness_watchdog"}
+    {"code_version", "selfcheck", "detectors", "hook_route", "ci_watch", "liveness_watchdog", "backup"}
 )
 
 

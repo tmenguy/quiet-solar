@@ -57,11 +57,11 @@ _SEGMENT_SPLIT = re.compile(r"&&|\|\||;|\||\n")
 # Not .db.json / .db.bak / .db-wal.bak / .db-backup.sql: the name must end right after .db, -wal or -shm.
 _REDIRECT_ONTO_DB = re.compile(r">\s*\S*harness_state\.db(?:-wal|-shm)?(?![\w.-])")
 _FIND_ACTIONS = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"})
-# QS-406 D2: `cp.py halt clear` asks for the maintainer's approval in these permission modes; in any other
+# QS-406 D2: `cp.py halt clear` and `cp.py restore` ask for the maintainer's approval in these permission modes; in any other
 # mode it is denied with a "switch to default mode" hint. T1 (2026-10-09, desktop app): a hook's `ask` showed
 # a real approval prompt in `auto` and in `bypassPermissions` too (bypass skips ordinary prompts, not a hook's).
 ASK_MODES = frozenset({"default", "acceptEdits", "auto", "bypassPermissions"})
-MAINTAINER_COMMANDS = (("halt", "clear"),)
+MAINTAINER_COMMANDS = (("halt", "clear"), ("restore",))
 STOP_QUEUE = "queue"
 STOP_WAIT = "wait"
 
@@ -263,7 +263,7 @@ def _ask(reason: str) -> str:
 
 
 def maintainer_confirm(tool_name: str, tool_input: dict[str, Any]) -> str | None:
-    """The prompt shown for a Bash segment that runs a maintainer-only command (``cp.py halt clear``), or ``None``.
+    """The prompt shown for a Bash segment that runs a maintainer-only command (``cp.py halt clear`` / ``restore``), or ``None``.
 
     The matcher works on each segment's unquoted words: ``cp.py`` (or a path ending in ``/cp.py``) followed
     by the command's words. A wrapper (``bash -c '…'``) is not caught: the guard covers agent mistakes.

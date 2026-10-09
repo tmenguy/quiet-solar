@@ -69,6 +69,7 @@ MODULES = (
     "hookroute",
     "ciwatch",
     "watchdog",
+    "restore",
     "cli",
 )
 for _name in MODULES:

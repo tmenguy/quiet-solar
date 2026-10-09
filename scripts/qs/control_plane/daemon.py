@@ -84,6 +84,27 @@ def strip_env(environ: Mapping[str, str]) -> dict[str, str]:
     return {k: v for k, v in environ.items() if k not in STRIPPED_ENV and not k.startswith(STRIPPED_ENV_PREFIXES)}
 
 
+def marker_path(db_path: Path) -> Path:
+    """``<db>.restoring``: a restore is in progress (QS-406 D14)."""
+    return paths.sidecar(db_path, ".restoring")
+
+
+def restoring(db_path: Path, probe: liveness.ProcessProbe) -> bool:
+    """A restore marker whose process is not proven dead; a dead (or unreadable) one is unlinked."""
+    marker = marker_path(db_path)
+    try:
+        data = json.loads(marker.read_text())
+        pid, start = int(data["pid"]), data.get("pid_start")
+    except FileNotFoundError:
+        return False
+    except OSError, ValueError, KeyError, TypeError:
+        pid, start = None, None
+    if pid is not None and probe.alive(pid, start) is not False:
+        return True
+    marker.unlink(missing_ok=True)  # left behind by a killed restore
+    return False
+
+
 def _reset_for_tests() -> None:
     global _restart_reason, _restart_candidate, _loaded_version
     _stop.clear()
@@ -152,6 +173,8 @@ def run(
     with db.file_lock(paths.sidecar(db_path, ".daemon.lock"), exclusive=True, timeout=0) as got:
         if not got:
             return {"singleton": "held_elsewhere"}
+        if restoring(db_path, probe):
+            return {"ticks": 0, "exit": "restoring"}  # a restore holds the DB: never migrate or tick under it
         me = _me_with_start(probe, clock)
         if me is None:
             _log("cannot read this process's start time: refusing to write a lease nobody could verify")
@@ -367,6 +390,8 @@ def ensure(
     main_dir = paths.main_checkout(root)
     if paths.is_live_db_path(db_path.resolve()) and main_dir.resolve() != root.resolve():
         raise errors.CpError("POLICY_REFUSED", "only the main checkout's code may start the daemon of the live DB")
+    if restoring(db_path, probe):
+        return {"status": "restoring"}
     target = migrations.current_schema_version()
     lease = read_lease(db_path)
     fresh = _fresh(lease, clock, stale_after_s)
@@ -424,3 +449,34 @@ def ensure(
             env=strip_env(os.environ),
         )
     return {"status": status}
+
+
+def stop(
+    db_path: Path,
+    *,
+    clock: clock_mod.Clock,
+    probe: liveness.ProcessProbe,
+    kill: Callable[[int, int], None],
+    restart_wait_s: float = DAEMON_RESTART_WAIT_S,
+    stale_after_s: float = STALE_AFTER_S,
+) -> dict[str, Any]:
+    """Stop the daemon of ``db_path`` → ``{"status": "not_running" | "stopped" | "signalled"}`` (QS-406 §10).
+
+    ``signalled``: it is alive and healthy but still finishing its tick; the caller waits on its ``flock``.
+    """
+    lease = read_lease(db_path)
+    if lease is None or lease["pid"] is None:
+        return {"status": "not_running"}
+    outcome = _stop_old(
+        lease,
+        alive=probe.alive(lease["pid"], lease["pid_start"]),
+        fresh=_fresh(lease, clock, stale_after_s),
+        pending="signalled",
+        db_path=db_path,
+        clock=clock,
+        probe=probe,
+        kill=kill,
+        restart_wait_s=restart_wait_s,
+        stale_after_s=stale_after_s,
+    )
+    return {"status": "stopped"} if outcome is None else outcome
