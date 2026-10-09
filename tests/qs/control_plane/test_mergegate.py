@@ -217,10 +217,10 @@ class TestAskGuard:
         ],
     )
     def test_asks_in_an_ask_mode_with_no_db(self, command: str) -> None:
-        assert _decision(_pre(command)) == "ask"
-        assert _decision(_pre(command, mode="acceptEdits")) == "ask"
+        for mode in ("default", "acceptEdits", "auto", "bypassPermissions"):  # T1: a hook's `ask` prompts in all
+            assert _decision(_pre(command, mode=mode)) == "ask"
 
-    @pytest.mark.parametrize("mode", ["auto", "bypassPermissions", None])
+    @pytest.mark.parametrize("mode", ["plan", "dontAsk", None])
     def test_denies_with_a_hint_elsewhere(self, mode: str | None) -> None:
         code, out = _pre("python scripts/qs/cp.py halt clear --reason r", mode=mode)
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny"

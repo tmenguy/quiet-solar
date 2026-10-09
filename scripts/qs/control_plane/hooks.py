@@ -57,9 +57,10 @@ _SEGMENT_SPLIT = re.compile(r"&&|\|\||;|\||\n")
 # Not .db.json / .db.bak / .db-wal.bak / .db-backup.sql: the name must end right after .db, -wal or -shm.
 _REDIRECT_ONTO_DB = re.compile(r">\s*\S*harness_state\.db(?:-wal|-shm)?(?![\w.-])")
 _FIND_ACTIONS = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"})
-# QS-406 D2: `cp.py halt clear` asks for the maintainer's approval in these permission modes (T1 may add
-# modes that showed a real prompt); in any other mode it is denied with a "switch to default mode" hint.
-ASK_MODES = frozenset({"default", "acceptEdits"})
+# QS-406 D2: `cp.py halt clear` asks for the maintainer's approval in these permission modes; in any other
+# mode it is denied with a "switch to default mode" hint. T1 (2026-10-09, desktop app): a hook's `ask` showed
+# a real approval prompt in `auto` and in `bypassPermissions` too (bypass skips ordinary prompts, not a hook's).
+ASK_MODES = frozenset({"default", "acceptEdits", "auto", "bypassPermissions"})
 MAINTAINER_COMMANDS = (("halt", "clear"),)
 STOP_QUEUE = "queue"
 STOP_WAIT = "wait"
