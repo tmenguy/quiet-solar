@@ -218,7 +218,7 @@ The vocabularies live in `schema_ledger`: `PHASES` (`plan`, `build`), `SOURCES` 
 | `category` | one of `CATEGORIES` | yes |
 | `title` | string holding at least one letter or digit | yes |
 | `body` | string | yes |
-| `file`, `symbol` | string; `file` repo-relative and normalised (`a//b/./c` → `a/b/c`; absolute, `..`, a backslash or a `:<line>` suffix is `USAGE`: lines go in `line_start` / `line_end`), `symbol` trimmed | no |
+| `file`, `symbol` | string; `file` repo-relative and normalised (NFC, `a//b/./c` → `a/b/c`; absolute, a drive letter, `..`, a backslash or a `:<line>` suffix is `USAGE`: lines go in `line_start` / `line_end`), `symbol` trimmed and NFC | no |
 | `line_start`, `line_end` | int `>= 1`; `line_end` defaults to `line_start` | no |
 | `reviewer` | string (the lens, e.g. `qs-review-blind-hunter`) | no |
 | `unchanged_lines` | bool, recorded as given (`1` / `0` / NULL) | no |
@@ -226,7 +226,7 @@ The vocabularies live in `schema_ledger`: `PHASES` (`plan`, `build`), `SOURCES` 
 | `sha` | string | `ci` only, required there |
 | `integration_id` | int | `gate` only, required there |
 
-An unknown key, a wrong type, a value off its vocabulary, `line_start > line_end`, `line_end` alone, a bad path, an integer beyond SQLite's range, the separator U+001F in `title`, `file`, `symbol`, `reviewer` or `sha`, non-JSON or non-UTF-8 input and an empty object or list are all `USAGE`. String fields are stripped; a blank optional one is absent.
+An unknown key, a wrong type, a value off its vocabulary, `line_start > line_end`, `line_end` alone, a bad path, an integer beyond SQLite's range, a lone surrogate in any string, the separator U+001F in `title`, `file`, `symbol`, `reviewer` or `sha`, non-JSON or non-UTF-8 input (file or stdin) and an empty object or list are all `USAGE`. The optional key fields (`file`, `symbol`, `reviewer`, `sha`) are stripped, and a blank one is absent; `title` and `body` are stored as given.
 
 - **`ci` findings** need `sha` equal to `tasks.ci_sha` while `tasks.ci_state = 'red'`, else `INVALID_STATE`. They are stored with `ci_sha`, `must_fix` / `must_fix`.
 - **`gate` findings** need `integration_id`, an `integrations` row whose item or deliverable is the task (`NOT_FOUND` / `CONFLICT`), and are stored `must_fix` / `must_fix`.
@@ -248,13 +248,13 @@ An unknown key, a wrong type, a value off its vocabulary, `line_start > line_end
 
 ### States and classification
 
-- **`finding state`**: free transitions between `open`, `resolved`, `rejected`, `deferred` and `settled`. `resolved` needs `--commit`; `rejected` and `settled` need `--reason`; a reopen (`open`) and `deferred` take an optional `--reason` (blank is none); `--commit` on any other target is `USAGE`. `--cause <id>` (any target, `NOT_FOUND` if unknown, `USAGE` if it is the finding itself) records why, e.g. the red CI finding that reopened a settled row. The same state is a noop (`"changed": false`, no event), checked after the arguments and `--cause`. The row holds only the latest state (`reason` the new `--reason` or NULL, `resolved_sha` set on `resolved` only); the history is in `finding_events`. Answers `{"ok": true, "finding_id", "state", "changed"}`.
+- **`finding state`**: free transitions between `open`, `resolved`, `rejected`, `deferred` and `settled`. `resolved` needs `--commit`; `rejected` and `settled` need `--reason`; a reopen (`open`) and `deferred` take an optional `--reason` (blank is none); `--commit` on any other target is `USAGE`. `--cause <id>` (any target, `NOT_FOUND` if unknown or of another run, `USAGE` if it is the finding itself) records why, e.g. the red CI finding that reopened a settled row. The same state is a noop (`"changed": false`, no event), checked after the arguments and `--cause`. The row holds only the latest state (`reason` the new `--reason` or NULL, `resolved_sha` set on `resolved` only); the history is in `finding_events`. Answers `{"ok": true, "finding_id", "state", "changed"}`.
 - **`finding classify`** records the class in any state, with a `classify` event (its reason is `--note`), and drives open ⇄ deferred: an open row classed `nice_to_have` or `out_of_scope` moves to `deferred`; a deferred row classed `must_fix` or `should_fix` moves back to `open` (a reopening, so it blocks again). A move also writes a `state` event and sets the row's `reason`, both `classified <class>`. The same class is a noop. Answers `{"ok": true, "finding_id", "state", "classification", "changed"}`. At birth `classification` is NULL, except `ci` / `gate` (`must_fix`).
 - **Deferred rows** stay in `findings`, with their class: `ledger show --state deferred`, `task show`, `snapshot` and the exported summary show them, and the run's final review (child 13) reads them.
 
 ### Who writes
 
-`ledger.writer(conn, token, task_id, *, kinds)` is the one check, the point child 15 extends: a node token writes on its own task, a run token on any task of its run (another run's task is `CONFLICT`). The ID-taking commands check the token first, then the finding (`NOT_FOUND`), then its task's scope, so a stale token is always `STALE_TOKEN`. A task with no run is written with a run token and records the principal's `run_id`. Every row and event records its `actor` (`orchestrator` for a run token, `node:<task>` for a node token); `source` is recorded as given. `blast-radius set` takes a run token only: a node never rates its own blast radius, which feeds the merge's second human gate. Cross-run writes wait on child 15.
+`ledger.writer(conn, token, task_id, *, kinds)` is the one check, the point child 15 extends: a node token writes on its own task, a run token on any task of its run (another run's task is `CONFLICT`). The arguments are validated first (`USAGE`); then the ID-taking commands check the token, then the finding (`NOT_FOUND`), then its task's scope, so a stale token is `STALE_TOKEN`, never `NOT_FOUND`. `relates_to` and `--cause` read only findings of the writer's run (`NOT_FOUND` otherwise). The CLI flags (`--head`, `--base`, `--commit`, `--reason`, `--note`, `--head-sha`, `--review`) are stripped; a blank optional one is absent, but a blank `--commit` on another target than `resolved` is still `USAGE`. A task with no run is written with a run token and records the principal's `run_id`. Every row and event records its `actor` (`orchestrator` for a run token, `node:<task>` for a node token); `source` is recorded as given. `blast-radius set` takes a run token only: a node never rates its own blast radius, which feeds the merge's second human gate. Cross-run writes wait on child 15.
 
 ### Convergence
 
@@ -277,7 +277,7 @@ An unknown key, a wrong type, a value off its vocabulary, `line_start > line_end
 - `--phase` filters `rounds` and `findings`; `--state` filters `findings` (an unknown or empty state list is `USAGE`); `--family` widens `findings` and their events to the family;
 - `rounds` and `blast_radius` (every rating, oldest first) stay per task; no DB is `NOT_FOUND`, as for `task show`.
 
-`task show` carries the same keys, unfiltered.
+`task show` carries the same ledger keys (`rounds`, `findings`, `finding_events`, `blast_radius`, `convergence`), unfiltered, next to its `task`.
 
 ### The focused-reviewer contract
 

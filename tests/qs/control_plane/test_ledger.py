@@ -1005,7 +1005,7 @@ class TestReviewFix01:
         rounds = dict(export_sections())["Rounds"](lw.conn, "T1")
         assert "`?..a\\|b`" in rounds
         blast = dict(export_sections())["Blast radius"](lw.conn, "T1")
-        assert blast == "`ok` at `h` (review G\\|1) — x ### y"
+        assert blast == "`ok` at `h` (review G|1) — x ### y"  # a paragraph, not a table: no pipe escape (G10)
 
     def test_f11_convergence_of_an_unknown_task(self, lw: L) -> None:
         assert code_of(ledger.convergence, lw.conn, "T9", "build") == "NOT_FOUND"
@@ -1055,6 +1055,73 @@ class TestReviewFix01:
         a = lw.one("T1")
         b = lw.one("T1", title="Another wording")
         assert a != b and [(f["kind"], f["id"], f["strong"]) for f in lw.row(b)["flags"]] == [("matches", a, False)]
+
+
+class TestReviewFix02:
+    def test_g1_a_non_integer_id(self, lw: L) -> None:
+        assert run_cli("finding", "state", "abc", "--to", "open", "--token", lw.token)[1]["error"] == "USAGE"
+
+    @pytest.mark.parametrize("file", ["a.py:42/", "a.py:10-12//", "a.py:10/.", "C:/repo/x.py", "c:x.py"])
+    def test_g2_normalised_then_checked(self, lw: L, file: str) -> None:
+        assert code_of(lw.open, "T1", item(file=file)) == "USAGE"
+
+    def test_g3_lone_surrogates_and_non_utf8_stdin(self, lw: L) -> None:
+        for key in ("title", "body", "file", "symbol", "reviewer"):
+            assert code_of(lw.open, "T1", item(**{key: "x\ud800"})) == "USAGE", key
+        assert code_of(lw.open, "T1", ci_item("c\udc80"), source="ci") == "USAGE"
+
+        class BadStdin:
+            def read(self) -> str:
+                return b"\xe9".decode("utf-8")  # raises UnicodeDecodeError, as a strict UTF-8 stdin does
+
+        import io as io_mod
+
+        from control_plane import cli
+
+        out = io_mod.StringIO()
+        argv = ["finding", "open", "--task", "T1", "--phase", "build", "--source", "reviewer", "--input", "-"]
+        code = cli.main([*argv, "--token", lw.token], stdin=BadStdin(), stdout=out)  # type: ignore[arg-type]
+        assert code == 2 and json.loads(out.getvalue())["error"] == "USAGE"
+
+    def test_g4_blast_radius_is_stripped(self, lw: L) -> None:
+        put = lambda h, r, why: ledger.set_blast_radius(  # noqa: E731
+            lw.conn, lw.clock, token=lw.token, task_id="T1", value="ok", head_sha=h, review=r, reason=why
+        )
+        assert put(" h1 ", " G1 ", "  ")["head_sha"] == "h1"
+        row = ledger.blast_radius(lw.conn, "T1", " h1 ")
+        assert row is not None and (row["head_sha"], row["review"], row["reason"]) == ("h1", "G1", None)
+        assert code_of(put, "h", "  ", None) == "USAGE"
+
+    def test_g5_a_cause_of_another_run_is_not_found(self, lw: L) -> None:
+        other = lw.one("T6", token=lw.token2)
+        a = lw.one("T1")
+        assert code_of(lw.state, a, "deferred", cause=other) == "NOT_FOUND"
+        assert lw.row(a)["state"] == "open"
+
+    def test_g6_a_blank_commit_on_another_target(self, lw: L) -> None:
+        assert code_of(lw.state, lw.one("T1"), "open", commit=" ") == "USAGE"
+
+    def test_g7_the_tasks_ci_sha_is_compared_stripped(self, lw: L) -> None:
+        sql(lw.db, "UPDATE tasks SET ci_sha = ' c1 ' WHERE id = 'T1'")
+        assert lw.open("T1", ci_item("c1"), source="ci")
+
+    def test_g8_file_and_symbol_are_nfc(self, lw: L) -> None:
+        a = lw.one("T1", file="docs/cafe\u0301.md", symbol="fe\u0301")
+        b = lw.one("T1", file="docs/caf\u00e9.md", symbol="f\u00e9", reviewer="r2")
+        assert lw.row(a)["fingerprint"] == lw.row(b)["fingerprint"] and lw.row(b)["matched_id"] == a
+
+    def test_g9_a_blank_sha_is_absent(self, lw: L) -> None:
+        assert lw.open("T1", item(sha="  "))
+        assert code_of(lw.open, "T1", ci_item("  "), source="ci") == "USAGE"
+
+    def test_g10_backticks_never_close_a_code_span(self, lw: L) -> None:
+        lw.round(head="ab`cd", base="x`")
+        ledger.set_blast_radius(
+            lw.conn, lw.clock, token=lw.token, task_id="T1", value="ok", head_sha="h`1", review="G", reason=None
+        )
+        sections = dict(export_sections())
+        assert "`x..abcd`" in sections["Rounds"](lw.conn, "T1")
+        assert sections["Blast radius"](lw.conn, "T1") == "`ok` at `h1` (review G)"
 
 
 def export_sections() -> list[Any]:

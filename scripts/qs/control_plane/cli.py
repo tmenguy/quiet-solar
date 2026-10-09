@@ -773,8 +773,15 @@ def _conf_finding_open(p: argparse.ArgumentParser) -> None:
     p.add_argument("--input", required=True, help="a JSON file, or `-` for stdin")
 
 
+def _read_stdin(io: Io) -> str:
+    try:
+        return io.stdin.read()
+    except UnicodeDecodeError as exc:
+        raise errors.CpError("USAGE", f"stdin is not UTF-8: {exc}") from exc
+
+
 def _finding_open(args: argparse.Namespace, io: Io) -> dict[str, Any]:
-    items = ledger.parse_items(io.stdin.read() if args.input == "-" else read_file(args.input))
+    items = ledger.parse_items(_read_stdin(io) if args.input == "-" else read_file(args.input))
     return _write(
         io,
         ledger.open_findings,

@@ -66,6 +66,7 @@ _ITEM_KEYS = frozenset(
 )
 _NON_ALNUM = re.compile(r"[\W_]+")
 _LINE_SUFFIX = re.compile(r":\d+(-\d+)?$")
+_DRIVE = re.compile(r"^[A-Za-z]:")
 MAX_INT = 2**63 - 1  # SQLite's INTEGER range: a larger id or line is USAGE, never an INTERNAL overflow
 
 
@@ -101,21 +102,28 @@ def norm(text: str) -> str:
 def norm_path(file: str | None) -> str | None:
     """A normalised repo-relative path (``a//b/./c`` → ``a/b/c``); empty is ``None``.
 
-    ``USAGE``: absolute, a ``..`` segment, a backslash, or a ``:<line>`` suffix (lines go in
-    ``line_start`` / ``line_end``, or every round's line would change the fingerprint).
+    NFC-normalised, then checked: absolute, a drive letter, a ``..`` segment, a backslash, or a
+    ``:<line>`` suffix is ``USAGE`` (lines go in ``line_start`` / ``line_end``, or every round's
+    line would change the fingerprint).
     """
     path = _text(file)
     if path is None:
         return None
-    if path.startswith("/") or "\\" in path or ".." in path.split("/") or _LINE_SUFFIX.search(path):
+    if ".." in path.split("/"):  # before normpath, which would fold `a/../b` into `b`
+        raise errors.CpError("USAGE", f"`file` must be a relative path inside the repo: {file!r}")
+    path = posixpath.normpath(unicodedata.normalize("NFC", path))
+    if path.startswith("/") or "\\" in path or _DRIVE.match(path) or _LINE_SUFFIX.search(path):
         raise errors.CpError("USAGE", f"`file` must be a relative path inside the repo, with no line: {file!r}")
-    path = posixpath.normpath(path)
     return None if path == "." else path
 
 
 def _text(value: str | None) -> str | None:
     """Stripped; a blank string is ``None``."""
     return (value.strip() or None) if value is not None else None
+
+
+def _nfc(value: str | None) -> str | None:
+    return None if value is None else unicodedata.normalize("NFC", value)
 
 
 def _sha(parts: Iterable[Any]) -> str:
@@ -199,6 +207,11 @@ def _opt(item: dict[str, Any], key: str, kind: type | tuple[type, ...], i: int) 
         raise errors.CpError("USAGE", f"item {i}: `{key}` has the wrong type")
     if isinstance(value, int) and not isinstance(value, bool) and abs(value) > MAX_INT:
         raise errors.CpError("USAGE", f"item {i}: `{key}` is out of range")
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError as exc:  # a lone surrogate (`"\ud800"` in the JSON)
+            raise errors.CpError("USAGE", f"item {i}: `{key}` is not valid Unicode") from exc
     return value
 
 
@@ -250,7 +263,7 @@ def _validate_item(raw: Any, source: str, i: int) -> dict[str, Any]:
     if any(not isinstance(r, int) or isinstance(r, bool) or not 1 <= r <= MAX_INT for r in relates):
         raise errors.CpError("USAGE", f"item {i}: `relates_to` must be a list of finding ids")
     sha = _str(raw, "sha", i)
-    if (raw.get("sha") is not None) != (source == "ci") or (source == "ci" and sha is None):
+    if (sha is not None) != (source == "ci"):
         raise errors.CpError("USAGE", f"item {i}: `sha` is required for a ci finding, and only there")
     integration = _opt(raw, "integration_id", int, i)
     if (integration is not None) != (source == "gate"):
@@ -266,7 +279,7 @@ def _validate_item(raw: Any, source: str, i: int) -> dict[str, Any]:
         "title": title,
         "body": body,
         "file": file,
-        "symbol": _str(raw, "symbol", i),
+        "symbol": _nfc(_str(raw, "symbol", i)),
         "line_start": line_start,
         "line_end": line_end,
         "reviewer": _str(raw, "reviewer", i),
@@ -361,7 +374,7 @@ def _born(
 
 
 def _check_ci(task: sqlite3.Row, sha: str) -> None:
-    if task["ci_state"] != "red" or task["ci_sha"] != sha:
+    if task["ci_state"] != "red" or _text(task["ci_sha"]) != sha:
         raise errors.CpError(
             "INVALID_STATE",
             f"a ci finding needs the task's CI red on {sha} (ci_state {task['ci_state']}, ci_sha {task['ci_sha']})",
@@ -600,19 +613,22 @@ def set_state(
 ) -> dict[str, Any]:
     """Free transitions; only the arguments are checked per target (D6). The same state is a noop."""
     _check(to, STATES, "--to")
+    if to != "resolved" and commit is not None:  # given, even blank
+        raise errors.CpError("USAGE", f"--commit is only for --to resolved, not {to}")
     reason, commit = _text(reason), _text(commit)
     if cause is not None and cause == finding_id:
         raise errors.CpError("USAGE", "--cause must be another finding")
     if to == "resolved" and not commit:
         raise errors.CpError("USAGE", "--to resolved needs --commit")
-    if to != "resolved" and commit is not None:
-        raise errors.CpError("USAGE", f"--commit is only for --to resolved, not {to}")
     if to in NEED_REASON and reason is None:
         raise errors.CpError("USAGE", f"--to {to} needs --reason")
     with db.write(conn):
         row, w = _scoped(conn, token, finding_id)
-        if cause is not None:
-            _finding(conn, cause)
+        if (
+            cause is not None
+            and not conn.execute("SELECT 1 FROM findings WHERE id = ? AND run_id IS ?", (cause, w.run_id)).fetchone()
+        ):
+            raise errors.CpError("NOT_FOUND", f"--cause: no finding {cause} in run {w.run_id}")
         if row["state"] == to:
             return {"finding_id": finding_id, "state": to, "changed": False}
         _move(conn, row, at=db.now(clock), actor=w.actor, to=to, reason=reason, commit=commit, cause=cause)
@@ -635,19 +651,21 @@ def set_blast_radius(
 ) -> dict[str, Any]:
     """Append one rating; a run token only — a node never rates its own blast radius (D13, D15)."""
     _check(value, BLAST_VALUES, "--value")
-    if not head_sha.strip() or not review.strip():
+    sha, rev, reason = _text(head_sha), _text(review), _text(reason)
+    if sha is None or rev is None:
         raise errors.CpError("USAGE", "--head-sha and --review must not be empty")
     with db.write(conn):
         w = writer(conn, token, task_id, kinds={"run"})
         cur = conn.execute(
             "INSERT INTO blast_radius (task_id, value, head_sha, review, reason, actor, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (task_id, value, head_sha, review, reason, w.actor, db.now(clock)),
+            (task_id, value, sha, rev, reason, w.actor, db.now(clock)),
         )
-    return {"id": cur.lastrowid, "task_id": task_id, "value": value, "head_sha": head_sha}
+    return {"id": cur.lastrowid, "task_id": task_id, "value": value, "head_sha": sha}
 
 
 def blast_radius(conn: sqlite3.Connection, task_id: str, head_sha: str | None = None) -> dict[str, Any] | None:
     """Child 7's reader: the latest rating, or the latest for ``head_sha``; ``None`` when there is none."""
+    head_sha = _text(head_sha)
     sql = "SELECT * FROM blast_radius WHERE task_id = ?" + ("" if head_sha is None else " AND head_sha = ?")
     params = (task_id,) if head_sha is None else (task_id, head_sha)
     return db.as_dict(conn.execute(sql + " ORDER BY id DESC LIMIT 1", params).fetchone())
@@ -719,10 +737,11 @@ def show(
     findings = _rows(conn, f"SELECT * FROM findings WHERE {where} ORDER BY id", params)
     for f in findings:
         f["flags"] = json.loads(f["flags"])
-    flagged = sorted({flag["id"] for f in findings for flag in f["flags"]})
     current = dict(
         conn.execute(
-            f"SELECT id, state FROM findings WHERE id IN ({', '.join('?' for _ in flagged)})", flagged
+            "SELECT id, state FROM findings WHERE id IN (SELECT json_extract(j.value, '$.id')"
+            f" FROM findings AS s, json_each(s.flags) AS j WHERE s.id IN (SELECT id FROM findings WHERE {where}))",
+            params,
         ).fetchall()
     )
     for f in findings:
@@ -756,7 +775,7 @@ def _render_rounds(conn: sqlite3.Connection, task_id: str) -> str:
         return EMPTY
     lines = ["| phase | round | diff |", "|---|---|---|"]
     for r in rows:
-        diff = export._cell(f"{r['base_sha'] or '?'}..{r['head_sha'] or '?'}")
+        diff = _code(export._cell(f"{r['base_sha'] or '?'}..{r['head_sha'] or '?'}"))
         lines.append(f"| {r['phase']} | {r['round']} | `{diff}` |")
     return "\n".join(lines)
 
@@ -783,8 +802,17 @@ def _render_blast_radius(conn: sqlite3.Connection, task_id: str) -> str:
     row = blast_radius(conn, task_id)
     if row is None:
         return EMPTY
-    reason = f" — {export._cell(row['reason'])}" if row["reason"] else ""
-    return f"`{row['value']}` at `{export._cell(row['head_sha'])}` (review {export._cell(row['review'])}){reason}"
+    reason = f" — {_plain(row['reason'])}" if row["reason"] else ""  # a paragraph: whitespace folded, no pipe escape
+    return f"`{row['value']}` at `{_code(_plain(row['head_sha']))}` (review {_plain(row['review'])}){reason}"
+
+
+def _plain(text: str) -> str:
+    return " ".join(str(text).split())
+
+
+def _code(text: str) -> str:
+    """A value put in a code span: a backtick would close it early."""
+    return text.replace("`", "")
 
 
 def register_export() -> None:
