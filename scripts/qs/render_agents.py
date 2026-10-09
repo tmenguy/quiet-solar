@@ -12,7 +12,8 @@ The second pipeline's agents (:data:`SECOND_PIPELINE`, QS-405) render
 with no task facts at all: their base context is
 :data:`_TASK_AGNOSTIC_FACTS`, and their model is resolved with no lane, so
 each file is byte-identical at every render site (worktree birth, the
-handoff, the post-merge render on ``main``). The facts reach those agents
+handoff, the post-merge render on ``main``) — absent an explicit
+``model=`` override, which no production render site passes. The facts reach those agents
 through the launch prompt and the Control Plane instead.
 
 Public API:
@@ -107,7 +108,7 @@ SUBAGENTS: frozenset[str] = frozenset(
 # node's sub-agents. A stem may have its policy row before its template
 # exists — ``render_all`` iterates over the discovered templates. They
 # render with NO task facts (``_TASK_AGNOSTIC_FACTS``), so the file is the
-# same at every render site.
+# same at every render site (absent an explicit ``model=`` override).
 SECOND_PIPELINE: frozenset[str] = frozenset(
     {
         "qs-orchestrator",

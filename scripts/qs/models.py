@@ -95,7 +95,8 @@ CLASS_EFFORT: dict[str, str | None] = {
 # reviews of the second pipeline; the test-local ``CP_LAUNCHED`` set in
 # ``tests/qs/test_models.py`` is that domain). Every other row is flat —
 # the node's sub-agents included: they render with no task facts, so their
-# frontmatter cannot know a lane. Today only ``qs-node`` depends on it.
+# frontmatter cannot know a lane. Today the only Control-Plane-launched
+# row that depends on the lane is ``qs-node``.
 _PLANNING: frozenset[str] = frozenset({"qs-create-plan", "qs-diagnose-task"})
 
 # The lane-dependent stems; all share the planning orchestrators' rule.

@@ -137,9 +137,7 @@ def test_node_class_by_lane() -> None:
 
 
 def test_d4_only_planning_and_cp_launched_stems_depend_on_lane() -> None:
-    by_lane = {
-        s for s in models.STEMS if len({models.resolve(lane, s) for lane in (*models.LANES, None)}) > 1
-    }
+    by_lane = {s for s in models.STEMS if len({models.resolve(lane, s) for lane in (*models.LANES, None)}) > 1}
     assert by_lane == _BY_LANE_STEMS
     assert by_lane <= models._PLANNING | CP_LAUNCHED
 

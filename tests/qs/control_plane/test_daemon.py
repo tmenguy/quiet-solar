@@ -309,12 +309,21 @@ class TestConnection:
 
         assert d.resolve_model("qs-node", "feature-factory") == models.spawn_policy("qs-node", "feature-factory")
 
-    def test_the_policy_comes_from_the_control_planes_own_tree(self) -> None:
+    def test_the_policy_comes_from_the_control_planes_own_tree(self, monkeypatch) -> None:
         """QS-405 D6 regression pin: ``models`` loads from the ``scripts/qs`` that holds ``control_plane``."""
         from control_plane import cli
 
+        monkeypatch.delitem(sys.modules, "models")  # conftest imported it: make the resolver import it afresh
         cli._policy_resolver("qs-node", None)
         assert Path(sys.modules["models"].__file__).parent == Path(cli.__file__).parents[1]
+
+    def test_make_deps_never_imports_the_policy(self, monkeypatch) -> None:
+        """QS-405 D6: the hooks, ``wait`` and the daemon build ``Deps`` and never touch ``models``."""
+        from .conftest import REAL_MAKE_DEPS
+
+        monkeypatch.delitem(sys.modules, "models")
+        REAL_MAKE_DEPS()
+        assert "models" not in sys.modules
 
 
 # --------------------------------------------------------------------------- review fix #01 (F6, F7, F8, F9)

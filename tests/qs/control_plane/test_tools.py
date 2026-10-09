@@ -489,7 +489,8 @@ def _assert_policy_argv(w: W, agent_name: str, lane: str | None) -> dict[str, An
 
     model, effort = models.spawn_policy(agent_name, lane)
     argv = _launch_argv(w)
-    assert argv[:6] == ["claude", "--bg", "--agent", agent_name, "-n", argv[5]]
+    assert argv[:5] == ["claude", "--bg", "--agent", agent_name, "-n"]
+    assert argv[5].startswith("r1-T") and argv[5].endswith("-g1")
     assert argv[6:8] == ["--model", model]
     settings = _settings(argv)
     assert settings.get("effortLevel") == effort
@@ -520,7 +521,7 @@ class TestSpawnPolicy:
         settings = _assert_policy_argv(w, "qs-node", lane)
         assert settings["effortLevel"] == "high"
 
-    def test_the_lane_picks_the_class(self, w: W) -> None:
+    def test_the_lane_picks_the_class(self) -> None:
         assert models.spawn_policy("qs-node", "bug-product") != models.spawn_policy("qs-node", "feature-factory")
 
     def test_an_item_spawn_takes_its_deliverables_lane(self, w: W) -> None:
@@ -533,7 +534,9 @@ class TestSpawnPolicy:
 
     def test_a_fast_row_sends_no_effort(self, w: W) -> None:
         assert models.resolve(None, "qs-finish-task") == "fast"
-        code, out = tool(w, "spawn", "s1", prompt_file=w.files["prompt"], agent="qs-finish-task", permission_mode="auto")
+        code, out = tool(
+            w, "spawn", "s1", prompt_file=w.files["prompt"], agent="qs-finish-task", permission_mode="auto"
+        )
         assert code == 0, out
         settings = _assert_policy_argv(w, "qs-finish-task", None)
         assert "effortLevel" not in settings
@@ -590,6 +593,42 @@ class TestSpawnPolicy:
         node = node_row(w, "N1")
         assert node["state"] == "spawning" and node["launch_at"] is None
         assert len(calls) == 2
+        # Recovery, as for any failed launch: the key is spent, a new key needs --replace.
+        deps.resolve_model = models.spawn_policy
+        assert spawn(w, "s1")[1]["result"]["error"] == "TOOL_FAILED"
+        assert spawn(w, "s2")[1]["result"]["error"] == "CONFLICT"
+        code, out = spawn(w, "s3", replace=True)
+        assert code == 0, out
+        assert node_row(w, "N1")["state"] == "superseded" and out["result"]["generation"] == 2
+
+    def test_a_takeover_that_adopts_a_late_launch_ignores_a_policy_refusal(self, w: W, deps: Any) -> None:
+        """The adoption launches nothing, so the policy has no say in it (review fix #01)."""
+        w.sim.list_on_launch = False
+        assert spawn(w, "s1")[0] == 6
+        w.clock.advance(61)
+        reap(w)
+        assert node_row(w, "N1")["state"] == "reaped"
+        w.claude.listing = [agent("S-first", "r1-T1-g1", id="first")]  # the first launch came up late
+        deps.resolve_model = None  # e.g. a takeover through a Ctx without a resolver
+        code, out = spawn(w, "s1")
+        assert code == 0, out
+        assert w.sim.effects("claude", "--bg") == 1  # adopted: no relaunch
+        assert node_row(w, "N1")["state"] == "running"
+
+    def test_a_takeover_that_relaunches_still_needs_the_policy(self, w: W, deps: Any) -> None:
+        w.sim.list_on_launch = False
+        assert spawn(w, "s1")[0] == 6
+        w.clock.advance(61)
+        reap(w)
+        deps.resolve_model = None
+        code, out = spawn(w, "s1")
+        assert code == 2 and out["error"] == "USAGE" and "no model policy resolver" in out["detail"], out
+        assert node_row(w, "N1")["state"] == "reaped"  # the re-take rolled back
+        assert w.sim.effects("claude", "--bg") == 1
+        deps.resolve_model = models.spawn_policy
+        w.sim.list_on_launch = True
+        assert spawn(w, "s1")[0] == 0
+        assert node_row(w, "N1")["state"] == "running" and w.sim.effects("claude", "--bg") == 2
 
 
 class TestResume:

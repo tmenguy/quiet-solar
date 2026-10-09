@@ -35,12 +35,15 @@ def _foreign_imports(path: Path) -> list[str]:
             names = [a.name for a in node.names]
         else:
             continue
-        bad += [f"{path.name}:{node.lineno} {n}" for n in names if n.split(".")[0] not in sys.stdlib_module_names]
+        bad += [f"{path.name}:{node.lineno} {n}" for n in names if n.split(".")[0] not in _ALLOWED_TOP]
     return bad
 
 
+_ALLOWED_TOP = sys.stdlib_module_names | {"control_plane"}  # the standard library and itself
+
+
 def test_control_plane_imports_only_stdlib_and_itself() -> None:
-    files = sorted(CP_DIR.glob("*.py"))
+    files = sorted(CP_DIR.rglob("*.py"))
     assert files, CP_DIR
     bad = [b for f in files for b in _foreign_imports(f)]
     assert bad == []
@@ -48,7 +51,10 @@ def test_control_plane_imports_only_stdlib_and_itself() -> None:
 
 def test_the_scan_catches_a_foreign_import(tmp_path: Path) -> None:
     f = tmp_path / "cli.py"
-    f.write_text("import os\nimport models\nfrom yaml import x\n\ndef _policy_resolver():\n    import models\n")
+    f.write_text(
+        "import os\nimport models\nfrom yaml import x\nfrom control_plane import db\n\n"
+        "def _policy_resolver():\n    import models\n"
+    )
     assert _foreign_imports(f) == ["cli.py:2 models", "cli.py:3 yaml"]
     other = tmp_path / "tools.py"
     other.write_text("def _policy_resolver():\n    import models\n")

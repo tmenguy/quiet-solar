@@ -1028,18 +1028,23 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
     replace = bool(args.get("replace", False))
 
     def reserve(ctx: StepCtx) -> None:
+        # A pre-check, resolved outside the transaction: a refusal is USAGE before any effect, so the
+        # claim is released. It is raised only where a launch follows — an adoption launches nothing.
+        refusal: errors.CpError | None = None
         if not model:
-            try:  # a pre-check, before any effect: a refusal is USAGE and releases the claim
+            try:
                 _spawn_policy(ctx)
             except ValueError as exc:
-                raise errors.CpError("USAGE", str(exc)) from exc
+                refusal = errors.CpError("USAGE", str(exc))
         listing, alive = _reserve_prelude(ctx)
-        adopted = reserve_tx(ctx, listing, alive)
+        adopted = reserve_tx(ctx, listing, alive, refusal)
         if adopted is not None:  # after the write transaction; best-effort, the stop never raises
             assert listing is not None
             _stop_superseded(ctx, listing, adopted)
 
-    def reserve_tx(ctx: StepCtx, listing: list[liveness.Agent] | None, alive: dict[str, bool]) -> str | None:
+    def reserve_tx(
+        ctx: StepCtx, listing: list[liveness.Agent] | None, alive: dict[str, bool], refusal: errors.CpError | None
+    ) -> str | None:
         """The reservation transaction; returns the adopted launch's name, else ``None``."""
         skey = f"{ctx.tool}/{ctx.key}"
         with ctx.write() as conn:
@@ -1055,6 +1060,8 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
                 ctx._call.outputs["identify"] = {"session_id": late.session_id, "short_id": late.id}
                 ctx.record_output({"node_id": own["id"], "name": own["name"]})
                 return str(own["name"])
+            if refusal is not None:  # both branches below launch: the policy must allow it
+                raise refusal
             if own is not None:  # our own row, reaped meanwhile: re-take it (the guard allows only this)
                 locks.admit_node(conn, ctx.clock, listing=listing, holders_alive=alive, limit=limit)
                 # A new nonce voids the first launch's token, a new name keeps a late first launch from being
