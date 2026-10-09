@@ -126,7 +126,7 @@ def test_lane_file_is_byte_identical_unless_diverged(lane: str) -> None:
 
 def test_diverged_entries_are_real_lane_files() -> None:
     """A typo'd allowlist entry would silently skip nothing."""
-    assert {f"{lane}.md" for lane in LANES} >= DIVERGED
+    assert DIVERGED <= {f"{lane}.md" for lane in LANES}
 
 
 @pytest.mark.parametrize("sentinel", BUG_PRODUCT_SENTINELS)

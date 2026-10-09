@@ -81,7 +81,6 @@ def _created_body(seen: list[list[str]]) -> str:
 
 def _run_main(monkeypatch: pytest.MonkeyPatch, fake_run, argv: list[str] | None = None) -> None:
     import create_pr
-
     import utils
 
     monkeypatch.setattr(utils, "run", fake_run)
@@ -210,6 +209,8 @@ def test_non_dict_issue_json_degrades_to_todays_body(
     """Review-fix #04: a non-dict top-level value makes `data.get(...)`
     raise `AttributeError`, which was not in the except tuple — it
     escaped as a raw traceback instead of the degrade path."""
+    import create_pr
+    import utils
 
     def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         head = cmd[:3]

@@ -23,7 +23,6 @@ def _run_main(
     argv: list[str],
 ) -> tuple[list[str], dict[str, Any]]:
     import create_issue
-
     import utils
 
     seen: list[str] = []

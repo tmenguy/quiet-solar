@@ -321,7 +321,6 @@ def test_parent_epic_doc_resolves_like_story_file(
     way it finds ``story_file`` — an absolute path when it exists, else
     ``""``."""
     import context  # type: ignore[import-not-found]
-
     import utils  # type: ignore[import-not-found]
 
     if doc_exists:
@@ -530,7 +529,6 @@ def test_non_positive_issue_override_is_rejected(
     (review fix #01 N1).
     """
     import context  # type: ignore[import-not-found]
-
     import utils  # type: ignore[import-not-found]
 
     fake_run, recorder = _make_fake_run(branch="QS_42", repo_root=tmp_path)
@@ -575,7 +573,6 @@ def test_gh_failure_paths(
     commands too.
     """
     import context  # type: ignore[import-not-found]
-
     import utils  # type: ignore[import-not-found]
 
     fake_run, recorder = _make_fake_run(
@@ -614,7 +611,6 @@ def test_both_gh_calls_raising_surfaces_both(
     the sibling failure as a note (review fix #01 S1).
     """
     import context  # type: ignore[import-not-found]
-
     import utils  # type: ignore[import-not-found]
 
     fake_run, recorder = _make_fake_run(
@@ -644,7 +640,6 @@ def test_local_git_failure_surfaces_sibling_gh_error(
     as a note instead of disappearing (review fix #01 S1).
     """
     import context  # type: ignore[import-not-found]
-
     import utils  # type: ignore[import-not-found]
 
     fake_run, recorder = _make_fake_run(
@@ -675,7 +670,6 @@ def test_base_exception_in_worker_still_drains_sibling(
     reopened on a narrow path (review fix #02 R1).
     """
     import context  # type: ignore[import-not-found]
-
     import utils  # type: ignore[import-not-found]
 
     fake_run, recorder = _make_fake_run(
@@ -705,7 +699,6 @@ def test_pr_only_failure_propagates_without_a_note(
     gate cannot catch it; only this case can (review fix #03 D).
     """
     import context  # type: ignore[import-not-found]
-
     import utils  # type: ignore[import-not-found]
 
     fake_run, recorder = _make_fake_run(branch="QS_42", repo_root=tmp_path, raise_on=("pr",))
