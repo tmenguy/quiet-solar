@@ -110,3 +110,209 @@ def test_kinds_are_known() -> None:
 @pytest.mark.usefixtures("active_loop")
 def test_the_hook_is_built_in() -> None:
     assert watchdog.LIVENESS_WATCHDOG in dict(ticks.registered())
+
+
+# --------------------------------------------------------------------------- the ladder (AC 12)
+
+import json  # noqa: E402
+
+import models  # noqa: E402
+from control_plane import paths  # noqa: E402
+from control_plane.runner import RunResult  # noqa: E402
+
+from .conftest import FakeProbe, FakeRunner, run_cli  # noqa: E402
+
+
+def _stall(path: Path, run_id: str, fake_clock: clock.FakeClock, age: float = watchdog.WATCHDOG_S + 1) -> int:
+    old = clock.stamp(fake_clock, plus=-age)
+    sql(
+        path,
+        "INSERT INTO messages (run_id, recipient, kind, sender, payload, state, visible_at, created_at)"
+        " VALUES (?, 'orchestrator', 'k', 'node:T1', '{}', 'queued', ?, ?)",
+        [run_id, old, old],
+    )
+    return int(sql(path, "SELECT max(id) FROM messages")[0][0])
+
+
+def _messenger_rows(path: Path) -> list[dict[str, Any]]:
+    return [dict(r) for r in sql(path, "SELECT * FROM tool_calls WHERE tool = 'watchdog-messenger' ORDER BY key")]
+
+
+def _launches(runner: FakeRunner) -> list[Any]:
+    return runner.matching("claude", "--bg")
+
+
+@pytest.fixture
+def stalled(conn, migrated, fake_claude: FakeClaude, fake_clock) -> dict[str, Any]:
+    run_id, token = open_run()
+    head = _stall(migrated, run_id, fake_clock)
+    fake_claude.listing = [agent(ORCH, "r1", status="idle")]
+    return {"run": run_id, "token": token, "head": head}
+
+
+class TestLadder:
+    def test_a_stalled_idle_run_launches_the_messenger(
+        self, conn, migrated, stalled, fake_runner, fake_clock, fake_main, tmp_path
+    ) -> None:
+        _tick(conn, fake_clock)
+        [call] = _launches(fake_runner)
+        directory = paths.messenger_dir()
+        assert call.cwd == str(directory) and directory == (tmp_path / "messenger").resolve()
+        assert directory.stat().st_mode & 0o777 == 0o700 and not directory.is_relative_to(fake_main)
+        argv = call.argv
+        assert argv[argv.index("--model") + 1] == models.model_for("claude", "fast")
+        assert argv[argv.index("--permission-mode") + 1] == "auto" and "--allowedTools=SendMessage" in argv
+        assert argv[argv.index("-n") + 1] == f"qs-wake-{stalled['run']}-m{stalled['head']}"
+        prompt = argv[-1]
+        assert "session named `r1`" in prompt and f"msg pop --run {stalled['run']} --as orchestrator" in prompt
+        assert stalled["token"] not in prompt and "<your run token>" in prompt
+        [row] = _messenger_rows(migrated)
+        assert row["key"] == f"msg:{stalled['head']}" and row["state"] == "succeeded" and row["exit_code"] == 0
+        assert row["run_id"] == stalled["run"] and row["actor"] == "cp:daemon" and row["args_hash"] == "-"
+        assert json.loads(row["args"]) == argv[argv.index("--bg") + 1 :] and row["holder_pid"] and row["finished_at"]
+        assert _open(migrated) == []
+
+    def test_a_replay_launches_nothing_then_not_listening(
+        self, conn, migrated, stalled, fake_runner, fake_clock
+    ) -> None:
+        _tick(conn, fake_clock)
+        _tick(conn, fake_clock)
+        assert len(_launches(fake_runner)) == 1 and _open(migrated) == []
+        fake_clock.advance(watchdog.WAKE_RETRY_S)
+        _tick(conn, fake_clock)
+        assert _open(migrated) == [(stalled["run"], "orchestrator_not_listening", stalled["run"])]
+        assert len(_launches(fake_runner)) == 1
+        snap = run_cli("snapshot")[1]
+        assert snap["alerts"][0]["kind"] == "orchestrator_not_listening"
+        assert snap["alerts"][0]["payload"]["reason"] == "still_stalled"
+
+    def test_a_restart_adopts_the_heads_row(self, conn, migrated, stalled, fake_runner, fake_clock) -> None:
+        _tick(conn, fake_clock)
+        ticks._reset_for_tests()
+        activeloop._reset_for_tests()
+        _tick(conn, fake_clock)
+        assert len(_launches(fake_runner)) == 1 and _open(migrated) == []
+        fake_clock.advance(watchdog.WAKE_RETRY_S)
+        _tick(conn, fake_clock)
+        assert len(_open(migrated)) == 1 and len(_launches(fake_runner)) == 1
+
+    def test_a_failed_launch_is_not_listening_at_once(self, conn, migrated, stalled, fake_runner, fake_clock) -> None:
+        fake_runner.on(("claude", "--bg"), RunResult(1, "", "boom"))
+        _tick(conn, fake_clock)
+        assert _messenger_rows(migrated)[0]["state"] == "failed"
+        assert _open(migrated) == [(stalled["run"], "orchestrator_not_listening", stalled["run"])]
+        ticks._reset_for_tests()
+        activeloop._reset_for_tests()
+        _tick(conn, fake_clock)  # a new daemon: the failed row means rung 3 at once, still no relaunch
+        assert len(_open(migrated)) == 1 and len(_launches(fake_runner)) == 1
+
+    def test_the_cap_makes_the_next_run_wait_and_a_failed_row_does_not_take_it(
+        self, conn, migrated, fake_claude, fake_runner, fake_clock
+    ) -> None:
+        r1, _ = open_run("r1", "S-1")
+        r2, _ = open_run("r2", "S-2")
+        _stall(migrated, r1, fake_clock)
+        _stall(migrated, r2, fake_clock)
+        fake_claude.listing = [agent("S-1", "r1", status="idle"), agent("S-2", "r2", status="idle")]
+        _tick(conn, fake_clock)
+        assert [r["run_id"] for r in _messenger_rows(migrated)] == [r1]  # r2 waits for the cap
+        fake_clock.advance(watchdog.MESSENGER_TTL_S)
+        _tick(conn, fake_clock)
+        assert sorted(r["run_id"] for r in _messenger_rows(migrated)) == sorted([r1, r2])
+
+    def test_a_failed_row_does_not_take_the_cap(self, conn, migrated, fake_claude, fake_runner, fake_clock) -> None:
+        r1, _ = open_run("r1", "S-1")
+        r2, _ = open_run("r2", "S-2")
+        _stall(migrated, r1, fake_clock)
+        _stall(migrated, r2, fake_clock)
+        fake_claude.listing = [agent("S-1", "r1", status="idle"), agent("S-2", "r2", status="idle")]
+        fake_runner.on(("claude", "--bg"), RunResult(1, "", "boom"))
+        _tick(conn, fake_clock)
+        assert len(_launches(fake_runner)) == 2  # the failed first launch left the cap free
+
+    def test_an_unbound_run_name_is_not_listening(self, conn, migrated, stalled, fake_runner, fake_clock) -> None:
+        sql(migrated, "UPDATE run_leases SET name_bound_session_id = 'S-other'")
+        _tick(conn, fake_clock)
+        assert _launches(fake_runner) == [] and len(_open(migrated)) == 1
+
+    @pytest.mark.parametrize("case", ["busy", "absent", "waiter", "dead", "unknown"])
+    def test_nothing_is_raised_or_cleared(
+        self, conn, migrated, stalled, fake_claude, fake_runner, fake_clock, case: str
+    ) -> None:
+        fake_runner.on(("claude", "--bg"), RunResult(1, "", "boom"))
+        _tick(conn, fake_clock)
+        assert len(_open(migrated)) == 1  # rung 3 reached
+        if case == "busy":
+            fake_claude.listing = [agent(ORCH, "r1", status="busy")]
+        elif case == "absent":
+            fake_claude.listing = []
+        elif case == "waiter":
+            sql(
+                migrated,
+                "INSERT INTO waiters (run_id, pid, pid_start, started_at, heartbeat_at) VALUES (?, 7, NULL, 'x', 'x')",
+                [stalled["run"]],
+            )
+        elif case == "dead":
+            sql(
+                migrated,
+                "INSERT INTO alerts (run_id, kind, subject, fingerprint, payload, first_seen, last_seen) VALUES (?, 'orchestrator_dead', 's', 'f', '{}', 'x', 'x')",
+                [stalled["run"]],
+            )
+        else:
+            fake_claude.listing = None
+        _tick(conn, fake_clock)
+        assert "orchestrator_not_listening" in {k for _, k, _ in _open(migrated)}
+
+    def test_a_drained_or_fresh_head_clears(self, conn, migrated, stalled, fake_runner, fake_clock) -> None:
+        fake_runner.on(("claude", "--bg"), RunResult(1, "", "boom"))
+        _tick(conn, fake_clock)
+        sql(migrated, "UPDATE messages SET state = 'acked'")
+        _tick(conn, fake_clock)
+        assert _open(migrated) == []
+        _stall(migrated, stalled["run"], fake_clock, age=10)  # a fresh head is not stalled yet
+        _tick(conn, fake_clock)
+        assert _open(migrated) == [] and len(_launches(fake_runner)) == 1
+
+    def test_a_started_row_whose_holder_is_dead_is_failed(
+        self, conn, migrated, stalled, fake_probe: FakeProbe, fake_runner, fake_clock
+    ) -> None:
+        sql(
+            migrated,
+            "INSERT INTO tool_calls (tool, key, args_hash, run_id, actor, args, state, holder_pid, holder_pid_start, started_at)"
+            " VALUES ('watchdog-messenger', ?, '-', ?, 'cp:daemon', '[]', 'started', 4242, 'start-4242', ?)",
+            [f"msg:{stalled['head']}", stalled["run"], clock.stamp(fake_clock)],
+        )
+        _tick(conn, fake_clock)  # alive: the launch is in progress, nothing happens
+        assert _messenger_rows(migrated)[0]["state"] == "started" and _open(migrated) == []
+        fake_probe.kill(4242)
+        _tick(conn, fake_clock)
+        assert _messenger_rows(migrated)[0]["state"] == "failed" and len(_open(migrated)) == 1
+        assert _launches(fake_runner) == []
+
+    def test_a_lost_claim_launches_nothing(
+        self, conn, migrated, stalled, fake_runner, fake_clock, fake_probe, monkeypatch
+    ) -> None:
+        real = fake_probe.me
+
+        def racing() -> Any:
+            sql(
+                migrated,
+                "INSERT INTO tool_calls (tool, key, args_hash, run_id, actor, args, state, started_at)"
+                " VALUES ('watchdog-messenger', ?, '-', ?, 'cp:daemon', '[]', 'succeeded', 'x')",
+                [f"msg:{stalled['head']}", stalled["run"]],
+            )
+            return real()
+
+        monkeypatch.setattr(fake_probe, "me", racing)
+        _tick(conn, fake_clock)
+        assert _launches(fake_runner) == []
+
+    def test_an_unreadable_started_at_counts_as_due(self, conn, migrated, stalled, fake_clock) -> None:
+        sql(
+            migrated,
+            "INSERT INTO tool_calls (tool, key, args_hash, run_id, actor, args, state, started_at)"
+            " VALUES ('watchdog-messenger', ?, '-', ?, 'cp:daemon', '[]', 'succeeded', 'x')",
+            [f"msg:{stalled['head']}", stalled["run"]],
+        )
+        _tick(conn, fake_clock)
+        assert len(_open(migrated)) == 1
