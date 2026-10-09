@@ -159,3 +159,13 @@ def deliverable_of(conn: sqlite3.Connection, task_id: str) -> sqlite3.Row:
     """The deliverable a task belongs to: itself, or its ``deliverable_id``."""
     task = tasks.get(conn, task_id)
     return task if task["is_deliverable"] or task["deliverable_id"] is None else tasks.get(conn, task["deliverable_id"])
+
+
+def lane_of(conn: sqlite3.Connection, task_id: str) -> str | None:
+    """The lane a node of ``task_id`` runs under: its deliverable's ``lane``, else derived (QS-405 D7).
+
+    An item's own ``lane`` column is ignored. ``None`` when the deliverable has neither a lane nor a target.
+    """
+    deliverable = deliverable_of(conn, task_id)
+    lane: str | None = deliverable["lane"] or tasks.derive_lane(deliverable["kind"], deliverable["target"])
+    return lane

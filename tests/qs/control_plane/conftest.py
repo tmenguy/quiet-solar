@@ -64,6 +64,7 @@ MODULES = (
 for _name in MODULES:
     importlib.import_module(f"control_plane.{_name}")
 
+import models  # type: ignore[import-not-found]  # noqa: E402, F401 — re-exported: the policy the spawn tests expect (QS-405)
 from control_plane import (  # noqa: E402
     cli,
     clock,
@@ -303,7 +304,13 @@ def fake_kill() -> FakeKill:
 @pytest.fixture
 def deps(fake_clock, fake_runner, fake_probe, fake_claude, fake_popen, fake_kill) -> cli.Deps:
     return cli.Deps(
-        clock=fake_clock, runner=fake_runner, probe=fake_probe, claude=fake_claude, popen=fake_popen, kill=fake_kill
+        clock=fake_clock,
+        runner=fake_runner,
+        probe=fake_probe,
+        claude=fake_claude,
+        popen=fake_popen,
+        kill=fake_kill,
+        resolve_model=cli._policy_resolver,
     )
 
 
