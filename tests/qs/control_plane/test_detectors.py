@@ -170,6 +170,14 @@ class TestOverlap:
         _tick(conn, fake_clock)
         assert len(_open(migrated)) == 2
 
+    def test_a_failed_rev_parse_leaves_both_kinds_out(self, conn, migrated, git, fake_clock, capsys) -> None:
+        self._two_runs(migrated, git)
+        _tick(conn, fake_clock)
+        git.fail.add("rev-parse")  # the refs themselves are unknown: the whole walk is
+        _tick(conn, fake_clock, detectors.OVERLAP_EVERY_S)
+        assert detectors.detect_overlap(conn, fake_clock, activeloop.seams()) == detectors.NONE
+        assert len(_open(migrated)) == 2 and "overlap: git rev-parse" in capsys.readouterr().err
+
     def test_cached_conditions_are_re_emitted_and_git_busy_skips(
         self, conn, migrated, git, fake_clock, fake_main
     ) -> None:
@@ -246,11 +254,30 @@ class TestStalled:
         insert_node(migrated, "N1", r1, "T1", launch_at=_ago(fake_clock, 4000), spawned_at=_ago(fake_clock, 4000))
         sql(
             migrated,
-            "INSERT INTO tool_calls (tool, key, args_hash, run_id, task_id, actor, args, state, started_at) VALUES ('push', 'k', 'h', ?, 'T1', 'node:T1', '{}', 'started', ?)",
+            "INSERT INTO tool_calls (tool, key, args_hash, run_id, task_id, actor, args, state, holder_pid,"
+            " holder_pid_start, started_at) VALUES ('push', 'k', 'h', ?, 'T1', 'node:T1', '{}', 'started', 4242,"
+            " 'start-4242', ?)",
             [r1, _ago(fake_clock, 5000)],
         )
         _tick(conn, fake_clock)
         assert _open(migrated) == []
+
+    def test_a_started_call_whose_holder_is_dead_does_not_hide_the_stall(
+        self, conn, migrated, git, fake_clock, fake_probe
+    ) -> None:
+        r1, _ = open_run()
+        insert_task(migrated, "T1", r1)
+        insert_node(migrated, "N1", r1, "T1", launch_at=_ago(fake_clock, 4000), spawned_at=_ago(fake_clock, 4000))
+        sql(
+            migrated,
+            "INSERT INTO tool_calls (tool, key, args_hash, run_id, task_id, actor, args, state, holder_pid,"
+            " holder_pid_start, started_at) VALUES ('push', 'k', 'h', ?, 'T1', 'node:T1', '{}', 'started', 4242,"
+            " 'start-4242', ?)",
+            [r1, _ago(fake_clock, 5000)],
+        )
+        fake_probe.kill(4242)  # a SIGKILLed `cp.py`: the row stays `started` forever
+        _tick(conn, fake_clock)
+        assert _open(migrated) == [(r1, "node_stalled", "N1")]
 
 
 class TestRounds:
@@ -467,3 +494,96 @@ def test_the_hook_is_throttled(conn, migrated, git, fake_clock, monkeypatch) -> 
     fake_clock.advance(1)
     detectors.detectors_hook(conn, fake_clock)
     assert len(runs) == 2
+
+
+# --------------------------------------------------------------------------- review fix #01 (F6, F8, F9, F19, F20)
+
+
+class TestReviewFix01:
+    def _three(self, migrated: Path, git: FakeGit) -> str:
+        r1, _ = open_run()
+        insert_task(migrated, "T1", r1, branch="QS_1", is_deliverable=1)
+        insert_task(migrated, "T2", r1, branch="QS_2", is_deliverable=1)
+        insert_task(migrated, "T9", r1, branch="QS_9", is_deliverable=1)  # an orphan branch: no merge base
+        git.refs.update({"refs/heads/QS_1": "t1", "refs/heads/QS_2": "t2", "refs/heads/QS_9": "t9"})
+        git.diffs.update({("m", "t1"): ["a.py"], ("m", "t2"): ["a.py"]})
+        return r1
+
+    def test_one_bad_branch_does_not_disable_overlap(self, conn, migrated, git, fake_clock, capsys) -> None:
+        r1 = self._three(migrated, git)
+        real = git.__call__
+
+        def no_base(call: Call) -> RunResult:
+            if call.argv[3] == "diff" and call.argv[-1].endswith("...t9"):
+                git.calls.append(call.argv[3:])
+                return RunResult(128, "", "fatal: no merge base")
+            return real(call)
+
+        git_runner = activeloop.seams().runner
+        assert isinstance(git_runner, FakeRunner)
+        git_runner.on(("git",), no_base)
+        _tick(conn, fake_clock)
+        assert _open(migrated) == [(r1, "overlap", "T1|T2")]
+        _tick(conn, fake_clock, detectors.OVERLAP_EVERY_S)
+        _tick(conn, fake_clock)
+        assert capsys.readouterr().err.count("no merge base") == 1  # logged once
+
+    def test_a_failed_merge_tree_reports_unknown_conflicts(self, conn, migrated, git, fake_clock) -> None:
+        self._three(migrated, git)
+        git.fail.add("merge-tree")
+        _tick(conn, fake_clock)
+        assert _payload(migrated, "overlap")["conflicts"] is None
+
+    def test_an_unknown_branch_keeps_its_last_alert(self, conn, migrated, git, fake_clock) -> None:
+        r1 = self._three(migrated, git)
+        insert_task(migrated, "T3", r1, branch="QS_3", is_deliverable=1)
+        git.refs["refs/heads/QS_3"] = "t3"
+        git.diffs.update({("m", "t3"): ["b.py"], ("m", "t1"): ["a.py", "b.py"]})
+        _tick(conn, fake_clock)
+        assert {s for _, _, s in _open(migrated)} == {"T1|T2", "T1|T3"}
+        git.refs["refs/heads/QS_3"] = "t3b"  # moved, and its diff now fails
+        real = git.__call__
+
+        def failing(call: Call) -> RunResult:
+            if call.argv[3] == "diff" and call.argv[-1].endswith("...t3b"):
+                return RunResult(128, "", "fatal: boom")
+            return real(call)
+
+        activeloop.seams().runner.on(("git",), failing)  # type: ignore[attr-defined]
+        git.refs["refs/heads/QS_2"] = "t2b"  # and T2 stopped touching a.py
+        git.diffs[("m", "t2b")] = ["z.py"]
+        _tick(conn, fake_clock, detectors.OVERLAP_EVERY_S)
+        _tick(conn, fake_clock)
+        assert {s for _, _, s in _open(migrated)} == {"T1|T3"}  # T3 is unknown: kept; T1|T2 is known gone
+
+    def test_caches_are_pruned_after_a_complete_walk(self, conn, migrated, git, fake_clock) -> None:
+        self._three(migrated, git)
+        git.diffs[("m", "t9")] = ["q.py"]
+        _tick(conn, fake_clock)
+        assert ("m", "t9") in detectors._overlap.diffs
+        sql(migrated, "UPDATE tasks SET state = 'merged' WHERE id = 'T9'")
+        git.refs["refs/heads/QS_2"] = "t2b"
+        git.diffs[("m", "t2b")] = ["a.py"]
+        _tick(conn, fake_clock, detectors.OVERLAP_EVERY_S)
+        _tick(conn, fake_clock)
+        assert set(detectors._overlap.diffs) == {("m", "t1"), ("m", "t2b")}
+        assert set(detectors._overlap.conflicts) == {("t1", "t2b")}
+
+    def test_one_raising_detector_does_not_skip_the_rest(
+        self, conn, migrated, git, fake_clock, monkeypatch, capsys
+    ) -> None:
+        synced: list[int] = []
+
+        def boom(c: Any, k: Any, s: Any) -> detectors.Result:
+            raise RuntimeError("detector exploded")
+
+        def fine(c: Any, k: Any, s: Any) -> detectors.Result:
+            synced.append(1)
+            return detectors.NONE
+
+        monkeypatch.setattr(detectors, "ALL", (boom, fine))
+        detectors.detectors_hook(conn, fake_clock)
+        assert synced == [1] and "detector exploded" in capsys.readouterr().err
+
+    def test_in_lists_are_bound_parameters(self) -> None:
+        assert detectors._in(("a", "b'c")) == ("(?, ?)", ("a", "b'c"))

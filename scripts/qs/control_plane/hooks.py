@@ -58,7 +58,7 @@ _SEGMENT_SPLIT = re.compile(r"&&|\|\||;|\||\n")
 _REDIRECT_ONTO_DB = re.compile(r">\s*\S*harness_state\.db(?:-wal|-shm)?(?![\w.-])")
 _FIND_ACTIONS = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"})
 # QS-406 D2: `cp.py halt clear` and `cp.py restore` ask for the maintainer's approval in these permission modes; in any other
-# mode it is denied with a "switch to default mode" hint. T1 (2026-10-09, desktop app): a hook's `ask` showed
+# mode it is denied with a "switch to default mode" hint, and with no mode at all with a "run it in a terminal" one. T1 (2026-10-09, desktop app): a hook's `ask` showed
 # a real approval prompt in `auto` and in `bypassPermissions` too (bypass skips ordinary prompts, not a hook's).
 ASK_MODES = frozenset({"default", "acceptEdits", "auto", "bypassPermissions"})
 MAINTAINER_COMMANDS = (("halt", "clear"), ("restore",))
@@ -306,8 +306,14 @@ def hook_pre_tool_use(stdin_text: str, clock: clock_mod.Clock) -> str:
         tool_input = payload.get("tool_input") or {}
         static = db_access_denial(tool_name, tool_input)  # needs no DB: decided before touching it
         ask = maintainer_confirm(tool_name, tool_input) if static is None else None  # a deny wins over an ask
-        if ask is not None and payload.get("permission_mode") not in ASK_MODES:
-            static, ask = f"{ask}; switch this session to default mode in the app, then ask again", None
+        mode = payload.get("permission_mode")
+        if ask is not None and mode not in ASK_MODES:
+            hint = (
+                "this harness does not say its permission mode: the maintainer runs the command in a terminal"
+                if mode is None
+                else "switch this session to default mode in the app, then ask again"
+            )
+            static, ask = f"{ask}; {hint}", None
     except Exception as exc:  # noqa: BLE001 — PreToolUse fails open
         _log(f"pre-tool-use hook failed open: {exc!r}")
         _try_record(clock, "pre-tool-use", session_id, {"kind": "error", "error": repr(exc)})

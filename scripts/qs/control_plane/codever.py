@@ -10,7 +10,9 @@ A leaf module (D17): it imports only ``errors`` and ``paths``.
   computed once (as the first statement of ``cli._daemon``). A hashed file
   modified since the package was imported makes it ``"unverified:<hash>"``,
   which no disk hash equals, so the ``code_version`` hook restarts the daemon.
-- ``git_busy(main)`` names a file showing a git operation in progress.
+- ``git_busy(main)`` names a file showing a git operation in progress. An ``index.lock`` older than
+  ``GIT_LOCK_STALE_S`` is a crashed git's leftover and is ignored (logged once); ``MERGE_HEAD`` and a
+  rebase stay busy however old (a legitimate long operation; the merge gate's STUCK clause names them).
 """
 
 from __future__ import annotations
@@ -26,12 +28,15 @@ from . import errors, paths
 ENTRY_FILES = ("cp.py", "models.py", "targets.py")  # outside control_plane/: the entry and what the messenger imports
 GIT_BUSY_FILES = ("index.lock", "MERGE_HEAD", "rebase-merge", "rebase-apply")
 UNVERIFIED = "unverified:"
+GIT_LOCK = "index.lock"
+GIT_LOCK_STALE_S = 600.0  # no git command holds the index lock this long
 
 _Signature = tuple[tuple[str, int | None, int | None], ...]
 _cache: dict[Path, tuple[_Signature, str]] = {}
 _loaded: str | None = None
 _loaded_done = False
 _future_logged: set[Path] = set()
+_stale_logged: set[tuple[Path, int]] = set()
 
 
 def _qs(root: Path) -> Path:
@@ -117,11 +122,24 @@ def loaded_version() -> str | None:
     return version
 
 
-def git_busy(main: Path) -> str | None:
-    """The file showing a git operation in progress in ``main`` (``index.lock``, ``MERGE_HEAD``, a rebase), or ``None``."""
+def _stale_lock(candidate: Path) -> bool:
+    st = _stat(candidate)
+    if st is None or time.time() - st.st_mtime < GIT_LOCK_STALE_S:
+        return False
+    if (candidate, st.st_mtime_ns) not in _stale_logged:
+        _stale_logged.add((candidate, st.st_mtime_ns))
+        _log(f"{candidate} is older than {GIT_LOCK_STALE_S:.0f}s: ignored as a stale lock")
+    return True
+
+
+def git_busy(main: Path, *, ignore_stale: bool = True) -> str | None:
+    """The file showing a git operation in progress in ``main`` (``index.lock``, ``MERGE_HEAD``, a rebase), or ``None``.
+
+    ``ignore_stale=False`` also names a stale ``index.lock`` (the merge gate's diagnostic).
+    """
     for name in GIT_BUSY_FILES:
         candidate = Path(main) / ".git" / name
-        if candidate.exists():
+        if candidate.exists() and not (ignore_stale and name == GIT_LOCK and _stale_lock(candidate)):
             return str(candidate)
     return None
 
@@ -130,4 +148,5 @@ def _reset_for_tests() -> None:
     global _loaded, _loaded_done
     _cache.clear()
     _future_logged.clear()
+    _stale_logged.clear()
     _loaded, _loaded_done = None, False

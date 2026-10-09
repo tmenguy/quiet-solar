@@ -105,3 +105,43 @@ def test_batches_are_bounded(conn, migrated, fake_clock, monkeypatch) -> None:
     assert _cursor(migrated) == 2
     hookroute.hook_route_hook(conn, fake_clock)
     assert _cursor(migrated) == 3
+
+
+# --------------------------------------------------------------------------- review fix #01 (F2, F3)
+
+
+def test_a_poisoned_event_is_skipped_and_routing_goes_on(conn, migrated, fake_clock, monkeypatch, capsys) -> None:
+    r1, _ = open_run()
+    poisoned = _event(migrated, {"kind": "k", "run_id": r1})
+    later = _event(migrated, {"kind": "k2", "run_id": r1})
+    real = alerts.event_locked
+
+    def flaky(conn: Any, clock: Any, **kw: Any) -> Any:
+        if kw["subject"] == f"hook:{poisoned}":
+            conn.execute("INSERT INTO meta (key, value) VALUES ('half-written', 'x')")  # rolled back with the event
+            raise RuntimeError("bad event")
+        return real(conn, clock, **kw)
+
+    monkeypatch.setattr(alerts, "event_locked", flaky)
+    hookroute.hook_route_hook(conn, fake_clock)
+    assert [p["hook_event_id"] for _, p in _queue(migrated, r1)] == [later]
+    assert _cursor(migrated) == later
+    assert sql(migrated, "SELECT count(*) FROM meta WHERE key = 'half-written'")[0][0] == 0
+    assert f"event {poisoned}" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [
+        ("ci_red", alerts.HOOK_ALERT),
+        ("selfcheck_failed", alerts.HOOK_ALERT),
+        ("idle_without_wait", "idle_without_wait"),
+        ("my_kind", "my_kind"),
+    ],
+)
+def test_a_routed_event_never_claims_a_daemon_kind(conn, migrated, fake_clock, kind: str, expected: str) -> None:
+    r1, _ = open_run()
+    _event(migrated, {"kind": kind, "run_id": r1})
+    hookroute.hook_route_hook(conn, fake_clock)
+    [(got, payload)] = _queue(migrated, r1)
+    assert got == expected and payload["severity"] == "alert"

@@ -34,6 +34,7 @@ LAST_AT = "last_backup_at"
 LAST_ERROR = "last_backup_error"
 RESTORE_LOCK_WAIT_S = 60.0
 CARRIED_META = ("selfcheck", "selfcheck_override", "selfcheck_pending")
+FIXED_UP_TABLES = ("waiters", "daemon_lease", "meta")  # the restore's fix-up writes these in the copied data
 
 _logged_error: str | None = None
 
@@ -41,6 +42,14 @@ _logged_error: str | None = None
 def _log(message: str) -> None:
     sys.stderr.write(f"[cp-backup] {message}\n")
     sys.stderr.flush()
+
+
+def _last_error(conn: sqlite3.Connection) -> dict[str, Any] | None:
+    """``meta.last_backup_error``; a value that is not an object (hand-edited, truncated) as ``{at: None, error}``."""
+    value = _meta(conn, LAST_ERROR)
+    if value is None or isinstance(value, dict):
+        return value
+    return {"at": None, "error": str(value)}
 
 
 def _meta(conn: sqlite3.Connection, key: str) -> Any:
@@ -72,18 +81,17 @@ def _db_path(conn: sqlite3.Connection) -> Path:
 def backup_hook(conn: sqlite3.Connection, clock: clock_mod.Clock) -> None:
     global _logged_error
     runs = _open_runs(conn)
-    error = _meta(conn, LAST_ERROR)
+    error = _last_error(conn)
     due = (
         bool(runs)
         and (_meta(conn, LAST_AT) is None or _older_than(clock, _meta(conn, LAST_AT), backups.BACKUP_EVERY_S))
-        and (error is None or _older_than(clock, (error or {}).get("at"), backups.BACKUP_EVERY_S))
+        and (error is None or _older_than(clock, error.get("at"), backups.BACKUP_EVERY_S))
     )
     if due:
         now = db.now(clock)
         try:
             db_path = _db_path(conn)
             backups.take(conn, clock.now(), db_path)
-            backups.rotate(backups.db_dir(db_path), clock.now())
         except (errors.CpError, OSError, sqlite3.Error) as exc:
             error = {"at": now, "error": f"{type(exc).__name__}: {exc}"}
             if error["error"] != _logged_error:
@@ -96,6 +104,10 @@ def backup_hook(conn: sqlite3.Connection, clock: clock_mod.Clock) -> None:
             with db.write(conn):
                 conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (LAST_AT, json.dumps(now)))
                 conn.execute("DELETE FROM meta WHERE key = ?", (LAST_ERROR,))
+            try:  # the copy is taken: a failed rotation is logged, never a `backup_failed`
+                backups.rotate(backups.db_dir(db_path), clock.now())
+            except (OSError, ValueError) as exc:  # ValueError: a file name with an impossible stamp
+                _log(f"rotation failed: {type(exc).__name__}: {exc}")
     active = [] if error is None else [alerts.Condition(alerts.BACKUP_FAILED, "backup", runs, dict(error))]
     alerts.sync(conn, clock, kinds={alerts.BACKUP_FAILED}, active=active)
 
@@ -141,6 +153,7 @@ def _check_source(src: Path, live: tuple[int, int] | None) -> tuple[int, int]:
         conn = db.connect(src, mode="ro")
         try:
             check = conn.execute("PRAGMA quick_check").fetchone()[0]
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
             version = db.user_version(conn)
             page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
         finally:
@@ -149,6 +162,9 @@ def _check_source(src: Path, live: tuple[int, int] | None) -> tuple[int, int]:
         raise errors.CpError("CONFLICT", f"the backup {src.name} is unreadable: {exc}") from exc
     if check != "ok":
         raise errors.CpError("CONFLICT", f"the backup {src.name} fails quick_check: {check}")
+    missing = [t for t in FIXED_UP_TABLES if t not in tables]
+    if missing:
+        raise errors.CpError("CONFLICT", f"the backup {src.name} has no {', '.join(missing)} table")
     if version > migrations.current_schema_version():
         raise errors.CpError("CONFLICT", f"the backup {src.name} is at schema v{version}, newer than this code")
     if live is not None and page_size != live[1]:
@@ -175,13 +191,40 @@ def _carry(conn: sqlite3.Connection) -> tuple[list[tuple[Any, ...]], dict[str, s
     return waiters, meta
 
 
+def _fix_up(conn: sqlite3.Connection, waiters: list[tuple[Any, ...]], meta: dict[str, str]) -> None:
+    """Re-apply the carried rows on the copied data and clear the copied daemon lease (one transaction)."""
+    db.begin(conn, "BEGIN IMMEDIATE")
+    try:
+        conn.execute("DELETE FROM waiters")
+        conn.executemany(
+            "INSERT INTO waiters (id, run_id, pid, pid_start, started_at, heartbeat_at) VALUES (?, ?, ?, ?, ?, ?)",
+            waiters,
+        )
+        conn.execute("UPDATE daemon_lease SET pid = NULL, heartbeat_at = NULL")
+        conn.executemany("DELETE FROM meta WHERE key = ?", [(k,) for k in CARRIED_META])
+        conn.executemany("INSERT INTO meta (key, value) VALUES (?, ?)", list(meta.items()))
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
 def _restore_into(path: Path, src: Path, live: tuple[int, int] | None, clock: clock_mod.Clock) -> str | None:
-    """Keep the live DB, copy the backup into it in place, re-apply the carried rows → the ``replaced`` path."""
+    """Keep the live DB, copy the backup into it in place, re-apply the carried rows → the ``replaced`` path.
+
+    A failure before the copy is a ``CONFLICT`` (the live DB is untouched); a failure of the fix-up after
+    the copy is an ``INTERNAL`` error saying so. Both carry ``replaced`` once the live DB was kept.
+    """
     stamp = clock.now().strftime(backups.STAMP_FORMAT)
+    replaced: str | None = None
+
+    def kept() -> dict[str, str]:
+        return {} if replaced is None else {"replaced": replaced}
+
     try:
         conn = db.connect(path, mode="rwc")
         try:
-            replaced = None
             waiters: list[tuple[Any, ...]] = []
             meta: dict[str, str] = {}
             if live is not None:
@@ -193,26 +236,26 @@ def _restore_into(path: Path, src: Path, live: tuple[int, int] | None, clock: cl
                 source.backup(conn)
             finally:
                 source.close()
-            db.begin(conn, "BEGIN IMMEDIATE")
             try:
-                conn.execute("DELETE FROM waiters")
-                conn.executemany(
-                    "INSERT INTO waiters (id, run_id, pid, pid_start, started_at, heartbeat_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    waiters,
-                )
-                conn.execute("UPDATE daemon_lease SET pid = NULL, heartbeat_at = NULL")
-                conn.executemany("DELETE FROM meta WHERE key = ?", [(k,) for k in CARRIED_META])
-                conn.executemany("INSERT INTO meta (key, value) VALUES (?, ?)", list(meta.items()))
-                conn.execute("COMMIT")
-            except BaseException:
-                if conn.in_transaction:
-                    conn.execute("ROLLBACK")
-                raise
+                _fix_up(conn, waiters, meta)
+            except sqlite3.Error as exc:
+                where = "" if replaced is None else f"; the pre-restore DB is kept at {replaced}"
+                raise errors.CpError(
+                    "INTERNAL",
+                    f"the backup {src.name} was copied into the live DB, but the fix-up (waiters, daemon lease,"
+                    f" self-check keys) failed: {exc}",
+                    hint=f"the live DB holds the backup's data{where}; retry the restore",
+                    **kept(),
+                ) from exc
         finally:
             conn.close()
     except sqlite3.DatabaseError as exc:
+        where = "" if replaced is None else f" (the pre-restore DB is kept at {replaced})"
         raise errors.CpError(
-            "CONFLICT", f"the live DB cannot be kept or restored: {exc}", hint="move it aside, then retry"
+            "CONFLICT",
+            f"the live DB cannot be kept or restored: {exc}",
+            hint=f"move it aside, then retry{where}",
+            **kept(),
         ) from exc
     return replaced
 

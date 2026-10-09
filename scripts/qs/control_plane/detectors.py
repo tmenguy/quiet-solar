@@ -54,13 +54,24 @@ NONE: Result = (frozenset(), [])
 _THROTTLE = ticks.Throttle(DETECT_EVERY_S)
 
 
+_logged: set[str] = set()
+
+
 def _log(message: str) -> None:
     sys.stderr.write(f"[cp-detectors] {message}\n")
     sys.stderr.flush()
 
 
-def _in(values: Iterable[str]) -> str:
-    return "(" + ", ".join(f"'{v}'" for v in values) + ")"
+def _log_once(message: str) -> None:
+    if message not in _logged:
+        _logged.add(message)
+        _log(message)
+
+
+def _in(values: Iterable[str]) -> tuple[str, tuple[str, ...]]:
+    """An SQL ``IN`` list of placeholders, and its parameters (sorted, so the SQL text is stable)."""
+    params = tuple(sorted(values))
+    return "(" + ", ".join("?" for _ in params) + ")", params
 
 
 def _open_runs(conn: sqlite3.Connection) -> tuple[str, ...]:
@@ -104,6 +115,8 @@ class _OverlapState:
     diffs: dict[tuple[str, str], list[str]] = field(default_factory=dict)  # (base sha, tip sha) → files
     conflicts: dict[tuple[str, str], list[str]] = field(default_factory=dict)  # (tip, tip) → files
     refs: dict[str, str | None] = field(default_factory=dict)  # resolved for the current walk only
+    touched_diffs: set[tuple[str, str]] = field(default_factory=set)  # the cache keys the current walk used
+    touched_conflicts: set[tuple[str, str]] = field(default_factory=set)
     last: list[alerts.Condition] | None = None  # the last complete result
     last_at: datetime | None = None
     walking: bool = False
@@ -139,17 +152,29 @@ def _main_base(git: _Git) -> str | None:
     return remote  # diverged: a stale local main would show main's own commits
 
 
-def _files(git: _Git, base: str, tip: str) -> list[str]:
+def _files(git: _Git, base: str, tip: str) -> list[str] | None:
+    """The files ``tip`` changes since its merge base with ``base``; ``None`` when git failed (no merge base…)."""
+    _overlap.touched_diffs.add((base, tip))
     if (base, tip) not in _overlap.diffs:
-        _, out = git.run("diff", "--name-only", f"{base}...{tip}")
+        try:
+            _, out = git.run("diff", "--name-only", f"{base}...{tip}")
+        except GitFailed as exc:
+            _log_once(f"overlap: {tip} skipped: {exc}")
+            return None
         _overlap.diffs[(base, tip)] = sorted({line for line in out.splitlines() if line.strip()})
     return _overlap.diffs[(base, tip)]
 
 
-def _conflicts(git: _Git, a: str, b: str) -> list[str]:
+def _conflicts(git: _Git, a: str, b: str) -> list[str] | None:
+    """The files a merge of the two tips would conflict on; ``None`` (unknown) when ``merge-tree`` failed."""
     key = (a, b) if a <= b else (b, a)
+    _overlap.touched_conflicts.add(key)
     if key not in _overlap.conflicts:
-        code, out = git.run("merge-tree", "--write-tree", "--name-only", "--no-messages", key[0], key[1], ok=(0, 1))
+        try:
+            code, out = git.run("merge-tree", "--write-tree", "--name-only", "--no-messages", key[0], key[1], ok=(0, 1))
+        except GitFailed as exc:
+            _log_once(f"overlap: merge-tree {key[0]} {key[1]}: {exc}")
+            return None
         _overlap.conflicts[key] = [] if code == 0 else [ln for ln in out.splitlines()[1:] if ln.strip()]
     return _overlap.conflicts[key]
 
@@ -164,12 +189,16 @@ class _Branch:
 
 
 def _walk(conn: sqlite3.Connection, git: _Git) -> list[alerts.Condition]:
+    """Every overlapping pair. A branch whose diff failed is unknown: its last alerts are kept as they were."""
+    terminal, params = _in(tasks.TERMINAL)
     rows = conn.execute(
         f"SELECT t.id, t.run_id, t.branch, t.deliverable_id, d.branch AS base_branch FROM tasks t"
         f" LEFT JOIN tasks d ON d.id = t.deliverable_id"
-        f" WHERE t.branch IS NOT NULL AND t.state NOT IN {_in(tasks.TERMINAL)} ORDER BY t.id"
+        f" WHERE t.branch IS NOT NULL AND t.state NOT IN {terminal} ORDER BY t.id",
+        params,
     ).fetchall()
     branches: list[_Branch] = []
+    unknown: set[str] = set()
     for row in rows:
         tip = _resolve(git, f"refs/heads/{row['branch']}")
         if tip is None:
@@ -180,8 +209,11 @@ def _walk(conn: sqlite3.Connection, git: _Git) -> list[alerts.Condition]:
             base = None if row["base_branch"] is None else _resolve(git, f"refs/heads/{row['base_branch']}")
         if base is None:
             continue
-        files = tuple(_files(git, base, tip))
-        branches.append(_Branch(row["id"], row["run_id"], row["deliverable_id"], tip, files))
+        files = _files(git, base, tip)
+        if files is None:
+            unknown.add(row["id"])
+            continue
+        branches.append(_Branch(row["id"], row["run_id"], row["deliverable_id"], tip, tuple(files)))
     out = []
     for i, a in enumerate(branches):
         for b in branches[i + 1 :]:
@@ -199,7 +231,7 @@ def _walk(conn: sqlite3.Connection, git: _Git) -> list[alerts.Condition]:
                 "conflicts": _conflicts(git, a.tip, b.tip),
             }
             out.append(alerts.Condition(kind, "|".join(ids), (a.run_id, b.run_id), payload))
-    return out
+    return out + [c for c in _overlap.last or [] if unknown & set(c.payload["tasks"])]
 
 
 def _cached_overlap() -> Result:
@@ -212,6 +244,8 @@ def detect_overlap(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seam
     if not due or codever.git_busy(seams.main) is not None:
         return _cached_overlap()
     git = _Git(conn, clock, seams, budget=OVERLAP_MAX_CALLS)
+    _overlap.touched_diffs.clear()
+    _overlap.touched_conflicts.clear()
     try:
         conditions = _walk(conn, git)
     except OutOfBudget:
@@ -225,6 +259,9 @@ def detect_overlap(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seam
     _overlap.refs.clear()
     _overlap.walking = False
     _overlap.last, _overlap.last_at = conditions, now
+    # A complete walk used every key it needs: drop the rest (merged tasks, moved tips).
+    _overlap.diffs = {k: v for k, v in _overlap.diffs.items() if k in _overlap.touched_diffs}
+    _overlap.conflicts = {k: v for k, v in _overlap.conflicts.items() if k in _overlap.touched_conflicts}
     return OVERLAP_KINDS, conditions
 
 
@@ -241,10 +278,18 @@ def detect_stalled(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seam
         "    UNION ALL SELECT max(created_at) FROM messages WHERE sender = 'node:' || n.task_id"
         "    UNION ALL SELECT max(started_at) FROM tool_calls WHERE actor = 'node:' || n.task_id"
         "    UNION ALL SELECT max(finished_at) FROM tool_calls WHERE actor = 'node:' || n.task_id)"
-        ") AS last FROM nodes n WHERE n.state = 'running' AND NOT EXISTS ("
-        "  SELECT 1 FROM tool_calls c WHERE c.state = 'started' AND c.actor = 'node:' || n.task_id)"
-        " ORDER BY n.id"
+        ") AS last FROM nodes n WHERE n.state = 'running' ORDER BY n.id"
     ).fetchall()
+    # A node with a tool call in flight is busy, not stalled; a `started` row whose holder is dead (a
+    # SIGKILLed `cp.py`) is not in flight.
+    busy = {
+        c["actor"]
+        for c in conn.execute(
+            "SELECT actor, holder_pid, holder_pid_start, holder_pgid FROM tool_calls"
+            " WHERE state = 'started' AND actor LIKE 'node:%'"
+        ).fetchall()
+        if seams.probe.holder_alive(c["holder_pid"], c["holder_pid_start"], c["holder_pgid"])
+    }
     out = [
         alerts.Condition(
             alerts.NODE_STALLED,
@@ -253,7 +298,7 @@ def detect_stalled(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seam
             {"node_id": r["id"], "task_id": r["task_id"], "last_activity": r["last"]},
         )
         for r in rows
-        if r["last"] is not None and r["last"] < cutoff
+        if r["last"] is not None and r["last"] < cutoff and f"node:{r['task_id']}" not in busy
     ]
     return frozenset({alerts.NODE_STALLED}), out
 
@@ -262,10 +307,11 @@ def detect_stalled(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seam
 
 
 def detect_rounds(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) -> Result:
+    terminal, params = _in(tasks.TERMINAL)
     rows = conn.execute(
         f"SELECT r.task_id, t.run_id, r.phase, max(r.round) AS rnd FROM reports r JOIN tasks t ON t.id = r.task_id"
-        f" WHERE t.state NOT IN {_in(tasks.TERMINAL)} GROUP BY r.task_id, r.phase HAVING rnd > ? ORDER BY r.task_id, r.phase",
-        (alerts.ROUNDS_ALERT,),
+        f" WHERE t.state NOT IN {terminal} GROUP BY r.task_id, r.phase HAVING rnd > ? ORDER BY r.task_id, r.phase",
+        (*params, alerts.ROUNDS_ALERT),
     ).fetchall()
     out = [
         alerts.Condition(
@@ -284,12 +330,15 @@ def detect_rounds(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams
 
 def _task_without_node(conn: sqlite3.Connection, clock: clock_mod.Clock) -> list[alerts.Condition]:
     cutoff = clock_mod.stamp(clock, plus=-ORPHAN_GRACE_S)
+    orphan, orphan_params = _in(ORPHAN_STATES)
+    live, live_params = _in(nodes.LIVE_STATES)
     rows = conn.execute(
         f"SELECT t.id, t.run_id, t.state, max("
         f"  COALESCE((SELECT max(at) FROM task_history WHERE task_id = t.id), t.created_at),"
         f"  COALESCE((SELECT max(launch_at) FROM nodes WHERE task_id = t.id), '')"
-        f") AS last FROM tasks t WHERE t.state IN {_in(ORPHAN_STATES)} AND NOT EXISTS ("
-        f"  SELECT 1 FROM nodes n WHERE n.task_id = t.id AND n.state IN {_in(nodes.LIVE_STATES)}) ORDER BY t.id"
+        f") AS last FROM tasks t WHERE t.state IN {orphan} AND NOT EXISTS ("
+        f"  SELECT 1 FROM nodes n WHERE n.task_id = t.id AND n.state IN {live}) ORDER BY t.id",
+        (*orphan_params, *live_params),
     ).fetchall()
     return [
         alerts.Condition(alerts.TASK_WITHOUT_NODE, r["id"], (r["run_id"],), {"task_id": r["id"], "state": r["state"]})
@@ -299,12 +348,16 @@ def _task_without_node(conn: sqlite3.Connection, clock: clock_mod.Clock) -> list
 
 
 def _dependency_violated(conn: sqlite3.Connection) -> list[alerts.Condition]:
+    started, started_params = _in(STARTED_STATES)
+    not_started, not_started_params = _in(NOT_STARTED)
+    done, done_params = _in(DEP_DONE)
     rows = conn.execute(
         f"SELECT t.id, t.run_id, d.id AS dep, d.state AS dep_state FROM task_deps x"
         f" JOIN tasks t ON t.id = x.task_id JOIN tasks d ON d.id = x.depends_on"
-        f" WHERE (t.state IN {_in(STARTED_STATES)}"
-        f"        OR (t.state = 'blocked' AND COALESCE(t.blocked_from, '') NOT IN {_in(NOT_STARTED)}))"
-        f" AND d.state NOT IN {_in(DEP_DONE)} ORDER BY t.id, d.id"
+        f" WHERE (t.state IN {started}"
+        f"        OR (t.state = 'blocked' AND COALESCE(t.blocked_from, '') NOT IN {not_started}))"
+        f" AND d.state NOT IN {done} ORDER BY t.id, d.id",
+        (*started_params, *not_started_params, *done_params),
     ).fetchall()
     return [
         alerts.Condition(
@@ -507,7 +560,8 @@ def normalise_title(title: str) -> str:
 def detect_duplicates(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) -> Result:
     groups: dict[str, list[str]] = {}
     run_of: dict[str, str | None] = {}
-    for r in conn.execute(f"SELECT id, run_id, title FROM tasks WHERE state NOT IN {_in(tasks.TERMINAL)} ORDER BY id"):
+    terminal, params = _in(tasks.TERMINAL)
+    for r in conn.execute(f"SELECT id, run_id, title FROM tasks WHERE state NOT IN {terminal} ORDER BY id", params):
         key = normalise_title(r["title"])
         if key:
             groups.setdefault(key, []).append(r["id"])
@@ -537,10 +591,14 @@ def detectors_hook(conn: sqlite3.Connection, clock: clock_mod.Clock) -> None:
         return
     seams = activeloop.seams()
     for detect in ALL:
-        kinds, conditions = detect(conn, clock, seams)
-        alerts.sync(conn, clock, kinds=kinds, active=conditions)
+        try:  # one failing detector never skips the others (its kinds are left out: nothing cleared)
+            kinds, conditions = detect(conn, clock, seams)
+            alerts.sync(conn, clock, kinds=kinds, active=conditions)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"{getattr(detect, '__name__', detect)} failed: {exc!r}")
 
 
 def _reset_for_tests() -> None:
     global _overlap
     _overlap = _OverlapState()
+    _logged.clear()

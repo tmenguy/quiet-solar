@@ -79,9 +79,15 @@ def set_restart_candidate(version: str | None) -> None:
     _restart_candidate = version
 
 
+def stripped_names(environ: Mapping[str, str]) -> tuple[str, ...]:
+    """The names in ``environ`` that ``strip_env`` removes (the messenger spawn's ``env_remove``)."""
+    return tuple(sorted(k for k in environ if k in STRIPPED_ENV or k.startswith(STRIPPED_ENV_PREFIXES)))
+
+
 def strip_env(environ: Mapping[str, str]) -> dict[str, str]:
     """``environ`` without the spawning session's messaging secret and identity (D16)."""
-    return {k: v for k, v in environ.items() if k not in STRIPPED_ENV and not k.startswith(STRIPPED_ENV_PREFIXES)}
+    removed = set(stripped_names(environ))
+    return {k: v for k, v in environ.items() if k not in removed}
 
 
 def marker_path(db_path: Path) -> Path:

@@ -4,13 +4,15 @@
   ``prs(numbers)`` makes one ``gh api graphql`` call per ``CI_BATCH`` PRs. GraphQL may return
   ``errors`` with partial ``data`` (``gh`` then exits non-zero): a ``null`` alias is an unknown PR
   (``None``), every other alias is valid; only a call with no parseable ``data`` is a ``CiFailure``.
+  An alias whose answer cannot be parsed is unknown too (logged once), and a ``null`` context is skipped.
 - Watched PRs: deliverables with a ``pr_number``, not terminal, in an open run (work items skipped).
 - A poll is all-or-nothing for transport failures: ``tasks.ci_state`` / ``ci_sha`` are written, on a
   change only, when every batch returned data. ``MERGED`` / ``CLOSED`` → ``NULL`` (clears ``ci_red``).
 - ``ci_red`` is derived from the stored rows on every tick (``must-fix``), whether or not a poll ran.
 - The schedule: ``CI_FAST_S`` after a poll that saw a pending rollup or a moved head, else
   ``CI_SLOW_S``; failures back off from ``CI_BACKOFF_MIN_S`` to ``CI_BACKOFF_MAX_S``; below
-  ``CI_RATE_FLOOR`` remaining calls, no poll before GitHub's ``resetAt``. A new daemon polls at once.
+  ``CI_RATE_FLOOR`` remaining calls, no poll before GitHub's ``resetAt`` (at most ``CI_RESET_CAP_S``
+  away). A new daemon polls at once.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ CI_BACKOFF_MIN_S = 60.0
 CI_BACKOFF_MAX_S = 900.0
 CI_BATCH = 25
 CI_RATE_FLOOR = 200
+CI_RESET_CAP_S = 3600.0  # GitHub's rate window is one hour: a later `resetAt` is not believed
 
 FAILING_CONCLUSIONS = frozenset({"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"})
 FAILING_STATUSES = frozenset({"FAILURE", "ERROR"})
@@ -107,6 +110,8 @@ def _pr(node: dict[str, Any]) -> PrCi:
         return PrCi(node["state"], node["headRefOid"], None, (), False)
     failing = []
     for ctx in rollup["contexts"]["nodes"]:
+        if not isinstance(ctx, dict):
+            continue  # GraphQL list items are nullable
         if ctx.get("__typename") == "CheckRun" and ctx.get("conclusion") in FAILING_CONCLUSIONS:
             failing.append(str(ctx.get("name")))
         elif ctx.get("__typename") == "StatusContext" and ctx.get("state") in FAILING_STATUSES:
@@ -123,6 +128,7 @@ class GitHub:
         self._main = main
         self._repo: tuple[str, str] | None = None
         self._repo_error: str | None = None
+        self._unparseable: set[int] = set()  # PRs already logged as unparseable
 
     def repo(self) -> tuple[str, str]:
         if self._repo is not None:
@@ -158,13 +164,24 @@ class GitHub:
             repository = data["repository"]
             out: dict[int, PrCi | None] = {}
             for n in numbers:
-                node = repository.get(f"p{n}")
-                out[n] = None if node is None else _pr(node)
+                out[n] = self._parse(n, repository.get(f"p{n}"))
         except (ValueError, KeyError, TypeError, IndexError, AttributeError) as exc:
             raise CiFailure(
                 f"gh api graphql exited {res.returncode}: {type(exc).__name__}: {res.stderr.strip()[-200:]}"
             ) from exc
         return out, rate
+
+    def _parse(self, number: int, node: Any) -> PrCi | None:
+        """One alias's answer → its ``PrCi``; ``None`` (unknown this poll) when null or unparseable."""
+        if node is None:
+            return None
+        try:
+            return _pr(node)
+        except (KeyError, TypeError, IndexError, AttributeError) as exc:
+            if number not in self._unparseable:
+                self._unparseable.add(number)
+                _log(f"PR #{number}: unparseable answer ({type(exc).__name__}: {exc}); unknown until it parses")
+            return None
 
 
 def ci_state(pr: PrCi) -> tuple[str | None, str | None]:
@@ -228,13 +245,15 @@ class CiWatcher:
                 self.failing[row["id"]] = (sha, pr.failing, pr.truncated)
                 if (state, sha) != (row["ci_state"], row["ci_sha"]):
                     tasks.update_fields(conn, clock, row["id"], {"ci_state": state, "ci_sha": sha})
+        watched = {row["id"] for row in rows}
+        self.failing = {k: v for k, v in self.failing.items() if k in watched}  # a task no longer watched
         self.next_at = now + timedelta(seconds=CI_FAST_S if fast else CI_SLOW_S)
         if rate is not None and rate.remaining < CI_RATE_FLOOR and rate.reset_at:
             try:
                 reset = datetime.fromisoformat(rate.reset_at)
             except ValueError:
                 reset = now + timedelta(seconds=CI_SLOW_S)
-            self.next_at = max(self.next_at, reset)
+            self.next_at = max(self.next_at, min(reset, now + timedelta(seconds=CI_RESET_CAP_S)))
 
     def ci_red(self, conn: sqlite3.Connection) -> list[alerts.Condition]:
         out = []

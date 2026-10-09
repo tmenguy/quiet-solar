@@ -175,10 +175,12 @@ class ClaudeCli:
         except errors.CpError:
             return None
 
-    def spawn_bg(self, args: Sequence[str], *, cwd: Path, timeout: float = 120) -> runner.RunResult:
-        """``claude --bg <args>``, detached, with the run token removed from its environment."""
+    def spawn_bg(
+        self, args: Sequence[str], *, cwd: Path, timeout: float = 120, env_remove: Sequence[str] = ()
+    ) -> runner.RunResult:
+        """``claude --bg <args>``, detached, with the run token (and ``env_remove``) removed from its environment."""
         return self.runner.run(
-            [self.exe, "--bg", *args], cwd=cwd, env_remove=(TOKEN_ENV,), detach=True, timeout=timeout
+            [self.exe, "--bg", *args], cwd=cwd, env_remove=(TOKEN_ENV, *env_remove), detach=True, timeout=timeout
         )
 
     def resume_bg(self, session_id: str, message: str, *, cwd: Path) -> runner.RunResult:

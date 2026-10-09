@@ -72,8 +72,10 @@ import json, pathlib, sys
 qs = pathlib.Path({str(SCRIPTS_QS)!r}).resolve()
 sys.path.insert(0, str(qs))
 import control_plane.cli
-from control_plane import activeloop, codever
+from control_plane import activeloop, codever, watchdog
 activeloop.register_builtin()
+watchdog._messenger_model()  # the lazy `import models` (QS-405 D6): loaded at run time, so load it here too
+assert "models" in sys.modules
 loaded = set()
 for m in list(sys.modules.values()):
     f = getattr(m, "__file__", None)
@@ -91,6 +93,20 @@ print(json.dumps({{"loaded": sorted(loaded), "hashed": sorted(hashed)}}))
         assert codever.git_busy(fake_main) is None
         (fake_main / ".git" / "MERGE_HEAD").write_text("x")
         assert codever.git_busy(fake_main) == str(fake_main / ".git" / "MERGE_HEAD")
+
+    def test_a_stale_index_lock_is_not_busy(self, fake_main: Path, capsys) -> None:
+        lock = fake_main / ".git" / "index.lock"
+        lock.write_text("")
+        assert codever.git_busy(fake_main) == str(lock)  # fresh: a git command is running
+        old = time.time() - codever.GIT_LOCK_STALE_S - 1
+        os.utime(lock, (old, old))
+        assert codever.git_busy(fake_main) is None  # a crashed git's leftover
+        assert codever.git_busy(fake_main) is None
+        assert capsys.readouterr().err.count("ignored as a stale lock") == 1  # logged once
+        assert codever.git_busy(fake_main, ignore_stale=False) == str(lock)  # the merge gate still names it
+        (fake_main / ".git" / "MERGE_HEAD").write_text("x")
+        os.utime(fake_main / ".git" / "MERGE_HEAD", (old, old))
+        assert codever.git_busy(fake_main) == str(fake_main / ".git" / "MERGE_HEAD")  # a long merge stays busy
 
 
 @pytest.mark.usefixtures("real_loaded_version")

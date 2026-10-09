@@ -71,6 +71,7 @@ BACKUP_EVERY_S = 900.0
 BACKUP_KEEP_ALL_S = 86400.0
 BACKUP_KEEP_DAYS = 7
 NAME = re.compile(r"^harness_state\.(periodic|v\d+)\.(\d{8}T\d{12}Z)\.db$")
+PARTIAL = re.compile(r"^harness_state\.(?:periodic|replaced|v\d+)\.(\d{8}T\d{12}Z)\.db\.partial$")
 
 
 def stamp_of(name: str) -> datetime | None:
@@ -85,9 +86,21 @@ def take(conn: sqlite3.Connection, now: datetime, db_path: Path) -> Path:
 
 
 def rotate(directory: Path, now: datetime) -> list[Path]:
-    """Prune ``periodic`` files: all of the last 24 h, then the newest per UTC day for 7 days → the deleted."""
+    """Prune ``periodic`` files: all of the last 24 h, then the newest per UTC day for 7 days → the deleted.
+
+    A copy of the last 24 h counts as its day's newest. A ``.partial`` older than ``BACKUP_EVERY_S`` (by
+    its stamp) is a crashed copy's leftover and is deleted too.
+    """
     kept_days: set[str] = set()
     deleted = []
+    for path in sorted(directory.glob("harness_state.*.db.partial")):
+        m = PARTIAL.match(path.name)
+        if m is None:
+            continue
+        stamp = datetime.strptime(m.group(1), STAMP_FORMAT).replace(tzinfo=UTC)
+        if (now - stamp).total_seconds() >= BACKUP_EVERY_S:
+            path.unlink(missing_ok=True)
+            deleted.append(path)
     periodic = sorted(
         ((s, p) for p in directory.glob("harness_state.periodic.*.db") if (s := stamp_of(p.name)) is not None),
         reverse=True,
@@ -96,6 +109,7 @@ def rotate(directory: Path, now: datetime) -> list[Path]:
         age = (now - stamp).total_seconds()
         day = stamp.strftime("%Y-%m-%d")
         if age < BACKUP_KEEP_ALL_S:
+            kept_days.add(day)
             continue
         if age < BACKUP_KEEP_DAYS * 86400 and day not in kept_days:
             kept_days.add(day)

@@ -201,6 +201,8 @@ class TestLadder:
         _tick(conn, fake_clock)
         assert _messenger_rows(migrated)[0]["state"] == "failed"
         assert _open(migrated) == [(stalled["run"], "orchestrator_not_listening", stalled["run"])]
+        [alert] = run_cli("snapshot")[1]["alerts"]  # AC 12: visible to the maintainer in `snapshot`
+        assert alert["kind"] == "orchestrator_not_listening" and alert["payload"]["reason"] == "messenger_failed"
         ticks._reset_for_tests()
         activeloop._reset_for_tests()
         _tick(conn, fake_clock)  # a new daemon: the failed row means rung 3 at once, still no relaunch
@@ -316,3 +318,74 @@ class TestLadder:
         )
         _tick(conn, fake_clock)
         assert len(_open(migrated)) == 1
+
+
+# --------------------------------------------------------------------------- review fix #01 (F1, F12, F20, F21)
+
+
+class TestLaunchFailures:
+    def test_a_bad_messenger_dir_leaves_no_started_row_and_escalates(
+        self, conn, migrated, stalled, fake_runner, fake_clock, monkeypatch, tmp_path
+    ) -> None:
+        bad = tmp_path / "not-a-dir"
+        bad.write_text("x")
+        monkeypatch.setenv("QS_CP_MESSENGER_DIR", str(bad))
+        _tick(conn, fake_clock)
+        assert [r for r in _messenger_rows(migrated) if r["state"] == "started"] == []
+        assert _launches(fake_runner) == []
+        assert _open(migrated) == [(stalled["run"], "orchestrator_not_listening", stalled["run"])]
+        _tick(conn, fake_clock)  # still failing: the alert stays, one occurrence
+        assert len(_open(migrated)) == 1 and _messages(migrated) == 1
+
+    def test_a_raising_spawn_fails_the_row_then_escalates(
+        self, conn, migrated, stalled, fake_claude, fake_runner, fake_clock, monkeypatch
+    ) -> None:
+        def boom(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("spawn exploded")
+
+        monkeypatch.setattr(fake_claude, "spawn_bg", boom)
+        _tick(conn, fake_clock)
+        [row] = _messenger_rows(migrated)
+        assert row["state"] == "failed" and row["finished_at"]
+        assert "spawn exploded" in json.loads(row["result"])["error"]
+        assert _open(migrated) == [(stalled["run"], "orchestrator_not_listening", stalled["run"])]
+        snap = run_cli("snapshot")[1]
+        assert snap["alerts"][0]["kind"] == "orchestrator_not_listening"
+        assert snap["alerts"][0]["payload"]["reason"] == "messenger_failed"
+
+    def test_an_aged_started_row_is_reaped_even_with_a_live_holder(
+        self, conn, migrated, stalled, fake_runner, fake_clock
+    ) -> None:
+        sql(
+            migrated,
+            "INSERT INTO tool_calls (tool, key, args_hash, run_id, actor, args, state, holder_pid, holder_pid_start, started_at)"
+            " VALUES ('watchdog-messenger', ?, '-', ?, 'cp:daemon', '[]', 'started', 4242, 'start-4242', ?)",
+            [f"msg:{stalled['head']}", stalled["run"], clock.stamp(fake_clock, plus=-watchdog.MESSENGER_TTL_S - 1)],
+        )
+        _tick(conn, fake_clock)
+        assert _messenger_rows(migrated)[0]["state"] == "failed" and len(_open(migrated)) == 1
+        assert _launches(fake_runner) == []
+
+
+def test_the_messenger_never_inherits_the_session_identity(
+    conn, migrated, stalled, fake_runner, fake_clock, monkeypatch
+) -> None:
+    for name in ("CLAUDE_CODE_SESSION_ID", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_MESSAGING_SOCKET"):
+        monkeypatch.setenv(name, "inherited")
+    monkeypatch.setenv("QS_CP_KEEP_ME", "1")
+    _tick(conn, fake_clock)
+    [call] = _launches(fake_runner)
+    removed = set(call.env_remove)
+    assert {"QS_CP_TOKEN", "CLAUDE_CODE_SESSION_ID", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"} <= removed
+    assert "CLAUDE_CODE_MESSAGING_SOCKET" in removed and "QS_CP_KEEP_ME" not in removed
+
+
+def test_cp_command_falls_back_to_this_python_without_the_main_venv(fake_main) -> None:
+    import sys
+
+    seams = activeloop.seams()
+    assert watchdog.cp_command(seams) == f"{sys.executable} {fake_main}/scripts/qs/cp.py"
+    venv = fake_main / "venv" / "bin" / "python"
+    venv.parent.mkdir(parents=True)
+    venv.write_text("")
+    assert watchdog.cp_command(seams) == f"{venv} {fake_main}/scripts/qs/cp.py"

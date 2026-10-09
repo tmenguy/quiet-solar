@@ -1479,7 +1479,7 @@ def _merge_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
 
 
 def _git_busy_clause(main: Path) -> str:
-    busy = codever.git_busy(main)
+    busy = codever.git_busy(main, ignore_stale=False)
     if busy is None:
         return ""
     try:

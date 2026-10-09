@@ -110,13 +110,33 @@ class TestRotation:
         keep = [
             self._touch(tmp_path, "v1", now - timedelta(days=30)),
             tmp_path / "harness_state.replaced.20260101T000000000000Z.db",
-            tmp_path / "harness_state.periodic.20261009T110000000000Z.db.partial",
+            tmp_path / "harness_state.periodic.20261009T115500000000Z.db.partial",  # a copy being written
         ]
         keep[1].write_text("")
         keep[2].write_text("")
         deleted = backups.rotate(tmp_path, now)
-        assert sorted(deleted) == sorted([day2[1], old])
-        assert all(p.exists() for p in [*recent, day2[0], day5, *keep])
+        # 2026-10-08's newest copy is the 23 h one, kept with the last 24 h: day2's two older copies go (F15)
+        assert sorted(deleted) == sorted([*day2, old])
+        assert all(p.exists() for p in [*recent, day5, *keep])
+
+    def test_the_24h_boundary_day_keeps_no_extra_copy(self, tmp_path: Path) -> None:
+        now = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+        inside = self._touch(tmp_path, "periodic", now - timedelta(hours=20))  # 2026-10-08 16:00, < 24 h
+        outside = self._touch(tmp_path, "periodic", now - timedelta(hours=26))  # 2026-10-08 10:00, > 24 h
+        assert backups.rotate(tmp_path, now) == [outside] and inside.exists()
+
+    def test_leftover_partials_are_removed(self, tmp_path: Path) -> None:
+        now = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+        stale = tmp_path / f"harness_state.v3.{(now - timedelta(hours=1)).strftime(backups.STAMP_FORMAT)}.db.partial"
+        fresh = (
+            tmp_path
+            / f"harness_state.periodic.{(now - timedelta(minutes=5)).strftime(backups.STAMP_FORMAT)}.db.partial"
+        )
+        odd = tmp_path / "harness_state.periodic.garbage.db.partial"
+        for f in (stale, fresh, odd):
+            f.write_text("")
+        assert backups.rotate(tmp_path, now) == [stale]
+        assert fresh.exists() and odd.exists() and not stale.exists()
 
     def test_choose_source_newest_periodic_or_v_never_replaced_or_partial(self, tmp_path: Path) -> None:
         assert backups.choose_source(tmp_path) is None
@@ -289,7 +309,8 @@ class TestRestore:
             src.unlink()
             other = sqlite3.connect(":memory:")
             other.execute("PRAGMA page_size = 8192")
-            other.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+            for table in ("meta (key TEXT PRIMARY KEY, value TEXT)", "waiters (id)", "daemon_lease (id)"):
+                other.execute(f"CREATE TABLE {table}")
             dest = backups.db_dir(migrated) / "harness_state.v1.20261003T110000000000Z.db"
             disk = sqlite3.connect(dest)
             disk.execute("PRAGMA page_size = 8192")
@@ -391,15 +412,51 @@ class TestRestore:
             )
         assert exc.value.code == "CONFLICT"
 
-    def test_a_failure_in_the_carry_transaction_rolls_back(
+    def test_a_failure_in_the_fix_up_names_the_replaced_copy(
         self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
     ) -> None:
         monkeypatch.setattr(restore, "_carry", lambda conn: ([(1,)], {}))  # a malformed row: the insert fails
-        with pytest.raises(restore.errors.CpError, match="CONFLICT"):
+        with pytest.raises(restore.errors.CpError) as exc:
             restore.restore(
                 migrated, clock=fake_clock, probe=fake_probe, kill=fake_kill, popen=fake_popen, lock_wait_s=0
             )
-        assert not daemon.marker_path(migrated).exists()
+        err = exc.value
+        assert err.code == "INTERNAL" and "copied into the live DB" in err.detail
+        replaced = Path(err.extra["replaced"])
+        assert replaced.name.startswith("harness_state.replaced.") and replaced.exists()
+        assert str(replaced) in err.extra["hint"]
+        assert not daemon.marker_path(migrated).exists() and len(fake_popen.calls) == 1
+
+    def test_a_copy_failure_keeps_the_replaced_pointer(
+        self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
+    ) -> None:
+        real = db.connect
+
+        def connect(path: Any, *a: Any, **k: Any) -> Any:
+            if Path(path) == backed_up["src"]:
+                raise sqlite3.OperationalError("unable to open database file")
+            return real(path, *a, **k)
+
+        monkeypatch.setattr(restore.db, "connect", connect)
+        monkeypatch.setattr(restore, "_check_source", lambda src, live: (CUR, 4096))
+        with pytest.raises(restore.errors.CpError) as exc:
+            restore.restore(
+                migrated, clock=fake_clock, probe=fake_probe, kill=fake_kill, popen=fake_popen, lock_wait_s=0
+            )
+        assert exc.value.code == "CONFLICT" and Path(exc.value.extra["replaced"]).exists()
+
+    def test_a_source_missing_a_carried_table_is_refused_untouched(
+        self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen
+    ) -> None:
+        sql(backed_up["src"], "DROP TABLE waiters")
+        before = migrated.read_bytes()
+        with pytest.raises(restore.errors.CpError) as exc:
+            restore.restore(
+                migrated, clock=fake_clock, probe=fake_probe, kill=fake_kill, popen=fake_popen, lock_wait_s=0
+            )
+        assert exc.value.code == "CONFLICT" and "waiters" in exc.value.detail
+        assert migrated.read_bytes() == before and fake_popen.calls == []
+        assert not list(backups.db_dir(migrated).glob("harness_state.replaced.*"))
 
 
 class TestMarker:
@@ -439,7 +496,7 @@ def test_a_backup_failing_quick_check_is_a_conflict(tmp_path: Path, monkeypatch)
     class Conn:
         def execute(self, statement: str) -> Any:
             value = "*** page 4 is never used" if "quick_check" in statement else 1
-            return type("R", (), {"fetchone": lambda self: (value,)})()
+            return type("R", (), {"fetchone": lambda self: (value,), "fetchall": lambda self: [(value,)]})()
 
         def close(self) -> None:
             pass
@@ -447,3 +504,28 @@ def test_a_backup_failing_quick_check_is_a_conflict(tmp_path: Path, monkeypatch)
     monkeypatch.setattr(db, "connect", lambda *a, **k: Conn())
     with pytest.raises(restore.errors.CpError, match="fails quick_check"):
         restore._check_source(tmp_path / "b.db", None)
+
+
+# --------------------------------------------------------------------------- review fix #01 (F11, F16)
+
+
+@pytest.mark.parametrize("stored", ['"a bare string"', "not json at all", "[1, 2]"])
+def test_a_non_dict_last_error_never_stops_backups(conn, migrated, fake_clock, stored: str) -> None:
+    open_run()
+    sql(migrated, "INSERT INTO meta (key, value) VALUES (?, ?)", [restore.LAST_ERROR, stored])
+    _hook(conn, fake_clock)
+    assert len(_periodic(migrated)) == 1 and _meta(migrated, restore.LAST_ERROR) is None
+    assert _failed_alerts(migrated) == []
+
+
+def test_a_rotation_failure_is_not_a_backup_failure(conn, migrated, fake_clock, monkeypatch, capsys) -> None:
+    open_run()
+
+    def broken(directory: Path, now: datetime) -> list[Path]:
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(backups, "rotate", broken)
+    _hook(conn, fake_clock)
+    assert len(_periodic(migrated)) == 1 and _meta(migrated, restore.LAST_AT) == db.now(fake_clock)
+    assert _failed_alerts(migrated) == [] and _meta(migrated, restore.LAST_ERROR) is None
+    assert "rotation failed" in capsys.readouterr().err

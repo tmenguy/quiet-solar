@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -81,8 +82,14 @@ class TestGate:
         assert str(w.main / ".git" / "index.lock") in out["detail"] and "since 20" in out["detail"]
 
     def test_stuck_clause_survives_an_unstatable_file(self, w: W, monkeypatch) -> None:
-        monkeypatch.setattr(codever, "git_busy", lambda main: "/nonexistent/.git/index.lock")
+        monkeypatch.setattr(codever, "git_busy", lambda main, **kw: "/nonexistent/.git/index.lock")
         assert tools._git_busy_clause(w.main).endswith("since ?: /nonexistent/.git/index.lock)")
+
+    def test_stuck_clause_names_a_stale_index_lock_too(self, w: W) -> None:
+        lock = w.main / ".git" / "index.lock"
+        lock.write_text("")
+        os.utime(lock, (1_000_000_000, 1_000_000_000))  # 2001: stale, ignored by the restart, named here
+        assert codever.git_busy(w.main) is None and str(lock) in tools._git_busy_clause(w.main)
 
     @pytest.mark.parametrize("failures", [1, 2])
     def test_a_few_failures_are_busy_with_the_next_retry(self, w: W, failures: int) -> None:
@@ -220,11 +227,17 @@ class TestAskGuard:
         for mode in ("default", "acceptEdits", "auto", "bypassPermissions"):  # T1: a hook's `ask` prompts in all
             assert _decision(_pre(command, mode=mode)) == "ask"
 
-    @pytest.mark.parametrize("mode", ["plan", "dontAsk", None])
+    @pytest.mark.parametrize("mode", ["plan", "dontAsk"])
     def test_denies_with_a_hint_elsewhere(self, mode: str | None) -> None:
         code, out = _pre("python scripts/qs/cp.py halt clear --reason r", mode=mode)
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "switch this session to default mode" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_a_missing_mode_denies_and_points_to_a_terminal(self) -> None:
+        code, out = _pre("python scripts/qs/cp.py restore --confirm", mode=None)
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+        reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "terminal" in reason and "switch this session" not in reason
 
     def test_other_commands_pass(self) -> None:
         assert _decision(_pre("python scripts/qs/cp.py halt")) is None

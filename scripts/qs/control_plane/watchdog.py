@@ -31,12 +31,14 @@ exits 0 and the messenger then stops (T1) — the run is then flagged ``orchestr
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import sys
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
-from . import activeloop, alerts, daemon, db, liveness, messages, nodes, paths, tasks, ticks, wait
+from . import activeloop, alerts, daemon, db, errors, liveness, messages, nodes, paths, runner, tasks, ticks, wait
 from . import clock as clock_mod
 
 if TYPE_CHECKING:
@@ -52,6 +54,14 @@ MESSENGER_TOOL = "watchdog-messenger"
 MESSENGER_ACTOR = "cp:daemon"
 
 _THROTTLE = ticks.Throttle(LIVENESS_EVERY_S)
+_logged: set[str] = set()
+
+
+def _log_once(message: str) -> None:
+    if message not in _logged:
+        _logged.add(message)
+        sys.stderr.write(f"[cp-watchdog] {message}\n")
+        sys.stderr.flush()
 
 
 @dataclass
@@ -147,12 +157,21 @@ def _sync_liveness(conn: sqlite3.Connection, clock: clock_mod.Clock, listing: li
 
 
 def _fail_stale_messengers(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) -> None:
-    """A ``started`` messenger row whose holder is dead becomes ``failed`` (the launch never finished)."""
+    """A ``started`` messenger row becomes ``failed`` when its holder is dead or it is ``MESSENGER_TTL_S`` old.
+
+    Either way the launch never finished: a launch takes at most ``HOOK_SUBPROCESS_S``, so an older row
+    was left behind by a failure (its holder may be this very daemon).
+    """
+    cutoff = clock_mod.stamp(clock, plus=-MESSENGER_TTL_S)
     rows = conn.execute(
-        "SELECT key, holder_pid, holder_pid_start FROM tool_calls WHERE tool = ? AND state = 'started'",
+        "SELECT key, holder_pid, holder_pid_start, started_at FROM tool_calls WHERE tool = ? AND state = 'started'",
         (MESSENGER_TOOL,),
     ).fetchall()
-    dead = [r["key"] for r in rows if not seams.probe.holder_alive(r["holder_pid"], r["holder_pid_start"], None)]
+    dead = [
+        r["key"]
+        for r in rows
+        if r["started_at"] < cutoff or not seams.probe.holder_alive(r["holder_pid"], r["holder_pid_start"], None)
+    ]
     if dead:
         with db.write(conn):
             conn.executemany(
@@ -185,7 +204,10 @@ def _kept(conn: sqlite3.Connection, run_id: str) -> alerts.Condition | None:
 
 
 def cp_command(seams: Seams) -> str:
-    return f"{seams.main}/venv/bin/python {seams.main}/scripts/qs/cp.py"
+    """``<main>/venv/bin/python <main>/scripts/qs/cp.py``; this interpreter when the main venv is missing."""
+    venv_python = seams.main / "venv" / "bin" / "python"
+    python = str(venv_python) if venv_python.exists() else sys.executable
+    return f"{python} {seams.main}/scripts/qs/cp.py"
 
 
 def wake_text(seams: Seams, run_id: str, waiting: int) -> str:
@@ -238,8 +260,17 @@ def _cap_taken(conn: sqlite3.Connection, clock: clock_mod.Clock) -> bool:
 def _launch(
     conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams, run: sqlite3.Row, head: int, waiting: int
 ) -> bool | None:
-    """Claim and launch the head's messenger → ``True`` launched, ``False`` failed, ``None`` lost the claim."""
+    """Claim and launch the head's messenger → ``True`` launched, ``False`` failed, ``None`` lost the claim.
+
+    The messenger directory is made before the claim (a failure there claims nothing and is a failed
+    launch); once claimed, every failure closes the row as ``failed``, so the ladder escalates.
+    """
     key = f"msg:{head}"
+    try:
+        directory = paths.ensure_private_dir(paths.messenger_dir())
+    except (errors.CpError, OSError) as exc:
+        _log_once(f"messenger directory unusable: {exc}")
+        return False
     args = messenger_args(run["id"], head, messenger_prompt(run["name"], wake_text(seams, run["id"], waiting)))
     me = seams.probe.me()
     with db.write(conn):
@@ -250,24 +281,31 @@ def _launch(
             " holder_pid_start, started_at) VALUES (?, ?, '-', ?, NULL, ?, ?, 'started', ?, ?, ?)",
             (MESSENGER_TOOL, key, run["id"], MESSENGER_ACTOR, json.dumps(args), me.pid, me.pid_start, db.now(clock)),
         )
-    directory = paths.ensure_private_dir(paths.messenger_dir())
-    res = seams.claude.spawn_bg(args, cwd=directory, timeout=ticks.HOOK_SUBPROCESS_S)
-    daemon.beat(conn, clock)
-    with db.write(conn):
+    res: runner.RunResult | None = None
+    try:
+        res = seams.claude.spawn_bg(
+            args, cwd=directory, timeout=ticks.HOOK_SUBPROCESS_S, env_remove=daemon.stripped_names(os.environ)
+        )
+        daemon.beat(conn, clock)
+    except Exception as exc:  # noqa: BLE001 — any failure is a failed launch, never a row left `started`
+        _log_once(f"messenger launch failed: {exc!r}")
+        result: dict[str, Any] = {"error": f"{type(exc).__name__}: {exc}"[-300:]}
+    else:
+        result = {"stdout_tail": res.stdout.strip().splitlines()[-5:], "stderr_tail": res.stderr.strip()[-300:]}
+    ok = res is not None and res.ok
+    with db.write(conn):  # if this write fails, `_fail_stale_messengers` reaps the row after MESSENGER_TTL_S
         conn.execute(
             "UPDATE tool_calls SET state = ?, finished_at = ?, exit_code = ?, result = ? WHERE tool = ? AND key = ?",
             (
-                "succeeded" if res.ok else "failed",
+                "succeeded" if ok else "failed",
                 db.now(clock),
-                res.returncode,
-                json.dumps(
-                    {"stdout_tail": res.stdout.strip().splitlines()[-5:], "stderr_tail": res.stderr.strip()[-300:]}
-                ),
+                None if res is None else res.returncode,
+                json.dumps(result),
                 MESSENGER_TOOL,
                 key,
             ),
         )
-    return res.ok
+    return ok
 
 
 def _ladder(
@@ -320,3 +358,4 @@ def _ladder(
 def _reset_for_tests() -> None:
     global _state
     _state = _State()
+    _logged.clear()

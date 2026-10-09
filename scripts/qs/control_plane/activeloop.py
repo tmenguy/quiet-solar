@@ -71,6 +71,9 @@ def _builtin() -> list[tuple[str, ticks.Hook]]:
     ]
 
 
+# Spelled out on purpose, not derived from `_builtin()`: the self-check compares the live registry with
+# this independent list (a hook lost from the registry is caught), and deriving it would import every hook
+# module when this module loads — the import cycle `_builtin()`'s lazy imports avoid. A test pins the two equal.
 BUILTIN_NAMES: frozenset[str] = frozenset(
     {"code_version", "selfcheck", "detectors", "hook_route", "ci_watch", "liveness_watchdog", "backup"}
 )

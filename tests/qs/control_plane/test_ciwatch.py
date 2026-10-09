@@ -330,3 +330,46 @@ def test_the_ci_state_mapping() -> None:
 
 def test_kinds() -> None:
     assert alerts.severity(alerts.CI_RED) == "must-fix"
+
+
+# --------------------------------------------------------------------------- review fix #01 (F7, F18, F19)
+
+
+def test_a_null_context_and_a_malformed_pr_never_fail_the_batch(
+    conn, migrated, real_github, fake_runner, fake_clock, capsys
+) -> None:
+    r1, _ = open_run()
+    insert_task(migrated, "T1", r1, is_deliverable=1, pr_number=6)
+    insert_task(migrated, "T2", r1, is_deliverable=1, pr_number=7)
+    insert_task(migrated, "T3", r1, is_deliverable=1, pr_number=8)
+    nulls = _node("FAILURE", contexts=[None, {"__typename": "CheckRun", "name": "ci", "conclusion": "FAILURE"}])  # type: ignore[list-item]
+    malformed = {"state": "OPEN", "headRefOid": "h1"}  # no `commits`
+    fake_runner.on(("gh", "api", "graphql"), _graphql({6: nulls, 7: malformed, 8: _node("SUCCESS")}))
+    _tick(conn, fake_clock)
+    assert _ci(migrated, "T1") == ("red", "h1") and _ci(migrated, "T3") == ("green", "h1")
+    assert _ci(migrated, "T2") == (None, None)  # unknown this poll: no write
+    assert ciwatch._watcher.failing["T1"][1] == ("ci",) and ciwatch._watcher.backoff_s == 0
+    fake_clock.advance(ciwatch.CI_SLOW_S)
+    _tick(conn, fake_clock)
+    assert capsys.readouterr().err.count("PR #7") == 1  # logged once
+
+
+def test_a_far_future_reset_is_capped(conn, migrated, watched, fake_github, fake_clock) -> None:
+    from datetime import timedelta
+
+    fake_github.prs_by_number[7] = _pr()
+    fake_github.rate = ciwatch.Rate(150, clock.iso(fake_clock.now() + timedelta(days=3)))
+    _tick(conn, fake_clock)
+    assert ciwatch._watcher.next_at == fake_clock.now() + timedelta(seconds=ciwatch.CI_RESET_CAP_S)
+
+
+def test_the_failing_map_keeps_only_watched_tasks(conn, migrated, watched, fake_github, fake_clock) -> None:
+    fake_github.prs_by_number[7] = _pr(rollup="FAILURE", failing=("ci",))
+    _tick(conn, fake_clock)
+    assert set(ciwatch._watcher.failing) == {"T1"}
+    insert_task(migrated, "T2", watched, is_deliverable=1, pr_number=8)
+    fake_github.prs_by_number[8] = _pr()
+    sql(migrated, "UPDATE tasks SET state = 'merged' WHERE id = 'T1'")
+    fake_clock.advance(ciwatch.CI_SLOW_S)
+    _tick(conn, fake_clock)
+    assert set(ciwatch._watcher.failing) == {"T2"}

@@ -3,7 +3,10 @@
 A cursor in ``meta.hook_events_cursor`` (seeded by migration v3 past the existing history) marks the
 last event read. Each tick, in one ``db.write``, the next events are read; every ``alert`` row whose
 run is known and open becomes a one-shot alert (``alerts.event_locked``, subject ``hook:<id>``); the
-cursor moves to the last id read, routable or not. Unroutable rows stay visible in
+cursor moves to the last id read, routable or not. Each event is routed inside its own SAVEPOINT: one
+that raises is rolled back alone, logged, and counted unroutable, so it never blocks the cursor. An
+event's own ``kind`` passes through unless it names a daemon-owned kind (``ci_red``,
+``selfcheck_failed``…): that becomes ``hook_alert``. Unroutable rows stay visible in
 ``snapshot["hook_alerts"]``. ``hook_events.id`` is ``AUTOINCREMENT`` and SQLite serialises writers, so
 ids commit in order and never go back.
 """
@@ -12,6 +15,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 from typing import Any
 
 from . import alerts, db
@@ -20,6 +24,12 @@ from . import clock as clock_mod
 HOOK_ROUTE = "hook_route"
 CURSOR = "hook_events_cursor"
 BATCH = 500
+DAEMON_KINDS = alerts.KINDS - alerts.ROUTED_HOOK_KINDS  # a hook event may not pose as one of these
+
+
+def _log(message: str) -> None:
+    sys.stderr.write(f"[cp-hookroute] {message}\n")
+    sys.stderr.flush()
 
 
 def _detail(text: str) -> dict[str, Any]:
@@ -41,7 +51,9 @@ def _run_of(conn: sqlite3.Connection, detail: dict[str, Any]) -> str | None:
 
 def _kind(detail: dict[str, Any]) -> str:
     kind = detail.get("kind")
-    return kind if isinstance(kind, str) and 1 <= len(kind) <= 32 else alerts.HOOK_ALERT
+    if isinstance(kind, str) and 1 <= len(kind) <= 32 and kind not in DAEMON_KINDS:
+        return kind
+    return alerts.HOOK_ALERT
 
 
 def route_locked(conn: sqlite3.Connection, clock: clock_mod.Clock) -> dict[str, Any]:
@@ -57,14 +69,26 @@ def route_locked(conn: sqlite3.Connection, clock: clock_mod.Clock) -> dict[str, 
         if event["decision"] != "alert":
             continue
         detail = _detail(event["detail"])
-        posted = alerts.event_locked(
-            conn,
-            clock,
-            kind=_kind(detail),
-            subject=f"hook:{event['id']}",
-            run_id=_run_of(conn, detail),
-            payload={**detail, "hook": event["hook"], "hook_event_id": event["id"], "session_id": event["session_id"]},
-        )
+        conn.execute("SAVEPOINT hook_event")
+        try:
+            posted = alerts.event_locked(
+                conn,
+                clock,
+                kind=_kind(detail),
+                subject=f"hook:{event['id']}",
+                run_id=_run_of(conn, detail),
+                payload={
+                    **detail,
+                    "hook": event["hook"],
+                    "hook_event_id": event["id"],
+                    "session_id": event["session_id"],
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad event never stops the routing: skipped, logged
+            conn.execute("ROLLBACK TO hook_event")
+            posted = None
+            _log(f"event {event['id']} not routed: {exc!r}")
+        conn.execute("RELEASE hook_event")
         routed += posted is not None
     if events:
         cursor = events[-1]["id"]
