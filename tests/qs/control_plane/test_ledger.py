@@ -896,8 +896,10 @@ class TestCli:
         code, out = run_cli("finding", "state", "1", "--to", "resolved", "--commit", "c1", *tok)
         assert (code, out) == (0, {"ok": True, "finding_id": 1, "state": "resolved", "changed": True})
         assert run_cli("finding", "state", "1", "--to", "open", "--commit", "c", *tok)[1]["error"] == "USAGE"
-        code, out = run_cli("finding", "state", "1", "--to", "open", "--cause", "1", "--reason", "back", *tok)
-        assert code == 0 and lw.events(1)[-1]["cause_id"] == 1
+        cause = lw.one("T1", title="the cause", symbol="c")
+        lw.state(cause, "resolved", commit="c2")
+        code, out = run_cli("finding", "state", "1", "--to", "open", "--cause", str(cause), "--reason", "back", *tok)
+        assert code == 0 and lw.events(1)[-1]["cause_id"] == cause
         bl = ("blast-radius", "set", "--task", "T1", "--value", "doubt", "--head-sha", "h1", "--review", "G1")
         code, out = run_cli(*bl, "--reason", "wide", *tok)
         assert code == 0 and out["value"] == "doubt"
@@ -906,7 +908,9 @@ class TestCli:
             "ledger", "show", "--task", "T1", "--phase", "build", "--state", "open, deferred ,", "--family"
         )
         assert code == 0 and [f["id"] for f in out["findings"]] == [1] and out["blast_radius"][0]["reason"] == "wide"
-        assert run_cli("ledger", "show", "--task", "T1", "--state", "resolved")[1]["findings"] == []
+        assert [f["id"] for f in run_cli("ledger", "show", "--task", "T1", "--state", "resolved")[1]["findings"]] == [
+            cause
+        ]
         assert run_cli("ledger", "show", "--task", "T1", "--state", "nope")[1]["error"] == "USAGE"
         assert run_cli("ledger", "show", "--task", "T9")[1]["error"] == "NOT_FOUND"
 
@@ -924,3 +928,136 @@ class TestCli:
         assert not db_path.exists()
         code, out = run_cli("ledger", "show", "--task", "T1")
         assert code == 8 and out["error"] == "NOT_FOUND"
+
+
+# --------------------------------------------------------------------------- review fix #01
+
+
+class TestReviewFix01:
+    def test_f2_relates_to_another_runs_finding_is_not_found(self, lw: L) -> None:
+        other = lw.one("T6", token=lw.token2)
+        assert code_of(lw.open, "T1", item(relates_to=[other])) == "NOT_FOUND"
+        assert lw.open("T6", item(title="x", relates_to=[other]), token=lw.token2)
+
+    @pytest.mark.parametrize("title", ["???", "—", " 🔥 ", "__"])
+    def test_f3_a_title_that_normalises_to_nothing(self, lw: L, title: str) -> None:
+        assert code_of(lw.open, "T1", item(title=title)) == "USAGE"
+
+    @pytest.mark.parametrize("file", ["a.py:10", "a.py:10-12", "a\\b.py", "..\\x.py"])
+    def test_f4_bad_file_spellings(self, lw: L, file: str) -> None:
+        assert code_of(lw.open, "T1", item(file=file)) == "USAGE"
+
+    @pytest.mark.parametrize(("given", "stored"), [("a//b/./c.py", "a/b/c.py"), ("src/", "src"), ("./x/../y.py", None)])
+    def test_f4_paths_are_normalised(self, lw: L, given: str, stored: str | None) -> None:
+        if stored is None:
+            assert code_of(lw.open, "T1", item(file=given)) == "USAGE"  # `..` is refused before normalising
+        else:
+            assert lw.row(lw.open("T1", item(file=given))[0])["file"] == stored
+
+    def test_f5_a_gate_severity_is_overridden(self, lw: L) -> None:
+        cur = lw.conn.execute(
+            "INSERT INTO integrations (item_task_id, deliverable_id, item_tip, result, at)"
+            " VALUES ('T2', 'T1', 't', 'gate_red', 'x')"
+        )
+        gate = {
+            "severity": "nice_to_have",
+            "category": "gate",
+            "title": "g",
+            "body": "b",
+            "integration_id": cur.lastrowid,
+        }
+        row = lw.row(lw.open("T1", gate, source="gate")[0])
+        assert (row["severity"], row["classification"]) == ("must_fix", "must_fix")
+
+    def test_f7_an_empty_state_filter(self, lw: L) -> None:
+        assert code_of(ledger.show, lw.conn, "T1", states=[]) == "USAGE"
+        for given in (",", " ", ""):
+            assert run_cli("ledger", "show", "--task", "T1", "--state", given)[1]["error"] == "USAGE"
+
+    def test_f8_a_finding_is_not_its_own_cause(self, lw: L) -> None:
+        a = lw.one("T1")
+        assert code_of(lw.state, a, "deferred", cause=a) == "USAGE"
+
+    def test_f9_blank_strings(self, lw: L) -> None:
+        assert code_of(lw.round, head="  ") == "USAGE"
+        lw.round(head=" h1 ")
+        assert lw.round(head="h2", base="  ")["base_sha"] == "h1"  # a blank base is no base: the default applies
+        a = lw.one("T1")
+        assert code_of(lw.state, a, "resolved", commit=" ") == "USAGE"
+        lw.state(a, "deferred", reason="  ")
+        assert lw.row(a)["reason"] is None and lw.events(a)[-1]["reason"] is None
+        lw.state(a, "resolved", commit=" c1 ")
+        assert lw.row(a)["resolved_sha"] == "c1"
+        lw.classify(a, "must_fix", note=" ")
+        assert lw.events(a)[-1]["reason"] is None
+        (ci,) = lw.open("T1", ci_item(" c1 "), source="ci")
+        assert lw.row(ci)["ci_sha"] == "c1"
+        (r,) = lw.open("T1", item(title="rv", reviewer=" qs-x "))
+        assert lw.row(r)["reviewer"] == "qs-x" and lw.open("T1", item(title="rv", reviewer="qs-x")) == [r]
+        (blank,) = lw.open("T1", item(title="no lens", reviewer="  "))
+        assert lw.row(blank)["reviewer"] is None
+
+    def test_f10_free_text_is_escaped_in_the_export(self, lw: L) -> None:
+        lw.round(head="a|b")
+        ledger.set_blast_radius(
+            lw.conn, lw.clock, token=lw.token, task_id="T1", value="ok", head_sha="h", review="G|1", reason="x\n\n### y"
+        )
+        rounds = dict(export_sections())["Rounds"](lw.conn, "T1")
+        assert "`?..a\\|b`" in rounds
+        blast = dict(export_sections())["Blast radius"](lw.conn, "T1")
+        assert blast == "`ok` at `h` (review G\\|1) — x ### y"
+
+    def test_f11_convergence_of_an_unknown_task(self, lw: L) -> None:
+        assert code_of(ledger.convergence, lw.conn, "T9", "build") == "NOT_FOUND"
+
+    def test_f12_bad_input_files(self, lw: L, tmp_path: Path) -> None:
+        base = ["finding", "open", "--task", "T1", "--phase", "build", "--source", "reviewer", "--token", lw.token]
+        bad = tmp_path / "latin1.json"
+        bad.write_bytes(b'{"title": "caf\xe9"}')
+        code, out = run_cli(*base, "--input", str(bad))
+        assert code == 2 and out["error"] == "USAGE", out
+        code, out = run_cli(*base, "--input", "-", stdin="[" * 100_000 + "]" * 100_000)
+        assert code == 2 and out["error"] == "USAGE", out
+
+    @pytest.mark.parametrize(
+        "bad",
+        [item(line_start=2**63), item(line_start=1, line_end=2**63), item(relates_to=[2**63]), item(relates_to=[0])],
+    )
+    def test_f13_out_of_range_item_ints(self, lw: L, bad: dict[str, Any]) -> None:
+        assert code_of(lw.open, "T1", bad) == "USAGE"
+
+    def test_f13_out_of_range_cli_ints(self, lw: L, tmp_path: Path) -> None:
+        huge = str(2**63)
+        tok = ("--token", lw.token)
+        assert run_cli("finding", "state", huge, "--to", "open", *tok)[1]["error"] == "USAGE"
+        assert run_cli("finding", "classify", huge, "--class", "must_fix", *tok)[1]["error"] == "USAGE"
+        assert run_cli("finding", "state", "1", "--to", "open", "--cause", huge, *tok)[1]["error"] == "USAGE"
+        assert run_cli("finding", "state", "0", "--to", "open", *tok)[1]["error"] == "USAGE"
+        inp = tmp_path / "i.json"
+        inp.write_text(json.dumps(item()))
+        argv = ("finding", "open", "--task", "T1", "--phase", "build", "--source", "reviewer", "--input", str(inp))
+        assert run_cli(*argv, "--round", huge, *tok)[1]["error"] == "USAGE"
+        gate = {"category": "gate", "title": "g", "body": "b", "integration_id": 2**63}
+        assert code_of(lw.open, "T1", gate, source="gate") == "USAGE"
+
+    @pytest.mark.parametrize("key", ["title", "file", "symbol", "reviewer"])
+    def test_f14_the_separator_is_refused(self, lw: L, key: str) -> None:
+        assert code_of(lw.open, "T1", item(**{key: "a\x1fb"})) == "USAGE"
+
+    def test_f14_the_separator_in_a_ci_sha(self, lw: L) -> None:
+        assert code_of(lw.open, "T1", ci_item("c\x1f1"), source="ci") == "USAGE"
+
+    def test_f15_unicode_spellings(self) -> None:
+        assert ledger.norm("Café") == ledger.norm("Café") == "café"
+        assert ledger.norm("Straße") == ledger.norm("STRASSE")
+
+    def test_f19_two_calls_give_two_rows_and_a_match(self, lw: L) -> None:
+        a = lw.one("T1")
+        b = lw.one("T1", title="Another wording")
+        assert a != b and [(f["kind"], f["id"], f["strong"]) for f in lw.row(b)["flags"]] == [("matches", a, False)]
+
+
+def export_sections() -> list[Any]:
+    from control_plane import export
+
+    return list(export.LEDGER_SECTIONS)

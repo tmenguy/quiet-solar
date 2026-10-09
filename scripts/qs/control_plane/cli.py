@@ -195,8 +195,19 @@ def read_file(path: str) -> str:
     try:
         with open(path, encoding="utf-8") as handle:
             return handle.read()
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise errors.CpError("USAGE", f"cannot read {path}: {exc}") from exc
+
+
+def _sql_id(text: str) -> int:
+    """A positive id within SQLite's INTEGER range (a larger one is USAGE, never an INTERNAL overflow)."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not an integer: {text!r}") from None
+    if not 1 <= value <= ledger.MAX_INT:
+        raise argparse.ArgumentTypeError(f"must be between 1 and {ledger.MAX_INT}: {text!r}")
+    return value
 
 
 def _token(p: argparse.ArgumentParser) -> None:
@@ -758,7 +769,7 @@ def _conf_finding_open(p: argparse.ArgumentParser) -> None:
     _conf_task_token(p)
     p.add_argument("--phase", required=True, choices=schema_ledger.PHASES)
     p.add_argument("--source", required=True, choices=schema_ledger.SOURCES)
-    p.add_argument("--round", type=int)
+    p.add_argument("--round", type=_sql_id)
     p.add_argument("--input", required=True, help="a JSON file, or `-` for stdin")
 
 
@@ -778,7 +789,7 @@ def _finding_open(args: argparse.Namespace, io: Io) -> dict[str, Any]:
 
 
 def _conf_finding_classify(p: argparse.ArgumentParser) -> None:
-    p.add_argument("id", type=int)
+    p.add_argument("id", type=_sql_id)
     p.add_argument("--class", dest="cls", required=True, choices=schema_ledger.CLASSES)
     p.add_argument("--note")
     _token(p)
@@ -791,11 +802,11 @@ def _finding_classify(args: argparse.Namespace, io: Io) -> dict[str, Any]:
 
 
 def _conf_finding_state(p: argparse.ArgumentParser) -> None:
-    p.add_argument("id", type=int)
+    p.add_argument("id", type=_sql_id)
     p.add_argument("--to", required=True, choices=schema_ledger.STATES)
     p.add_argument("--reason")
     p.add_argument("--commit")
-    p.add_argument("--cause", type=int)
+    p.add_argument("--cause", type=_sql_id)
     _token(p)
 
 

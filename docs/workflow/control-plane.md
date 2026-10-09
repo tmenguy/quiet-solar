@@ -205,7 +205,8 @@ The vocabularies live in `schema_ledger`: `PHASES` (`plan`, `build`), `SOURCES` 
 
 - **The base.** Round 1 takes the node's `--base` (NULL allowed): `git merge-base origin/main QS_<N>` for a deliverable, the fork point on the local `QS_<N>` for a work item. A later round defaults to the previous round's head; after a catch-up with `main`, the node passes `--base <the catch-up merge commit>`, so `main`'s changes stay out of the delta.
 - **`--head`** is required for `build` rounds, optional for `plan`.
-- **What is not a round:** a catch-up's conflict-resolution delta. Every `round start` call is a new round; a restarted node reads `latest_round` and its head through `ledger show` first.
+- **What is not a round:** a catch-up's conflict-resolution delta. Every `round start` call is a new round (no idempotency key); a restarted node, or one that lost `round start`'s answer, reads `latest_round` and its head through `ledger show` before calling it again.
+- `--head` and `--base` are stripped; a blank one is absent.
 
 ### Opening findings
 
@@ -215,17 +216,17 @@ The vocabularies live in `schema_ledger`: `PHASES` (`plan`, `build`), `SOURCES` 
 |---|---|---|
 | `severity` | `must_fix\|should_fix\|nice_to_have` | yes, except `ci` / `gate` (overridden to `must_fix`) |
 | `category` | one of `CATEGORIES` | yes |
-| `title` | non-empty string | yes |
+| `title` | string holding at least one letter or digit | yes |
 | `body` | string | yes |
-| `file`, `symbol` | string; `file` repo-relative (a leading `./` stripped; absolute or `..` is `USAGE`), `symbol` trimmed | no |
+| `file`, `symbol` | string; `file` repo-relative and normalised (`a//b/./c` → `a/b/c`; absolute, `..`, a backslash or a `:<line>` suffix is `USAGE`: lines go in `line_start` / `line_end`), `symbol` trimmed | no |
 | `line_start`, `line_end` | int `>= 1`; `line_end` defaults to `line_start` | no |
 | `reviewer` | string (the lens, e.g. `qs-review-blind-hunter`) | no |
 | `unchanged_lines` | bool, recorded as given (`1` / `0` / NULL) | no |
-| `relates_to` | list of finding ids (`NOT_FOUND` if one is unknown) | no |
+| `relates_to` | list of finding ids, de-duplicated (`NOT_FOUND` if one is unknown, or of another run) | no |
 | `sha` | string | `ci` only, required there |
 | `integration_id` | int | `gate` only, required there |
 
-An unknown key, a wrong type, a value off its vocabulary, `line_start > line_end`, `line_end` alone, a bad path, non-JSON input and an empty object or list are all `USAGE`.
+An unknown key, a wrong type, a value off its vocabulary, `line_start > line_end`, `line_end` alone, a bad path, an integer beyond SQLite's range, the separator U+001F in `title`, `file`, `symbol`, `reviewer` or `sha`, non-JSON or non-UTF-8 input and an empty object or list are all `USAGE`. String fields are stripped; a blank optional one is absent.
 
 - **`ci` findings** need `sha` equal to `tasks.ci_sha` while `tasks.ci_state = 'red'`, else `INVALID_STATE`. They are stored with `ci_sha`, `must_fix` / `must_fix`.
 - **`gate` findings** need `integration_id`, an `integrations` row whose item or deliverable is the task (`NOT_FOUND` / `CONFLICT`), and are stored `must_fix` / `must_fix`.
@@ -233,7 +234,7 @@ An unknown key, a wrong type, a value off its vocabulary, `line_start > line_end
 
 ### Matching, flags and the born state
 
-- **The fingerprint** is `sha256(file␟symbol␟category)` (`␟` is U+001F, NULL encoded as ""), plus `␟norm(title)` when both `file` and `symbol` are empty. `norm` lower-cases and folds every run of non-alphanumerics into one space. Task and lines are left out.
+- **The fingerprint** is `sha256(file␟symbol␟category)` (`␟` is U+001F, NULL encoded as ""), plus `␟norm(title)` when both `file` and `symbol` are empty. `norm` applies NFKC, case-folds, and folds every run of non-alphanumerics into one space. Task and lines are left out.
 - **The family:** the task's deliverable (or the task itself) and every work item of that deliverable. Matching looks across the family and across phases; inside a batch, item 2 can match item 1.
 - **Flags** are computed at open and stored on the row: `{"kind", "id", "state", "reason", "commit", "source", "strong", "cross_task", "escalated"}`. They record what was true at open; `ledger show` adds each flagged row's `current_state`.
   - `matches`: an earlier family row with the same fingerprint. `strong` when the normalised title is equal too; `escalated` on a strong match when the new item is `must_fix` and the flagged row's effective class (`classification`, else `severity`) is not.
@@ -247,7 +248,7 @@ An unknown key, a wrong type, a value off its vocabulary, `line_start > line_end
 
 ### States and classification
 
-- **`finding state`**: free transitions between `open`, `resolved`, `rejected`, `deferred` and `settled`. `resolved` needs `--commit`; `rejected` and `settled` need `--reason`; a reopen (`open`) and `deferred` take an optional `--reason`; `--commit` on any other target is `USAGE`. `--cause <id>` (any target, `NOT_FOUND` if unknown) records why, e.g. the red CI finding that reopened a settled row. The same state is a noop (`"changed": false`, no event), checked after the arguments and `--cause`. The row holds only the latest state (`reason` the new `--reason` or NULL, `resolved_sha` set on `resolved` only); the history is in `finding_events`. Answers `{"ok": true, "finding_id", "state", "changed"}`.
+- **`finding state`**: free transitions between `open`, `resolved`, `rejected`, `deferred` and `settled`. `resolved` needs `--commit`; `rejected` and `settled` need `--reason`; a reopen (`open`) and `deferred` take an optional `--reason` (blank is none); `--commit` on any other target is `USAGE`. `--cause <id>` (any target, `NOT_FOUND` if unknown, `USAGE` if it is the finding itself) records why, e.g. the red CI finding that reopened a settled row. The same state is a noop (`"changed": false`, no event), checked after the arguments and `--cause`. The row holds only the latest state (`reason` the new `--reason` or NULL, `resolved_sha` set on `resolved` only); the history is in `finding_events`. Answers `{"ok": true, "finding_id", "state", "changed"}`.
 - **`finding classify`** records the class in any state, with a `classify` event (its reason is `--note`), and drives open ⇄ deferred: an open row classed `nice_to_have` or `out_of_scope` moves to `deferred`; a deferred row classed `must_fix` or `should_fix` moves back to `open` (a reopening, so it blocks again). A move also writes a `state` event and sets the row's `reason`, both `classified <class>`. The same class is a noop. Answers `{"ok": true, "finding_id", "state", "classification", "changed"}`. At birth `classification` is NULL, except `ci` / `gate` (`must_fix`).
 - **Deferred rows** stay in `findings`, with their class: `ledger show --state deferred`, `task show`, `snapshot` and the exported summary show them, and the run's final review (child 13) reads them.
 
@@ -264,7 +265,19 @@ An unknown key, a wrong type, a value off its vocabulary, `line_start > line_end
 - **`consistent`**: `blocking == []`. A node that declares convergence with blocking rows still open is converged and **not** consistent; nothing overrides it, so a flip-flop left open (for example while it waits for another perspective) never stalls the loop by code. The orchestrator, child 7's merge conditions and child 17 read the discrepancy.
 - No hard round stop here: `ROUNDS_ALERT` stays child 14's.
 
-`ledger.blast_radius(conn, task_id, head_sha=None)` is child 7's reader: the latest rating, or the latest for that sha, else `None`.
+`ledger.convergence` on an unknown task is `NOT_FOUND`.
+
+**`blast-radius set`** appends a rating and answers `{"ok": true, "id", "task_id", "value", "head_sha"}`. `ledger.blast_radius(conn, task_id, head_sha=None)` is child 7's reader: the latest rating, or the latest for that sha, else `None`.
+
+### Reading the ledger
+
+`ledger show --task T [--phase P] [--family] [--state S[,S…]]` answers `{"ok": true, "task_id", "rounds", "findings", "finding_events", "blast_radius", "convergence": {"plan", "build"}}`:
+
+- `findings` are the rows (flags parsed), each flag with the flagged row's `current_state`; `finding_events` are those rows' events;
+- `--phase` filters `rounds` and `findings`; `--state` filters `findings` (an unknown or empty state list is `USAGE`); `--family` widens `findings` and their events to the family;
+- `rounds` and `blast_radius` (every rating, oldest first) stay per task; no DB is `NOT_FOUND`, as for `task show`.
+
+`task show` carries the same keys, unfiltered.
 
 ### The focused-reviewer contract
 
