@@ -22,6 +22,7 @@ from typing import Any, NoReturn, TextIO
 
 from . import (
     activeloop,
+    codever,
     daemon,
     db,
     decisions,
@@ -181,13 +182,22 @@ def _version(args: argparse.Namespace, io: Io) -> dict[str, Any]:
 
 
 def _daemon(args: argparse.Namespace, io: Io) -> dict[str, Any]:
-    return daemon.run(
+    loaded = codever.loaded_version()  # first: a pull landing during the migration is never "loaded" (D8)
+    result = daemon.run(
         io.deps.clock,
         probe=io.deps.probe,
         tick_hooks=ticks.hooks(),
         idle_exit_s=daemon.IDLE_EXIT_S,
         tick_s=daemon.TICK_S,
+        loaded_version=loaded,
     )
+    if result.get("exit") == "new_code":  # the lease is cleared and the flock released: start the new code
+        try:
+            result["respawn"] = ensure_daemon(io)["status"]
+        except Exception as exc:  # noqa: BLE001 — the next `wait` retries
+            result["respawn"] = "error"
+            result["respawn_error"] = f"{type(exc).__name__}: {exc}"
+    return result
 
 
 def _ensure(args: argparse.Namespace, io: Io) -> dict[str, Any]:

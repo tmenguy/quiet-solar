@@ -36,6 +36,7 @@ MODULES = (
     "runner",
     "procsetup",
     "paths",
+    "codever",
     "backups",
     "liveness",
     "schema_v1",
@@ -62,6 +63,7 @@ MODULES = (
     "snapshot",
     "ticks",
     "activeloop",
+    "selfcheck",
     "cli",
 )
 for _name in MODULES:
@@ -71,6 +73,8 @@ from control_plane import (  # noqa: E402
     activeloop,
     cli,
     clock,
+    codever,
+    daemon,
     db,
     export,
     faults,
@@ -94,10 +98,13 @@ REAL_MAIN_CHECKOUT = paths.main_checkout
 REAL_MAIN_HEAD_BRANCH = paths.main_head_branch
 REAL_MAKE_DEPS = cli.make_deps
 REAL_MAKE_SEAMS = activeloop.make_seams
+REAL_LOADED_VERSION = codever.loaded_version
 REAL_TICK_HOOKS = ticks.hooks
 
 ENV_CLEARED = (
     "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
     "QS_CP_TOKEN",
     "QS_CP_MAX_GATES",
     "QS_CP_MAX_NODES",
@@ -353,19 +360,25 @@ def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deps: cli.Dep
     monkeypatch.setattr(cli, "make_deps", lambda: deps)
     # QS-406: hook-less daemons by default (`active_loop` opts in); hooks get seams over the test deps.
     monkeypatch.setattr(ticks, "hooks", lambda: [])
+    monkeypatch.setattr(codever, "loaded_version", lambda: codever.code_version(fake_main))
     monkeypatch.setattr(
         activeloop,
         "make_seams",
         lambda: activeloop.Seams(runner=deps.runner, probe=deps.probe, claude=deps.claude, main=fake_main),
     )
     faults.reset()
+    # A whole registry for every test, built before the test patches anything (the teardown below runs
+    # while the test's monkeypatches are still in place).
+    ticks._reset_for_tests()
+    activeloop.register_builtin()
     try:
         yield setup
     finally:
         faults.reset()
         ticks._reset_for_tests()
         activeloop._reset_for_tests()
-        activeloop.register_builtin()
+        codever._reset_for_tests()
+        daemon._reset_for_tests()
         merge_policy.reset()
         tools.reset()
         items.register_item_tools()
@@ -376,6 +389,11 @@ def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deps: cli.Dep
 def active_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     """Opt in to the real tick hooks under ``cp.py daemon`` / ``daemon.run``."""
     monkeypatch.setattr(ticks, "hooks", REAL_TICK_HOOKS)
+
+
+@pytest.fixture
+def real_loaded_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(codever, "loaded_version", REAL_LOADED_VERSION)
 
 
 @pytest.fixture

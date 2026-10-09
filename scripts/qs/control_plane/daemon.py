@@ -27,7 +27,7 @@ import signal
 import subprocess
 import sys
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +47,47 @@ LOG_NAME = "harness_state.daemon.log"
 
 TickHook = Callable[[Any, clock_mod.Clock], None]
 
+# QS-406 D16: the daemon is never a Claude session; these never reach it (nor the messenger it spawns).
+STRIPPED_ENV = frozenset({"CLAUDE_CODE_SESSION_ID", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"})
+STRIPPED_ENV_PREFIXES = ("CLAUDE_CODE_MESSAGING_",)
+
 _stop = threading.Event()
+# QS-406 §4.1: the restart on new code. The flag is checked at the end of a tick; the candidate is the
+# disk version the `code_version` hook saw once; both are cleared by `run()` at start.
+_restart_reason: str | None = None
+_restart_candidate: str | None = None
+_loaded_version: str | None = None
+
+
+def started_code_version() -> str | None:
+    """The code version this daemon loaded (``run(loaded_version=…)``); ``None`` disables the restart."""
+    return _loaded_version
+
+
+def request_restart(reason: str) -> None:
+    """Leave the loop at the end of the current tick with ``exit: reason`` (``cli._daemon`` respawns)."""
+    global _restart_reason
+    _restart_reason = reason
+
+
+def restart_candidate() -> str | None:
+    return _restart_candidate
+
+
+def set_restart_candidate(version: str | None) -> None:
+    global _restart_candidate
+    _restart_candidate = version
+
+
+def strip_env(environ: Mapping[str, str]) -> dict[str, str]:
+    """``environ`` without the spawning session's messaging secret and identity (D16)."""
+    return {k: v for k, v in environ.items() if k not in STRIPPED_ENV and not k.startswith(STRIPPED_ENV_PREFIXES)}
+
+
+def _reset_for_tests() -> None:
+    global _restart_reason, _restart_candidate, _loaded_version
+    _stop.clear()
+    _restart_reason = _restart_candidate = _loaded_version = None
 
 
 def _on_sigterm(signum: int, frame: Any) -> None:
@@ -103,7 +143,11 @@ def run(
     max_ticks: int | None = None,
     tick_s: float = TICK_S,
     idle_exit_s: float = IDLE_EXIT_S,
+    loaded_version: str | None = None,
 ) -> dict[str, Any]:
+    global _restart_reason, _restart_candidate, _loaded_version
+    _restart_reason = _restart_candidate = None
+    _loaded_version = loaded_version
     db_path = db_path or paths.select_db()
     with db.file_lock(paths.sidecar(db_path, ".daemon.lock"), exclusive=True, timeout=0) as got:
         if not got:
@@ -148,11 +192,16 @@ def run(
                     except Exception as exc:  # noqa: BLE001 — a broken hook must not kill the loop
                         _log(f"tick hook {getattr(hook, '__name__', hook)!r} failed: {exc!r}")
                     beat(conn, clock)  # around every hook: a slow tick never looks like a hung daemon
+                    if _stop.is_set():  # a SIGTERM is honoured within one hook; the cut tick still counts
+                        break
                 ticks += 1
                 if _any_open_run(conn):
                     last_open = clock.now()
                 if _stop.is_set():
                     reason = "sigterm"
+                    break
+                if _restart_reason is not None:  # requested by a hook: the tick has finished (D7)
+                    reason = _restart_reason
                     break
                 if (clock.now() - last_open).total_seconds() >= idle_exit_s:
                     reason = "idle"
@@ -372,5 +421,6 @@ def ensure(
             stderr=log,
             cwd=str(main_dir),
             close_fds=True,
+            env=strip_env(os.environ),
         )
     return {"status": status}
