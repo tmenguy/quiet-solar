@@ -587,3 +587,188 @@ class TestReviewFix01:
 
     def test_in_lists_are_bound_parameters(self) -> None:
         assert detectors._in(("a", "b'c")) == ("(?, ?)", ("a", "b'c"))
+
+
+# --------------------------------------------------------------------------- review fix #02 (G2, G13, G14, G17)
+
+
+def _failing_diff(git: FakeGit, tip_suffix: str, result: RunResult) -> None:
+    real = git.__call__
+
+    def respond(call: Call) -> RunResult:
+        if call.argv[3] == "diff" and call.argv[-1].endswith(tip_suffix):
+            git.calls.append(call.argv[3:])
+            return result
+        return real(call)
+
+    activeloop.seams().runner.on(("git",), respond)  # type: ignore[attr-defined]
+
+
+def _diff_calls(git: FakeGit, tip_suffix: str = "") -> int:
+    return sum(1 for c in git.calls if c[0] == "diff" and c[-1].endswith(tip_suffix))
+
+
+class TestReviewFix02:
+    @pytest.mark.parametrize("code", [124, 127])
+    def test_a_timeout_or_a_missing_git_aborts_the_walk(self, conn, migrated, git, fake_clock, capsys, code) -> None:
+        r1, _ = open_run()
+        for i in range(1, 6):
+            insert_task(migrated, f"T{i}", r1, branch=f"QS_{i}", is_deliverable=1)
+            git.refs[f"refs/heads/QS_{i}"] = f"t{i}"
+        _failing_diff(git, "", RunResult(code, "", "timed out"))
+        assert detectors.detect_overlap(conn, fake_clock, activeloop.seams()) == detectors.NONE
+        assert _diff_calls(git) == 1 and not detectors._overlap.walking
+        assert f"exited {code}" in capsys.readouterr().err
+
+    def test_a_failed_diff_is_not_retried_by_a_resumed_walk(self, conn, migrated, git, fake_clock) -> None:
+        r1, _ = open_run()
+        for i in range(1, 11):
+            insert_task(migrated, f"T{i}", r1, branch=f"QS_{i}", is_deliverable=1)
+            git.refs[f"refs/heads/QS_{i}"] = f"t{i}"
+            git.diffs[("m", f"t{i}")] = ["shared.py"]
+        _failing_diff(git, "...t1", RunResult(128, "", "fatal: no merge base"))
+        for _ in range(10):
+            kinds, _conds = detectors.detect_overlap(conn, fake_clock, activeloop.seams())
+            if kinds:
+                break
+        assert kinds and _diff_calls(git, "...t1") == 1
+        fake_clock.advance(detectors.OVERLAP_EVERY_S)
+        detectors.detect_overlap(conn, fake_clock, activeloop.seams())  # a new walk retries it
+        assert _diff_calls(git, "...t1") == 2
+
+    def test_a_failed_merge_tree_is_not_retried_by_a_resumed_walk(self, conn, migrated, git, fake_clock) -> None:
+        r1, _ = open_run()
+        for i in range(1, 11):
+            insert_task(migrated, f"T{i}", r1, branch=f"QS_{i}", is_deliverable=1)
+            git.refs[f"refs/heads/QS_{i}"] = f"t{i}"
+            git.diffs[("m", f"t{i}")] = ["shared.py"]
+        real = git.__call__
+
+        def respond(call: Call) -> RunResult:
+            if call.argv[3] == "merge-tree" and call.argv[-2:] == ["t1", "t2"]:
+                git.calls.append(call.argv[3:])
+                return RunResult(128, "", "fatal: boom")
+            return real(call)
+
+        activeloop.seams().runner.on(("git",), respond)  # type: ignore[attr-defined]
+        runs = 0
+        for runs in range(1, 11):
+            kinds, conds = detectors.detect_overlap(conn, fake_clock, activeloop.seams())
+            if kinds:
+                break
+        assert runs > 1 and sum(1 for c in git.calls if c[0] == "merge-tree" and c[-2:] == ["t1", "t2"]) == 1
+        assert next(c for c in conds if c.subject == "T1|T2").payload["conflicts"] is None
+
+    def test_a_merge_tree_timeout_aborts_the_walk(self, conn, migrated, git, fake_clock) -> None:
+        TestOverlap()._two_runs(migrated, git)
+        real = git.__call__
+
+        def respond(call: Call) -> RunResult:
+            if call.argv[3] == "merge-tree":
+                return RunResult(124, "", "")
+            return real(call)
+
+        activeloop.seams().runner.on(("git",), respond)  # type: ignore[attr-defined]
+        assert detectors.detect_overlap(conn, fake_clock, activeloop.seams()) == detectors.NONE
+
+    def test_a_branch_failing_with_changing_messages_is_logged_once_per_episode(
+        self, conn, migrated, git, fake_clock, capsys
+    ) -> None:
+        r1, _ = open_run()
+        insert_task(migrated, "T1", r1, branch="QS_1", is_deliverable=1)
+        for tip, stderr in (("t1", "fatal: no merge base"), ("t1b", "fatal: bad object t1b")):
+            git.refs["refs/heads/QS_1"] = tip
+            _failing_diff(git, f"...{tip}", RunResult(128, "", stderr))
+            detectors.detect_overlap(conn, fake_clock, activeloop.seams())
+            fake_clock.advance(detectors.OVERLAP_EVERY_S)
+        assert capsys.readouterr().err.count("overlap: T1") == 1
+        git.refs["refs/heads/QS_1"] = "t1c"  # its diff works again
+        activeloop.seams().runner.on(("git",), git)  # type: ignore[attr-defined]
+        detectors.detect_overlap(conn, fake_clock, activeloop.seams())
+        fake_clock.advance(detectors.OVERLAP_EVERY_S)
+        git.refs["refs/heads/QS_1"] = "t1d"
+        _failing_diff(git, "...t1d", RunResult(128, "", "fatal: again"))
+        detectors.detect_overlap(conn, fake_clock, activeloop.seams())
+        assert capsys.readouterr().err.count("overlap: T1") == 1  # a new episode: logged again
+
+    def test_a_raising_detector_is_logged_once(self, conn, migrated, git, fake_clock, monkeypatch, capsys) -> None:
+        fail = [True]
+
+        def flaky(c: Any, k: Any, s: Any) -> detectors.Result:
+            if fail[0]:
+                raise RuntimeError(f"exploded at {fake_clock.now()}")
+            return detectors.NONE
+
+        monkeypatch.setattr(detectors, "ALL", (flaky,))
+        _tick(conn, fake_clock)
+        _tick(conn, fake_clock)
+        assert capsys.readouterr().err.count("exploded") == 1
+        fail[0] = False
+        _tick(conn, fake_clock)
+        fail[0] = True
+        _tick(conn, fake_clock)
+        assert capsys.readouterr().err.count("exploded") == 1  # recovered, then failed again
+
+    def _alerted_pair(self, conn, migrated: Path, git: FakeGit, fake_clock) -> str:
+        r1, _ = open_run()
+        insert_task(migrated, "T1", r1, branch="QS_1", is_deliverable=1)
+        insert_task(migrated, "T3", r1, branch="QS_3", is_deliverable=1)
+        git.refs.update({"refs/heads/QS_1": "t1", "refs/heads/QS_3": "t3"})
+        git.diffs.update({("m", "t1"): ["a.py"], ("m", "t3"): ["a.py"]})
+        _tick(conn, fake_clock)
+        assert _open(migrated) == [(r1, "overlap", "T1|T3")]
+        git.refs["refs/heads/QS_3"] = "t3b"
+        _failing_diff(git, "...t3b", RunResult(128, "", "fatal: boom"))  # T3 is unknown from now on
+        return r1
+
+    def test_a_kept_alert_whose_partner_is_gone_is_cleared(self, conn, migrated, git, fake_clock) -> None:
+        self._alerted_pair(conn, migrated, git, fake_clock)
+        sql(migrated, "UPDATE tasks SET state = 'merged' WHERE id = 'T1'")
+        _tick(conn, fake_clock, detectors.OVERLAP_EVERY_S)
+        _tick(conn, fake_clock)
+        assert _open(migrated) == []
+
+    def test_a_restarted_daemon_keeps_an_unknown_branchs_alert(self, conn, migrated, git, fake_clock) -> None:
+        r1 = self._alerted_pair(conn, migrated, git, fake_clock)
+        messages = sql(migrated, "SELECT count(*) FROM messages")[0][0]
+        detectors._overlap = detectors._OverlapState()  # a restart: no last result in memory
+        ticks._reset_for_tests()
+        _tick(conn, fake_clock, detectors.OVERLAP_EVERY_S)
+        assert _open(migrated) == [(r1, "overlap", "T1|T3")]
+        assert sql(migrated, "SELECT count(*) FROM messages")[0][0] == messages  # not a recurrence
+
+    def test_a_restarted_daemon_seeds_only_alerts_of_an_unknown_task(self, conn, migrated, git, fake_clock) -> None:
+        self._alerted_pair(conn, migrated, git, fake_clock)
+        activeloop.seams().runner.on(("git",), git)  # type: ignore[attr-defined]
+        git.diffs[("m", "t3b")] = ["z.py"]  # T3 is known again and no longer overlaps
+        detectors._overlap = detectors._OverlapState()
+        ticks._reset_for_tests()
+        _tick(conn, fake_clock, detectors.OVERLAP_EVERY_S)
+        assert _open(migrated) == []
+
+    def test_the_gate_slot_holder_matches_its_pid_start(self, conn, migrated, git, fake_clock) -> None:
+        r1, _ = open_run("r1", "S-1")
+        r2, _ = open_run("r2", "S-2")
+        sql(
+            migrated,
+            "INSERT INTO cap_slots (cap, slot, holder_pid, holder_pid_start, holder_actor, acquired_at)"
+            " VALUES ('gates', 0, 5, 'start-new', 'a', ?)",
+            [_ago(fake_clock, 5000)],
+        )
+        sql(  # an older process that had pid 5
+            migrated,
+            "INSERT INTO tool_calls (tool, key, args_hash, run_id, actor, args, state, holder_pid, holder_pid_start,"
+            " started_at) VALUES ('gate', 'k', 'h', ?, 'a', '{}', 'started', 5, 'start-old', 'x')",
+            [r2],
+        )
+        _, conds = detectors.detect_anomalies(conn, fake_clock, activeloop.seams())
+        [cond] = [c for c in conds if c.kind == "gate_slot_held_long"]
+        assert cond.run_ids == (r1, r2)  # not routed to r2 by a reused pid
+
+
+def test_a_self_dependency_cannot_be_stored(conn, migrated) -> None:
+    # G15: `task_deps` has CHECK (task_id != depends_on), so a one-node cycle never reaches `detect_cycles`
+    r1, _ = open_run()
+    insert_task(migrated, "T1", r1)
+    with pytest.raises(sqlite3.IntegrityError):
+        sql(migrated, "INSERT INTO task_deps (task_id, depends_on) VALUES ('T1', 'T1')")

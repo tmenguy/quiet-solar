@@ -14,6 +14,7 @@ timeout, a beat after every call, and never inside a ``db.write``.
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import sys
@@ -54,7 +55,7 @@ NONE: Result = (frozenset(), [])
 _THROTTLE = ticks.Throttle(DETECT_EVERY_S)
 
 
-_logged: set[str] = set()
+_logged: set[str] = set()  # short stable keys (a task + its git step, a detector + its exception type)
 
 
 def _log(message: str) -> None:
@@ -62,10 +63,15 @@ def _log(message: str) -> None:
     sys.stderr.flush()
 
 
-def _log_once(message: str) -> None:
-    if message not in _logged:
-        _logged.add(message)
+def _log_once(key: str, message: str) -> None:
+    """Log ``message`` once per ``key`` until ``_recovered(key)``: one line per failure episode."""
+    if key not in _logged:
+        _logged.add(key)
         _log(message)
+
+
+def _recovered(prefix: str) -> None:
+    _logged.difference_update({k for k in _logged if k.startswith(prefix)})
 
 
 def _in(values: Iterable[str]) -> tuple[str, tuple[str, ...]]:
@@ -78,8 +84,20 @@ def _open_runs(conn: sqlite3.Connection) -> tuple[str, ...]:
     return tuple(r[0] for r in conn.execute("SELECT id FROM runs WHERE state = 'open' ORDER BY rowid"))
 
 
+ABORT_CODES = frozenset({124, 127})  # the runner's timeout / exec failure: git itself is unusable, not one ref
+
+
 class GitFailed(Exception):
     """A git call failed: the detector's input is unknown this tick."""
+
+    def __init__(self, message: str, returncode: int | None = None) -> None:
+        super().__init__(message)
+        self.returncode = returncode
+
+    @property
+    def aborts(self) -> bool:
+        """A timeout or a missing git: the whole walk stops (isolating it per branch would burn the budget)."""
+        return self.returncode in ABORT_CODES
 
 
 class OutOfBudget(Exception):
@@ -103,7 +121,9 @@ class _Git:
         )
         daemon.beat(self.conn, self.clock)
         if res.returncode not in ok:
-            raise GitFailed(f"git {' '.join(args[:3])} exited {res.returncode}: {res.stderr.strip()[-200:]}")
+            raise GitFailed(
+                f"git {' '.join(args[:3])} exited {res.returncode}: {res.stderr.strip()[-200:]}", res.returncode
+            )
         return res.returncode, res.stdout
 
 
@@ -117,6 +137,8 @@ class _OverlapState:
     refs: dict[str, str | None] = field(default_factory=dict)  # resolved for the current walk only
     touched_diffs: set[tuple[str, str]] = field(default_factory=set)  # the cache keys the current walk used
     touched_conflicts: set[tuple[str, str]] = field(default_factory=set)
+    failed_diffs: set[tuple[str, str]] = field(default_factory=set)  # failed in the current walk: not retried
+    failed_conflicts: set[tuple[str, str]] = field(default_factory=set)
     last: list[alerts.Condition] | None = None  # the last complete result
     last_at: datetime | None = None
     walking: bool = False
@@ -152,29 +174,46 @@ def _main_base(git: _Git) -> str | None:
     return remote  # diverged: a stale local main would show main's own commits
 
 
-def _files(git: _Git, base: str, tip: str) -> list[str] | None:
-    """The files ``tip`` changes since its merge base with ``base``; ``None`` when git failed (no merge base…)."""
-    _overlap.touched_diffs.add((base, tip))
-    if (base, tip) not in _overlap.diffs:
+def _files(git: _Git, task: str, base: str, tip: str) -> list[str] | None:
+    """The files ``tip`` changes since its merge base with ``base``; ``None`` when git failed (no merge base…).
+
+    A failure is remembered for the rest of the walk (a resumed walk does not retry it); a timeout or a
+    missing git (``GitFailed.aborts``) is re-raised and stops the walk.
+    """
+    key = (base, tip)
+    _overlap.touched_diffs.add(key)
+    if key in _overlap.failed_diffs:
+        return None
+    if key not in _overlap.diffs:
         try:
             _, out = git.run("diff", "--name-only", f"{base}...{tip}")
         except GitFailed as exc:
-            _log_once(f"overlap: {tip} skipped: {exc}")
+            if exc.aborts:
+                raise
+            _overlap.failed_diffs.add(key)
+            _log_once(f"overlap:{task}:diff", f"overlap: {task} ({tip}) skipped: {exc}")
             return None
-        _overlap.diffs[(base, tip)] = sorted({line for line in out.splitlines() if line.strip()})
-    return _overlap.diffs[(base, tip)]
+        _recovered(f"overlap:{task}:diff")
+        _overlap.diffs[key] = sorted({line for line in out.splitlines() if line.strip()})
+    return _overlap.diffs[key]
 
 
-def _conflicts(git: _Git, a: str, b: str) -> list[str] | None:
+def _conflicts(git: _Git, pair: str, a: str, b: str) -> list[str] | None:
     """The files a merge of the two tips would conflict on; ``None`` (unknown) when ``merge-tree`` failed."""
     key = (a, b) if a <= b else (b, a)
     _overlap.touched_conflicts.add(key)
+    if key in _overlap.failed_conflicts:
+        return None
     if key not in _overlap.conflicts:
         try:
             code, out = git.run("merge-tree", "--write-tree", "--name-only", "--no-messages", key[0], key[1], ok=(0, 1))
         except GitFailed as exc:
-            _log_once(f"overlap: merge-tree {key[0]} {key[1]}: {exc}")
+            if exc.aborts:
+                raise
+            _overlap.failed_conflicts.add(key)
+            _log_once(f"overlap:{pair}:merge-tree", f"overlap: merge-tree {pair} ({key[0]} {key[1]}): {exc}")
             return None
+        _recovered(f"overlap:{pair}:merge-tree")
         _overlap.conflicts[key] = [] if code == 0 else [ln for ln in out.splitlines()[1:] if ln.strip()]
     return _overlap.conflicts[key]
 
@@ -209,7 +248,7 @@ def _walk(conn: sqlite3.Connection, git: _Git) -> list[alerts.Condition]:
             base = None if row["base_branch"] is None else _resolve(git, f"refs/heads/{row['base_branch']}")
         if base is None:
             continue
-        files = _files(git, base, tip)
+        files = _files(git, row["id"], base, tip)
         if files is None:
             unknown.add(row["id"])
             continue
@@ -228,14 +267,39 @@ def _walk(conn: sqlite3.Connection, git: _Git) -> list[alerts.Condition]:
                 "tasks": ids,
                 "files": shared[:OVERLAP_MAX_FILES],
                 "truncated": len(shared) > OVERLAP_MAX_FILES,
-                "conflicts": _conflicts(git, a.tip, b.tip),
+                "conflicts": _conflicts(git, "|".join(ids), a.tip, b.tip),
             }
             out.append(alerts.Condition(kind, "|".join(ids), (a.run_id, b.run_id), payload))
-    return out + [c for c in _overlap.last or [] if unknown & set(c.payload["tasks"])]
+    # An unknown branch keeps its last alerts, while every task in them is still a branch here (G14).
+    present = unknown | {b.task_id for b in branches}
+    carried = _overlap.last if _overlap.last is not None else _open_overlap_alerts(conn)
+    return out + [
+        c for c in carried if unknown & set(c.payload.get("tasks", ())) and set(c.payload.get("tasks", ())) <= present
+    ]
+
+
+def _open_overlap_alerts(conn: sqlite3.Connection) -> list[alerts.Condition]:
+    """A fresh daemon's last result: the open overlap alerts (so a restart is never a recurrence)."""
+    found: dict[tuple[str, str], tuple[list[str], dict[str, Any]]] = {}
+    kinds, params = _in(OVERLAP_KINDS)
+    for r in conn.execute(
+        f"SELECT run_id, kind, subject, payload FROM alerts WHERE cleared_at IS NULL AND kind IN {kinds} ORDER BY id",
+        params,
+    ).fetchall():
+        runs, _ = found.setdefault((r["kind"], r["subject"]), ([], json.loads(r["payload"])))
+        runs.append(r["run_id"])
+    return [alerts.Condition(kind, subject, tuple(runs), payload) for (kind, subject), (runs, payload) in found.items()]
 
 
 def _cached_overlap() -> Result:
     return NONE if _overlap.last is None else (OVERLAP_KINDS, list(_overlap.last))
+
+
+def _end_walk() -> None:
+    _overlap.refs.clear()
+    _overlap.failed_diffs.clear()
+    _overlap.failed_conflicts.clear()
+    _overlap.walking = False
 
 
 def detect_overlap(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) -> Result:
@@ -252,12 +316,11 @@ def detect_overlap(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seam
         _overlap.walking = True  # continue on the next run; computed pairs hit the caches
         return _cached_overlap()
     except GitFailed as exc:
-        _overlap.walking = False
-        _overlap.refs.clear()
-        _log(f"overlap: {exc}")
+        _end_walk()
+        _log_once(f"overlap:walk:{exc.returncode}", f"overlap: {exc}")
         return NONE
-    _overlap.refs.clear()
-    _overlap.walking = False
+    _end_walk()
+    _recovered("overlap:walk:")
     _overlap.last, _overlap.last_at = conditions, now
     # A complete walk used every key it needs: drop the rest (merged tasks, moved tips).
     _overlap.diffs = {k: v for k, v in _overlap.diffs.items() if k in _overlap.touched_diffs}
@@ -413,8 +476,9 @@ def _gate_slot_held_long(conn: sqlite3.Connection, clock: clock_mod.Clock) -> li
     ).fetchall()
     for r in rows:
         call = conn.execute(
-            "SELECT run_id FROM tool_calls WHERE state = 'started' AND holder_pid = ? AND run_id IS NOT NULL LIMIT 1",
-            (r["holder_pid"],),
+            "SELECT run_id FROM tool_calls WHERE state = 'started' AND holder_pid = ? AND holder_pid_start IS ?"
+            " AND run_id IS NOT NULL LIMIT 1",
+            (r["holder_pid"], r["holder_pid_start"]),  # a reused pid is another process (G17)
         ).fetchone()
         runs = (call["run_id"],) if call is not None else _open_runs(conn)
         payload = {"slot": r["slot"], "holder_actor": r["holder_actor"], "acquired_at": r["acquired_at"]}
@@ -591,11 +655,14 @@ def detectors_hook(conn: sqlite3.Connection, clock: clock_mod.Clock) -> None:
         return
     seams = activeloop.seams()
     for detect in ALL:
+        name = getattr(detect, "__name__", repr(detect))
         try:  # one failing detector never skips the others (its kinds are left out: nothing cleared)
             kinds, conditions = detect(conn, clock, seams)
             alerts.sync(conn, clock, kinds=kinds, active=conditions)
         except Exception as exc:  # noqa: BLE001
-            _log(f"{getattr(detect, '__name__', detect)} failed: {exc!r}")
+            _log_once(f"detector:{name}:{type(exc).__name__}", f"{name} failed: {exc!r}")
+        else:
+            _recovered(f"detector:{name}:")
 
 
 def _reset_for_tests() -> None:

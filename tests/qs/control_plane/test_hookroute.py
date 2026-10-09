@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 
 import pytest
-from control_plane import alerts, db, hookroute
+from control_plane import alerts, db, errors, hookroute
 
 from .conftest import insert_task, open_run, run_cli, sql
 
@@ -145,3 +146,47 @@ def test_a_routed_event_never_claims_a_daemon_kind(conn, migrated, fake_clock, k
     hookroute.hook_route_hook(conn, fake_clock)
     [(got, payload)] = _queue(migrated, r1)
     assert got == expected and payload["severity"] == "alert"
+
+
+# --------------------------------------------------------------------------- review fix #02 (G4)
+
+
+@pytest.mark.parametrize(
+    "transient",
+    [sqlite3.OperationalError("database or disk is full"), errors.CpError("BUSY", "database busy")],
+    ids=["operational", "busy"],
+)
+def test_a_transient_error_retries_the_whole_batch(conn, migrated, fake_clock, monkeypatch, transient) -> None:
+    r1, _ = open_run()
+    before = _cursor(migrated)
+    first = _event(migrated, {"kind": "k", "run_id": r1})
+    _event(migrated, {"kind": "k2", "run_id": r1})
+    real = alerts.event_locked
+
+    def flaky(conn: Any, clock: Any, **kw: Any) -> Any:
+        if kw["subject"] == f"hook:{first}":
+            raise transient
+        return real(conn, clock, **kw)
+
+    monkeypatch.setattr(alerts, "event_locked", flaky)
+    with pytest.raises(type(transient)):
+        hookroute.hook_route_hook(conn, fake_clock)
+    assert _cursor(migrated) == before and _queue(migrated, r1) == []
+    monkeypatch.setattr(alerts, "event_locked", real)
+    hookroute.hook_route_hook(conn, fake_clock)  # the next tick routes both
+    assert len(_queue(migrated, r1)) == 2
+
+
+def test_a_cp_error_other_than_busy_is_isolated(conn, migrated, fake_clock, monkeypatch) -> None:
+    r1, _ = open_run()
+    bad = _event(migrated, {"kind": "k", "run_id": r1})
+    real = alerts.event_locked
+
+    def flaky(conn: Any, clock: Any, **kw: Any) -> Any:
+        if kw["subject"] == f"hook:{bad}":
+            raise errors.CpError("USAGE", "bad payload")
+        return real(conn, clock, **kw)
+
+    monkeypatch.setattr(alerts, "event_locked", flaky)
+    hookroute.hook_route_hook(conn, fake_clock)
+    assert _cursor(migrated) == bad

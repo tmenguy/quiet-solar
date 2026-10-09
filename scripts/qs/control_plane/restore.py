@@ -11,7 +11,9 @@ attempt waits ``BACKUP_EVERY_S``, and a success deletes the key.
 place**, with SQLite's backup API: the file is never replaced and its WAL never deleted, so every open
 connection stays coherent and a concurrent writer meets the busy timeout. The live DB is kept first as
 ``harness_state.replaced.<stamp>.db``. The live ``waiters`` rows and the ``selfcheck`` / ``selfcheck_override``
-/ ``selfcheck_pending`` meta keys (they describe the code on disk, not the data) are carried across.
+/ ``selfcheck_pending`` meta keys (they describe the code on disk, not the data) are carried across. The
+backup is staged in a private copy and fixed up there (carried rows, daemon lease cleared) in one
+transaction, so the live DB gets **one** write: the finished copy (review fix #02, G1).
 A ``<db>.restoring`` marker keeps ``ensure`` and any starting daemon off the DB meanwhile; every exit
 path after it removes it, releases the locks and calls ``ensure``.
 """
@@ -106,7 +108,7 @@ def backup_hook(conn: sqlite3.Connection, clock: clock_mod.Clock) -> None:
                 conn.execute("DELETE FROM meta WHERE key = ?", (LAST_ERROR,))
             try:  # the copy is taken: a failed rotation is logged, never a `backup_failed`
                 backups.rotate(backups.db_dir(db_path), clock.now())
-            except (OSError, ValueError) as exc:  # ValueError: a file name with an impossible stamp
+            except OSError as exc:  # an impossible stamp in a file name is skipped, never raised (G5)
                 _log(f"rotation failed: {type(exc).__name__}: {exc}")
     active = [] if error is None else [alerts.Condition(alerts.BACKUP_FAILED, "backup", runs, dict(error))]
     alerts.sync(conn, clock, kinds={alerts.BACKUP_FAILED}, active=active)
@@ -210,17 +212,52 @@ def _fix_up(conn: sqlite3.Connection, waiters: list[tuple[Any, ...]], meta: dict
         raise
 
 
-def _restore_into(path: Path, src: Path, live: tuple[int, int] | None, clock: clock_mod.Clock) -> str | None:
-    """Keep the live DB, copy the backup into it in place, re-apply the carried rows → the ``replaced`` path.
+def _staged_copy(src: Path, staged: Path) -> sqlite3.Connection:
+    """Copy the backup ``src`` into the private file ``staged`` (0600, created here) → an autocommit connection on it."""
+    paths.ensure_private_dir(paths.backup_dir())
+    paths.ensure_private_dir(staged.parent)
+    os.close(os.open(staged, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    stage = sqlite3.connect(staged, isolation_level=None)
+    try:
+        source = db.connect(src, mode="ro")
+        try:
+            source.backup(stage)
+        finally:
+            source.close()
+    except BaseException:
+        stage.close()
+        raise
+    return stage
 
-    A failure before the copy is a ``CONFLICT`` (the live DB is untouched); a failure of the fix-up after
-    the copy is an ``INTERNAL`` error saying so. Both carry ``replaced`` once the live DB was kept.
+
+def _overwrite(stage: sqlite3.Connection, live: sqlite3.Connection) -> None:
+    """The restore's only write to the live DB: the fixed-up staged copy, in place, with the backup API."""
+    stage.backup(live)
+
+
+def _unlink_staged(staged: Path) -> None:
+    for suffix in ("", "-journal", "-wal", "-shm"):
+        Path(str(staged) + suffix).unlink(missing_ok=True)
+
+
+def _restore_into(path: Path, src: Path, live: tuple[int, int] | None, clock: clock_mod.Clock) -> str | None:
+    """Keep the live DB, stage the backup, fix the staged copy up, copy it into the live DB → the ``replaced`` path.
+
+    The live DB gets exactly one write, the last step: the backup is first copied to a private staged
+    file (``harness_state.restoring.<stamp>.db.partial``, removed on every exit) and the fix-up runs
+    there in one transaction. A failure before that write leaves the live DB untouched (``CONFLICT``
+    for a DB that cannot be read or kept, ``INTERNAL`` for the fix-up); a failure of the write itself
+    is an ``INTERNAL`` error. Every error carries ``replaced`` once the live DB was kept.
     """
     stamp = clock.now().strftime(backups.STAMP_FORMAT)
+    staged = backups.db_dir(path) / f"harness_state.restoring.{stamp}.db.partial"
     replaced: str | None = None
 
     def kept() -> dict[str, str]:
         return {} if replaced is None else {"replaced": replaced}
+
+    def where() -> str:
+        return "" if replaced is None else f"; the pre-restore data is kept at {replaced}"
 
     try:
         conn = db.connect(path, mode="rwc")
@@ -231,32 +268,41 @@ def _restore_into(path: Path, src: Path, live: tuple[int, int] | None, clock: cl
                 dest = backups.db_dir(path) / f"harness_state.replaced.{stamp}.db"
                 replaced = str(backups.write_copy(conn, dest))
                 waiters, meta = _carry(conn)
-            source = db.connect(src, mode="ro")
+            stage = _staged_copy(src, staged)
             try:
-                source.backup(conn)
+                try:
+                    _fix_up(stage, waiters, meta)
+                except (sqlite3.Error, errors.CpError) as exc:
+                    raise errors.CpError(
+                        "INTERNAL",
+                        f"the fix-up (waiters, daemon lease, self-check keys) of the staged copy of {src.name}"
+                        f" failed: {exc}; the live DB was not touched",
+                        hint=f"nothing was restored{where()}",
+                        **kept(),
+                    ) from exc
+                try:
+                    _overwrite(stage, conn)
+                except (sqlite3.Error, errors.CpError) as exc:
+                    raise errors.CpError(
+                        "INTERNAL",
+                        f"copying the staged backup {src.name} into the live DB failed: {exc}",
+                        hint=f"the live DB may hold part of the backup's data{where()}; move it aside before"
+                        " anything else writes to it",
+                        **kept(),
+                    ) from exc
             finally:
-                source.close()
-            try:
-                _fix_up(conn, waiters, meta)
-            except sqlite3.Error as exc:
-                where = "" if replaced is None else f"; the pre-restore DB is kept at {replaced}"
-                raise errors.CpError(
-                    "INTERNAL",
-                    f"the backup {src.name} was copied into the live DB, but the fix-up (waiters, daemon lease,"
-                    f" self-check keys) failed: {exc}",
-                    hint=f"the live DB holds the backup's data{where}; retry the restore",
-                    **kept(),
-                ) from exc
+                stage.close()
         finally:
             conn.close()
     except sqlite3.DatabaseError as exc:
-        where = "" if replaced is None else f" (the pre-restore DB is kept at {replaced})"
         raise errors.CpError(
             "CONFLICT",
             f"the live DB cannot be kept or restored: {exc}",
-            hint=f"move it aside, then retry{where}",
+            hint=f"move it aside, then retry{where()}",
             **kept(),
         ) from exc
+    finally:
+        _unlink_staged(staged)
     return replaced
 
 

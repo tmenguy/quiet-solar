@@ -30,6 +30,18 @@ def _meta(path: Path, key: str) -> Any:
     return json.loads(rows[0][0]) if rows else None
 
 
+def _dump(path: Path) -> list[str]:
+    c = sqlite3.connect(path)
+    try:
+        return list(c.iterdump())
+    finally:
+        c.close()
+
+
+def _staged(path: Path) -> list[Path]:
+    return sorted(backups.db_dir(path).glob("harness_state.restoring.*"))
+
+
 def _failed_alerts(path: Path) -> list[str]:
     return [r[0] for r in sql(path, "SELECT run_id FROM alerts WHERE kind = 'backup_failed' AND cleared_at IS NULL")]
 
@@ -86,6 +98,25 @@ class TestPeriodic:
         _hook(conn, fake_clock)
         assert len(_periodic(migrated)) == 1
 
+    def test_the_rename_is_made_durable(self, conn, migrated, fake_clock, monkeypatch) -> None:
+        synced: list[str] = []
+        real_open, real_fsync = os.open, os.fsync
+        fds: dict[int, str] = {}
+
+        def spy_open(path: Any, flags: int, *a: Any) -> int:
+            fd = real_open(path, flags, *a)
+            fds[fd] = str(path)
+            return fd
+
+        def spy_fsync(fd: int) -> None:
+            synced.append(fds.get(fd, "?"))
+            real_fsync(fd)
+
+        monkeypatch.setattr(backups.os, "open", spy_open)
+        monkeypatch.setattr(backups.os, "fsync", spy_fsync)
+        dest = backups.take(conn, fake_clock.now(), migrated)
+        assert synced == [f"{dest}.partial", str(dest.parent)]
+
     def test_a_copy_failing_midway_leaves_nothing(self, conn, migrated, fake_clock, monkeypatch) -> None:
         open_run()
         monkeypatch.setattr(backups, "_journal_delete", lambda copy: "wal")
@@ -137,6 +168,28 @@ class TestRotation:
             f.write_text("")
         assert backups.rotate(tmp_path, now) == [stale]
         assert fresh.exists() and odd.exists() and not stale.exists()
+
+    def test_a_crashed_restores_staged_copy_is_removed(self, tmp_path: Path) -> None:
+        now = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+        stamp = (now - timedelta(hours=1)).strftime(backups.STAMP_FORMAT)
+        staged = tmp_path / f"harness_state.restoring.{stamp}.db.partial"
+        staged.write_text("")
+        assert backups.rotate(tmp_path, now) == [staged]
+
+    def test_an_impossible_partial_stamp_never_stops_the_pruning(self, tmp_path: Path) -> None:
+        now = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+        odd = tmp_path / "harness_state.periodic.20261399T000000000000Z.db.partial"  # month 13
+        odd.write_text("")
+        old = self._touch(tmp_path, "periodic", now - timedelta(days=8))
+        assert backups.rotate(tmp_path, now) == [old] and odd.exists()
+
+    def test_an_impossible_backup_stamp_is_ignored(self, tmp_path: Path) -> None:
+        now = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
+        odd = tmp_path / "harness_state.periodic.20261399T000000000000Z.db"
+        odd.write_text("")
+        old = self._touch(tmp_path, "periodic", now - timedelta(days=8))
+        assert backups.stamp_of(odd.name) is None and backups.rotate(tmp_path, now) == [old]
+        assert backups.choose_source(tmp_path) is None and odd.exists()
 
     def test_choose_source_newest_periodic_or_v_never_replaced_or_partial(self, tmp_path: Path) -> None:
         assert backups.choose_source(tmp_path) is None
@@ -221,6 +274,20 @@ class TestRestore:
         assert [tuple(r) for r in sql(migrated, "SELECT pid, heartbeat_at FROM daemon_lease")] == [(None, None)]
         assert backed_up["src"].read_bytes() == before  # opened read-only
         assert len(fake_popen.calls) == 1 and not daemon.marker_path(migrated).exists()
+
+    def test_a_waiter_of_a_run_newer_than_the_backup_is_carried(self, migrated, backed_up) -> None:
+        # `waiters.run_id` has no foreign key (schema_v1): the carried row never fails the fix-up (G9)
+        sql(
+            migrated,
+            "INSERT INTO waiters (id, run_id, pid, pid_start, started_at, heartbeat_at)"
+            " VALUES (43, 'R-new', 8, 's', 'x', 'x')",
+        )
+        assert run_cli("restore", "--confirm")[0] == 0
+        assert [tuple(r) for r in sql(migrated, "SELECT id, run_id FROM waiters ORDER BY id")] == [
+            (42, backed_up["run"]),
+            (43, "R-new"),
+        ]
+        assert sql(migrated, "SELECT count(*) FROM runs WHERE id = 'R-new'")[0][0] == 0
 
     def test_never_a_replaced_file(self, migrated, backed_up, fake_clock) -> None:
         assert run_cli("restore", "--confirm")[0] == 0
@@ -412,20 +479,77 @@ class TestRestore:
             )
         assert exc.value.code == "CONFLICT"
 
-    def test_a_failure_in_the_fix_up_names_the_replaced_copy(
-        self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
+    @pytest.mark.parametrize("failure", ["malformed_row", "busy_begin"])
+    def test_a_failed_fix_up_leaves_the_live_db_untouched(
+        self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch, failure: str
     ) -> None:
-        monkeypatch.setattr(restore, "_carry", lambda conn: ([(1,)], {}))  # a malformed row: the insert fails
+        if failure == "malformed_row":
+            monkeypatch.setattr(restore, "_carry", lambda conn: ([(1,)], {}))  # the insert fails
+        else:
+            real_begin = db.begin
+
+            def begin(c: sqlite3.Connection, statement: str) -> None:
+                if restore._db_path(c).name.endswith(".partial"):  # the staged copy only
+                    raise restore.errors.CpError("BUSY", "database busy: database is locked")
+                real_begin(c, statement)
+
+            monkeypatch.setattr(restore.db, "begin", begin)
+        before = _dump(migrated)
         with pytest.raises(restore.errors.CpError) as exc:
             restore.restore(
                 migrated, clock=fake_clock, probe=fake_probe, kill=fake_kill, popen=fake_popen, lock_wait_s=0
             )
         err = exc.value
-        assert err.code == "INTERNAL" and "copied into the live DB" in err.detail
+        assert err.code == "INTERNAL" and "not touched" in err.detail
         replaced = Path(err.extra["replaced"])
         assert replaced.name.startswith("harness_state.replaced.") and replaced.exists()
         assert str(replaced) in err.extra["hint"]
+        assert _dump(migrated) == before and _staged(migrated) == []
         assert not daemon.marker_path(migrated).exists() and len(fake_popen.calls) == 1
+
+    def test_a_failed_final_copy_names_the_replaced_copy(
+        self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
+    ) -> None:
+        def broken(stage: sqlite3.Connection, live: sqlite3.Connection) -> None:
+            raise sqlite3.OperationalError("disk I/O error")
+
+        monkeypatch.setattr(restore, "_overwrite", broken)
+        with pytest.raises(restore.errors.CpError) as exc:
+            restore.restore(
+                migrated, clock=fake_clock, probe=fake_probe, kill=fake_kill, popen=fake_popen, lock_wait_s=0
+            )
+        err = exc.value
+        replaced = err.extra["replaced"]
+        assert err.code == "INTERNAL" and Path(replaced).exists() and replaced in err.extra["hint"]
+        assert "retry" not in err.extra["hint"] or "pre-restore" in err.extra["hint"]
+        assert _staged(migrated) == [] and not daemon.marker_path(migrated).exists()
+
+    def test_the_live_db_gets_one_write_from_a_private_staged_copy(
+        self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
+    ) -> None:
+        seen: list[tuple[str, int, list[int]]] = []
+        real_fix_up, real_overwrite = restore._fix_up, restore._overwrite
+
+        def fix_up(c: sqlite3.Connection, waiters: Any, meta: Any) -> None:
+            staged = restore._db_path(c)
+            live_waiters = [r[0] for r in sql(migrated, "SELECT id FROM waiters")]
+            seen.append((staged.name, staged.stat().st_mode & 0o777, live_waiters))
+            real_fix_up(c, waiters, meta)
+
+        overwrites: list[int] = []
+
+        def overwrite(stage: sqlite3.Connection, live: sqlite3.Connection) -> None:
+            overwrites.append(1)
+            real_overwrite(stage, live)
+
+        monkeypatch.setattr(restore, "_fix_up", fix_up)
+        monkeypatch.setattr(restore, "_overwrite", overwrite)
+        restore.restore(migrated, clock=fake_clock, probe=fake_probe, kill=fake_kill, popen=fake_popen, lock_wait_s=0)
+        [(name, mode, live_waiters)] = seen
+        assert name.startswith("harness_state.restoring.") and name.endswith(".db.partial") and mode == 0o600
+        assert live_waiters == [42]  # the fix-up ran before the live DB was touched
+        assert overwrites == [1] and _staged(migrated) == []
+        assert [tuple(r) for r in sql(migrated, "SELECT id, pid FROM waiters")] == [(42, 9)]
 
     def test_a_copy_failure_keeps_the_replaced_pointer(
         self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch

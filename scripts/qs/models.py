@@ -57,7 +57,7 @@ HARNESS_MODELS: dict[str, dict[str, str]] = {
         "deep": "claude-opus-5-5",  # QS-367 E2: analysis/review
         "frontier": "claude-fable-5-1",
         "light": "claude-sonnet-5",
-        "fast": "claude-haiku-5-5",  # maintainer 2026-10-09 (QS-406 T1): Haiku 4.5 is deprecated; 5.5 has auto mode
+        "fast": "claude-haiku-5-5",  # maintainer 2026-10-09 (QS-406 T1): Haiku 4.5 has no auto mode; 5.5 does
     },
     "opencode": {  # OpenCode v2.0.14, github-copilot
         "build": "github-copilot/claude-opus-5.5",  # maintainer 2026-10-04 (was 4.8, QS-367 E1)

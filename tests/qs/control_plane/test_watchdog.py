@@ -367,6 +367,39 @@ class TestLaunchFailures:
         assert _launches(fake_runner) == []
 
 
+class TestReviewFix02:
+    def test_unbuildable_messenger_args_claim_nothing_and_escalate(
+        self, conn, migrated, stalled, fake_runner, fake_clock, monkeypatch, capsys
+    ) -> None:
+        def broken() -> str:
+            raise KeyError("fast")
+
+        monkeypatch.setattr(watchdog, "_messenger_model", broken)
+        _tick(conn, fake_clock)
+        assert _messenger_rows(migrated) == [] and _launches(fake_runner) == []
+        assert _open(migrated) == [(stalled["run"], "orchestrator_not_listening", stalled["run"])]
+        assert capsys.readouterr().err.count("messenger arguments unusable") == 1
+
+    def test_a_failing_beat_after_a_spawn_keeps_the_launch(
+        self, conn, migrated, stalled, fake_runner, fake_clock, monkeypatch, capsys
+    ) -> None:
+        real = watchdog.daemon.beat
+        calls: list[int] = []
+
+        def beat(c: Any, k: Any) -> None:
+            calls.append(1)
+            if len(calls) == 2:  # the beat right after the spawn
+                raise RuntimeError("beat failed")
+            real(c, k)
+
+        monkeypatch.setattr(watchdog.daemon, "beat", beat)
+        _tick(conn, fake_clock)
+        [row] = _messenger_rows(migrated)
+        assert row["state"] == "succeeded" and "stdout_tail" in json.loads(row["result"])
+        err = capsys.readouterr().err
+        assert "messenger launch failed" not in err and "the beat after a messenger launch raised" in err
+
+
 def test_the_messenger_never_inherits_the_session_identity(
     conn, migrated, stalled, fake_runner, fake_clock, monkeypatch
 ) -> None:

@@ -201,7 +201,7 @@ class TestHaltClear:
 # --------------------------------------------------------------------------- the ask guard (D2)
 
 
-def _pre(command: str, mode: str | None = "default", session: str | None = None) -> tuple[int, Any]:
+def _pre(command: str, mode: Any = "default", session: str | None = None) -> tuple[int, Any]:
     payload: dict[str, Any] = {"session_id": session, "tool_name": "Bash", "tool_input": {"command": command}}
     if mode is not None:
         payload["permission_mode"] = mode
@@ -235,6 +235,13 @@ class TestAskGuard:
 
     def test_a_missing_mode_denies_and_points_to_a_terminal(self) -> None:
         code, out = _pre("python scripts/qs/cp.py restore --confirm", mode=None)
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+        reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "terminal" in reason and "switch this session" not in reason
+
+    @pytest.mark.parametrize("mode", ["", {}, [], 0, ["default"]])
+    def test_an_empty_or_odd_mode_denies_and_points_to_a_terminal(self, mode: Any) -> None:
+        code, out = _pre("python scripts/qs/cp.py halt clear --reason r", mode=mode)
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
         assert "terminal" in reason and "switch this session" not in reason
@@ -447,3 +454,19 @@ class TestSelfCheck:
         monkeypatch.setattr(daemon, "IDLE_EXIT_S", 1.0)
         assert invoke("daemon")[0] == 0
         assert _meta(migrated, mergegate.RECORD)["ok"] is True
+
+
+# --------------------------------------------------------------------------- review fix #02 (G16, G8)
+
+
+def test_an_unreadable_failure_time_never_says_retried_at_none(conn, migrated, fake_clock, real_gate) -> None:
+    _seed(migrated, mergegate.RECORD, {"code_version": "v1", "ok": False, "at": "garbage", "tries": 1})
+    verdict = mergegate.merge_allowed(conn, "v1", fake_clock)
+    assert verdict.state == mergegate.RETRYING and verdict.next_retry_at is None
+    assert "None" not in verdict.reason and "retried automatically" in verdict.reason
+
+
+def test_halt_clear_on_a_db_below_the_current_schema_is_refused(migrated) -> None:
+    sql(migrated, f"PRAGMA user_version = {CUR - 1}")  # e.g. the daemon cannot migrate (the STUCK case)
+    code, out = run_cli("halt", "clear", "--reason", "r")
+    assert out["error"] == "SCHEMA_PENDING" and f"v{CUR - 1}" in out["detail"]

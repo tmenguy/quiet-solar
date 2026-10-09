@@ -104,9 +104,10 @@ def merge_allowed(conn: sqlite3.Connection, version: str, clock: clock_mod.Clock
         if tries >= SELFCHECK_ESCALATE_AFTER:
             return Verdict(FAILED, f"automatic merges are halted: self-check failed for {v12}; ask the maintainer")
         nxt = next_retry_at(rec)
+        when = "retried automatically" if nxt is None else f"retried at {nxt}"  # an unreadable `at`: no time
         return Verdict(
             RETRYING,
-            f"self-check failed for {v12} ({tries} of {SELFCHECK_ESCALATE_AFTER} tries); it is retried at {nxt};"
+            f"self-check failed for {v12} ({tries} of {SELFCHECK_ESCALATE_AFTER} tries); it is {when};"
             " replay the same key later",
             next_retry_at=nxt,
         )

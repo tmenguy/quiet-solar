@@ -57,9 +57,11 @@ _SEGMENT_SPLIT = re.compile(r"&&|\|\||;|\||\n")
 # Not .db.json / .db.bak / .db-wal.bak / .db-backup.sql: the name must end right after .db, -wal or -shm.
 _REDIRECT_ONTO_DB = re.compile(r">\s*\S*harness_state\.db(?:-wal|-shm)?(?![\w.-])")
 _FIND_ACTIONS = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"})
-# QS-406 D2: `cp.py halt clear` and `cp.py restore` ask for the maintainer's approval in these permission modes; in any other
-# mode it is denied with a "switch to default mode" hint, and with no mode at all with a "run it in a terminal" one. T1 (2026-10-09, desktop app): a hook's `ask` showed
-# a real approval prompt in `auto` and in `bypassPermissions` too (bypass skips ordinary prompts, not a hook's).
+# QS-406 D2: `cp.py halt clear` and `cp.py restore` ask for the maintainer's approval in these
+# permission modes; in any other mode it is denied with a "switch to default mode" hint, and with no
+# mode at all (or an empty or non-string one) with a "run it in a terminal" one. T1 (2026-10-09,
+# desktop app): a hook's `ask` showed a real approval prompt in `auto` and in `bypassPermissions` too
+# (bypass skips ordinary prompts, not a hook's).
 ASK_MODES = frozenset({"default", "acceptEdits", "auto", "bypassPermissions"})
 MAINTAINER_COMMANDS = (("halt", "clear"), ("restore",))
 STOP_QUEUE = "queue"
@@ -307,6 +309,7 @@ def hook_pre_tool_use(stdin_text: str, clock: clock_mod.Clock) -> str:
         static = db_access_denial(tool_name, tool_input)  # needs no DB: decided before touching it
         ask = maintainer_confirm(tool_name, tool_input) if static is None else None  # a deny wins over an ask
         mode = payload.get("permission_mode")
+        mode = mode if isinstance(mode, str) and mode else None  # empty or not a string: no mode said
         if ask is not None and mode not in ASK_MODES:
             hint = (
                 "this harness does not say its permission mode: the maintainer runs the command in a terminal"

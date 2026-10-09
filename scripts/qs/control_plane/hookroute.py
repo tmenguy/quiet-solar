@@ -4,7 +4,9 @@ A cursor in ``meta.hook_events_cursor`` (seeded by migration v3 past the existin
 last event read. Each tick, in one ``db.write``, the next events are read; every ``alert`` row whose
 run is known and open becomes a one-shot alert (``alerts.event_locked``, subject ``hook:<id>``); the
 cursor moves to the last id read, routable or not. Each event is routed inside its own SAVEPOINT: one
-that raises is rolled back alone, logged, and counted unroutable, so it never blocks the cursor. An
+that raises is rolled back alone, logged, and counted unroutable, so it never blocks the cursor; a
+transient DB failure (``sqlite3.OperationalError``, ``CpError("BUSY")``) is re-raised instead, so the
+whole batch rolls back and is retried on the next tick (review fix #02, G4). An
 event's own ``kind`` passes through unless it names a daemon-owned kind (``ci_red``,
 ``selfcheck_failed``…): that becomes ``hook_alert``. Unroutable rows stay visible in
 ``snapshot["hook_alerts"]``. ``hook_events.id`` is ``AUTOINCREMENT`` and SQLite serialises writers, so
@@ -18,7 +20,7 @@ import sqlite3
 import sys
 from typing import Any
 
-from . import alerts, db
+from . import alerts, db, errors
 from . import clock as clock_mod
 
 HOOK_ROUTE = "hook_route"
@@ -56,6 +58,11 @@ def _kind(detail: dict[str, Any]) -> str:
     return alerts.HOOK_ALERT
 
 
+def _transient(exc: Exception) -> bool:
+    """A failure of the DB, not of the event (full disk, I/O, busy): never a reason to skip the event."""
+    return isinstance(exc, sqlite3.OperationalError) or (isinstance(exc, errors.CpError) and exc.code == "BUSY")
+
+
 def route_locked(conn: sqlite3.Connection, clock: clock_mod.Clock) -> dict[str, Any]:
     """Route the next batch inside the caller's transaction → ``{read, routed, cursor}``."""
     row = conn.execute("SELECT value FROM meta WHERE key = ?", (CURSOR,)).fetchone()
@@ -85,6 +92,8 @@ def route_locked(conn: sqlite3.Connection, clock: clock_mod.Clock) -> dict[str, 
                 },
             )
         except Exception as exc:  # noqa: BLE001 — one bad event never stops the routing: skipped, logged
+            if _transient(exc):
+                raise  # the whole batch is rolled back and retried on the next tick: the cursor stays
             conn.execute("ROLLBACK TO hook_event")
             posted = None
             _log(f"event {event['id']} not routed: {exc!r}")

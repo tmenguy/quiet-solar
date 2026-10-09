@@ -176,12 +176,14 @@ class GitHub:
         if node is None:
             return None
         try:
-            return _pr(node)
+            pr = _pr(node)
         except (KeyError, TypeError, IndexError, AttributeError) as exc:
             if number not in self._unparseable:
                 self._unparseable.add(number)
                 _log(f"PR #{number}: unparseable answer ({type(exc).__name__}: {exc}); unknown until it parses")
             return None
+        self._unparseable.discard(number)  # parses again: a later breakage is logged again
+        return pr
 
 
 def ci_state(pr: PrCi) -> tuple[str | None, str | None]:
@@ -269,7 +271,8 @@ class CiWatcher:
                 "truncated": truncated if sha == row["ci_sha"] else False,
                 "severity": "must-fix",
             }
-            out.append(alerts.Condition(alerts.CI_RED, f"{row['id']}@{row['ci_sha']}", (row["run_id"],), payload))
+            subject = f"{row['id']}@{row['ci_sha'] or '-'}"  # `ci_sha` is nullable
+            out.append(alerts.Condition(alerts.CI_RED, subject, (row["run_id"],), payload))
         return out
 
 

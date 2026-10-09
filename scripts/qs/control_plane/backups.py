@@ -38,8 +38,8 @@ def _fsync(path: Path) -> None:
 def write_copy(src_conn: sqlite3.Connection, dest: Path) -> Path:
     """Copy ``src_conn``'s DB to ``dest``: 0600, in 0700 directories, ``journal_mode = DELETE``, atomic.
 
-    The copy is written to ``<dest>.partial`` and renamed into place; any failure removes the
-    ``.partial`` and re-raises.
+    The copy is written to ``<dest>.partial``, fsynced, renamed into place, and the directory fsynced;
+    any failure removes the ``.partial`` and re-raises.
     """
     paths.ensure_private_dir(paths.backup_dir())
     paths.ensure_private_dir(dest.parent)
@@ -56,6 +56,7 @@ def write_copy(src_conn: sqlite3.Connection, dest: Path) -> Path:
         copy = None
         _fsync(partial)
         os.replace(partial, dest)
+        _fsync(dest.parent)  # the rename itself survives a crash (G6)
     except BaseException:
         if copy is not None:
             copy.close()
@@ -71,13 +72,18 @@ BACKUP_EVERY_S = 900.0
 BACKUP_KEEP_ALL_S = 86400.0
 BACKUP_KEEP_DAYS = 7
 NAME = re.compile(r"^harness_state\.(periodic|v\d+)\.(\d{8}T\d{12}Z)\.db$")
-PARTIAL = re.compile(r"^harness_state\.(?:periodic|replaced|v\d+)\.(\d{8}T\d{12}Z)\.db\.partial$")
+PARTIAL = re.compile(r"^harness_state\.(?:periodic|replaced|restoring|v\d+)\.(\d{8}T\d{12}Z)\.db\.partial$")
 
 
 def stamp_of(name: str) -> datetime | None:
-    """The stamp of a ``periodic`` or ``v<N>`` backup file name (``replaced`` and ``.partial`` files: ``None``)."""
+    """The stamp of a ``periodic`` or ``v<N>`` backup file name (``replaced``, ``.partial``, an impossible date: ``None``)."""
     m = NAME.match(name)
-    return None if m is None else datetime.strptime(m.group(2), STAMP_FORMAT).replace(tzinfo=UTC)
+    if m is None:
+        return None
+    try:
+        return datetime.strptime(m.group(2), STAMP_FORMAT).replace(tzinfo=UTC)
+    except ValueError:  # digits but no date (month 13…): not a backup name
+        return None
 
 
 def take(conn: sqlite3.Connection, now: datetime, db_path: Path) -> Path:
@@ -89,7 +95,8 @@ def rotate(directory: Path, now: datetime) -> list[Path]:
     """Prune ``periodic`` files: all of the last 24 h, then the newest per UTC day for 7 days → the deleted.
 
     A copy of the last 24 h counts as its day's newest. A ``.partial`` older than ``BACKUP_EVERY_S`` (by
-    its stamp) is a crashed copy's leftover and is deleted too.
+    its stamp) is a crashed copy's leftover (a restore's ``restoring`` staged copy included) and is
+    deleted too; one whose stamp is not a date is left alone.
     """
     kept_days: set[str] = set()
     deleted = []
@@ -97,7 +104,10 @@ def rotate(directory: Path, now: datetime) -> list[Path]:
         m = PARTIAL.match(path.name)
         if m is None:
             continue
-        stamp = datetime.strptime(m.group(1), STAMP_FORMAT).replace(tzinfo=UTC)
+        try:
+            stamp = datetime.strptime(m.group(1), STAMP_FORMAT).replace(tzinfo=UTC)
+        except ValueError:
+            continue  # digits but no date (month 13…): left alone, never a stop to the pruning
         if (now - stamp).total_seconds() >= BACKUP_EVERY_S:
             path.unlink(missing_ok=True)
             deleted.append(path)

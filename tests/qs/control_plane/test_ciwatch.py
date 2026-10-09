@@ -373,3 +373,25 @@ def test_the_failing_map_keeps_only_watched_tasks(conn, migrated, watched, fake_
     fake_clock.advance(ciwatch.CI_SLOW_S)
     _tick(conn, fake_clock)
     assert set(ciwatch._watcher.failing) == {"T2"}
+
+
+# --------------------------------------------------------------------------- review fix #02 (G7, G13)
+
+
+def test_a_red_row_with_no_sha_has_a_readable_subject(conn, migrated, watched) -> None:
+    sql(migrated, "UPDATE tasks SET ci_state = 'red', ci_sha = NULL WHERE id = 'T1'")  # `ci_sha` is nullable
+    [cond] = ciwatch._watcher.ci_red(conn)
+    assert cond.subject == "T1@-" and cond.payload["sha"] is None
+
+
+def test_a_pr_that_parses_again_is_logged_again_when_it_breaks(
+    conn, migrated, real_github, fake_runner, fake_clock, capsys
+) -> None:
+    r1, _ = open_run()
+    insert_task(migrated, "T2", r1, is_deliverable=1, pr_number=7)
+    malformed = {"state": "OPEN", "headRefOid": "h1"}  # no `commits`
+    for node in (malformed, _node("SUCCESS"), malformed):
+        fake_runner.on(("gh", "api", "graphql"), _graphql({7: node}))
+        _tick(conn, fake_clock)
+        fake_clock.advance(ciwatch.CI_SLOW_S)
+    assert capsys.readouterr().err.count("PR #7") == 2  # one log per unparseable episode

@@ -262,8 +262,8 @@ def _launch(
 ) -> bool | None:
     """Claim and launch the head's messenger → ``True`` launched, ``False`` failed, ``None`` lost the claim.
 
-    The messenger directory is made before the claim (a failure there claims nothing and is a failed
-    launch); once claimed, every failure closes the row as ``failed``, so the ladder escalates.
+    The messenger directory and arguments are made before the claim (a failure there claims nothing and
+    is a failed launch); once claimed, every failure closes the row as ``failed``, so the ladder escalates.
     """
     key = f"msg:{head}"
     try:
@@ -271,7 +271,11 @@ def _launch(
     except (errors.CpError, OSError) as exc:
         _log_once(f"messenger directory unusable: {exc}")
         return False
-    args = messenger_args(run["id"], head, messenger_prompt(run["name"], wake_text(seams, run["id"], waiting)))
+    try:  # the model comes from `models`, imported lazily: an ImportError or KeyError is a failed launch
+        args = messenger_args(run["id"], head, messenger_prompt(run["name"], wake_text(seams, run["id"], waiting)))
+    except Exception as exc:  # noqa: BLE001 — never escapes `_ladder`: the other runs and the alert sync go on
+        _log_once(f"messenger arguments unusable: {exc!r}")
+        return False
     me = seams.probe.me()
     with db.write(conn):
         if conn.execute("SELECT 1 FROM tool_calls WHERE tool = ? AND key = ?", (MESSENGER_TOOL, key)).fetchone():
@@ -286,12 +290,15 @@ def _launch(
         res = seams.claude.spawn_bg(
             args, cwd=directory, timeout=ticks.HOOK_SUBPROCESS_S, env_remove=daemon.stripped_names(os.environ)
         )
-        daemon.beat(conn, clock)
     except Exception as exc:  # noqa: BLE001 — any failure is a failed launch, never a row left `started`
         _log_once(f"messenger launch failed: {exc!r}")
         result: dict[str, Any] = {"error": f"{type(exc).__name__}: {exc}"[-300:]}
     else:
         result = {"stdout_tail": res.stdout.strip().splitlines()[-5:], "stderr_tail": res.stderr.strip()[-300:]}
+        try:  # a spawn that ran is a launch: a failed beat never turns it into a failed one
+            daemon.beat(conn, clock)
+        except Exception as exc:  # noqa: BLE001
+            _log_once(f"the beat after a messenger launch raised: {exc!r}")
     ok = res is not None and res.ok
     with db.write(conn):  # if this write fails, `_fail_stale_messengers` reaps the row after MESSENGER_TTL_S
         conn.execute(
