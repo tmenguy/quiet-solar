@@ -1510,7 +1510,7 @@ class TestReviewFix02:
             "actual": "blocked",
         }
         code, snap = run_cli("snapshot")
-        assert code == 0 and snap["alerts"][0]["hook"] == "tool:merge"
+        assert code == 0 and snap["hook_alerts"][0]["hook"] == "tool:merge"
 
 
 # --------------------------------------------------------------------------- review fix #03 (H1, H6, H8)

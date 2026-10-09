@@ -185,6 +185,12 @@ def busy_world(world, fake_clock) -> dict[str, Any]:
         "INSERT INTO hook_events (hook, session_id, decision, detail, at) VALUES ('stop', ?, 'alert', '{\"kind\": \"queue_not_draining\"}', 'x')",
         [ORCH],
     )
+    sql(  # raw SQL: no message is posted, so the queue depth stays 3
+        w["db"],
+        "INSERT INTO alerts (run_id, kind, subject, fingerprint, payload, first_seen, last_seen)"
+        " VALUES (?, 'overlap', 'T1|T2', 'overlap:x:1', '{\"files\": [\"a\"]}', 'x', 'x')",
+        [w["run"]],
+    )
     return w
 
 
@@ -209,7 +215,8 @@ class TestSnapshot:
         ]
         assert snap["daemon"]["heartbeat_age_s"] == 10.0 and snap["daemon"]["code_schema_version"] == CUR
         assert snap["tool_calls_in_flight"][0]["age_s"] == 60.0
-        assert snap["alerts"][0]["detail"] == {"kind": "queue_not_draining"}
+        assert snap["hook_alerts"][0]["detail"] == {"kind": "queue_not_draining"}
+        assert snap["alerts"][0]["payload"] == {"files": ["a"]} and snap["alerts"][0]["kind"] == "overlap"
         assert snap["reports"][0]["fields"] == {"tests": 1}
         assert snap["digests"] == [{"task_id": "T1", "bytes": 28, "updated_at": "2026-10-03T12:00:00.000000Z"}]
         assert [t["id"] for t in snap["tasks"]] == ["T1", "T2"]
@@ -224,7 +231,7 @@ class TestSnapshot:
 
     def test_unparseable_json_columns_are_kept_as_text(self, busy_world) -> None:
         sql(busy_world["db"], "UPDATE hook_events SET detail = 'not json'")
-        assert run_cli("snapshot")[1]["alerts"][0]["detail"] == "not json"
+        assert run_cli("snapshot")[1]["hook_alerts"][0]["detail"] == "not json"
 
 
 class TestTaskShow:

@@ -58,6 +58,7 @@ MODULES = (
     "tools",
     "items",
     "export",
+    "alerts",
     "snapshot",
     "ticks",
     "activeloop",

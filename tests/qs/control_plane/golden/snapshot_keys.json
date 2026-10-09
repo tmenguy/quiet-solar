@@ -1,11 +1,15 @@
 {
   "alerts": [
-    "at",
-    "decision",
-    "detail",
-    "hook",
+    "cleared_at",
+    "fingerprint",
+    "first_seen",
     "id",
-    "session_id"
+    "kind",
+    "last_seen",
+    "message_id",
+    "payload",
+    "run_id",
+    "subject"
   ],
   "cap_slots": [
     "acquired_at",
@@ -46,6 +50,14 @@
     "bytes",
     "task_id",
     "updated_at"
+  ],
+  "hook_alerts": [
+    "at",
+    "decision",
+    "detail",
+    "hook",
+    "id",
+    "session_id"
   ],
   "integrations": [
     "at",
