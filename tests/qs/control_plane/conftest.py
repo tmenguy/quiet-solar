@@ -37,6 +37,7 @@ MODULES = (
     "procsetup",
     "paths",
     "codever",
+    "mergegate",
     "backups",
     "liveness",
     "schema_v1",
@@ -81,6 +82,7 @@ from control_plane import (  # noqa: E402
     items,
     liveness,
     merge_policy,
+    mergegate,
     migrations,
     paths,
     procsetup,
@@ -99,6 +101,7 @@ REAL_MAIN_HEAD_BRANCH = paths.main_head_branch
 REAL_MAKE_DEPS = cli.make_deps
 REAL_MAKE_SEAMS = activeloop.make_seams
 REAL_LOADED_VERSION = codever.loaded_version
+REAL_MERGE_ALLOWED = mergegate.merge_allowed
 REAL_TICK_HOOKS = ticks.hooks
 
 ENV_CLEARED = (
@@ -361,6 +364,7 @@ def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deps: cli.Dep
     # QS-406: hook-less daemons by default (`active_loop` opts in); hooks get seams over the test deps.
     monkeypatch.setattr(ticks, "hooks", lambda: [])
     monkeypatch.setattr(codever, "loaded_version", lambda: codever.code_version(fake_main))
+    monkeypatch.setattr(mergegate, "merge_allowed", lambda conn, version, clk: mergegate.Verdict("open", "test"))
     monkeypatch.setattr(
         activeloop,
         "make_seams",
@@ -389,6 +393,11 @@ def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deps: cli.Dep
 def active_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     """Opt in to the real tick hooks under ``cp.py daemon`` / ``daemon.run``."""
     monkeypatch.setattr(ticks, "hooks", REAL_TICK_HOOKS)
+
+
+@pytest.fixture
+def real_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mergegate, "merge_allowed", REAL_MERGE_ALLOWED)
 
 
 @pytest.fixture

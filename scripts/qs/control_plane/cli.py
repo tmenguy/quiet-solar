@@ -22,6 +22,7 @@ from typing import Any, NoReturn, TextIO
 
 from . import (
     activeloop,
+    alerts,
     codever,
     daemon,
     db,
@@ -32,6 +33,7 @@ from . import (
     items,
     liveness,
     locks,
+    mergegate,
     messages,
     migrations,
     nodes,
@@ -198,6 +200,29 @@ def _daemon(args: argparse.Namespace, io: Io) -> dict[str, Any]:
             result["respawn"] = "error"
             result["respawn_error"] = f"{type(exc).__name__}: {exc}"
     return result
+
+
+def _conf_halt_clear(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--reason", required=True)
+
+
+def _halt_clear(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    """The maintainer reopens automatic merges for the code on disk (QS-406 D2; exempt: no token)."""
+    if not args.reason.strip():
+        raise errors.CpError("USAGE", "--reason must not be empty")
+    path = paths.select_db()
+    if db.check_schema(path, wait=False, clock=io.deps.clock) == "missing":
+        raise errors.CpError("NOT_FOUND", "no Control Plane DB yet: there is no gate to clear")
+    version = codever.code_version(paths.main())
+    conn = db.connect(path)
+    try:
+        with db.write(conn):
+            previous = mergegate.get(conn, mergegate.RECORD)
+            override = mergegate.override(conn, io.deps.clock, version, args.reason)
+            alerts.sync_locked(conn, io.deps.clock, kinds={alerts.SELFCHECK_FAILED}, active=[])
+    finally:
+        conn.close()
+    return {"override": override, "previous": previous}
 
 
 def _ensure(args: argparse.Namespace, io: Io) -> dict[str, Any]:
@@ -761,6 +786,13 @@ COMMANDS: dict[str, Command] = {
         Command("version", "exempt", _version, help="print the package and schema version (no DB)"),
         Command("daemon", "exempt", _daemon, help="run the daemon (migrates the DB, heartbeats, ticks)"),
         Command("ensure", "exempt", _ensure, help="start or restart the daemon if needed"),
+        Command(
+            "halt clear",
+            "exempt",
+            _halt_clear,
+            _conf_halt_clear,
+            help="the maintainer reopens automatic merges for the code on disk (asks for approval)",
+        ),
         Command("hook stop", "exempt", _hook_stop, help="the orchestrator's Stop hook (stdin: hook JSON)"),
         Command("hook pre-tool-use", "exempt", _hook_pre_tool_use, help="the PreToolUse hook (stdin: hook JSON)"),
         Command("hook pre-push", "exempt", _hook_pre_push, _conf_hook_pre_push, help="git's pre-push hook"),

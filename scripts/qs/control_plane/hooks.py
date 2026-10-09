@@ -57,6 +57,10 @@ _SEGMENT_SPLIT = re.compile(r"&&|\|\||;|\||\n")
 # Not .db.json / .db.bak / .db-wal.bak / .db-backup.sql: the name must end right after .db, -wal or -shm.
 _REDIRECT_ONTO_DB = re.compile(r">\s*\S*harness_state\.db(?:-wal|-shm)?(?![\w.-])")
 _FIND_ACTIONS = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"})
+# QS-406 D2: `cp.py halt clear` asks for the maintainer's approval in these permission modes (T1 may add
+# modes that showed a real prompt); in any other mode it is denied with a "switch to default mode" hint.
+ASK_MODES = frozenset({"default", "acceptEdits"})
+MAINTAINER_COMMANDS = (("halt", "clear"),)
 STOP_QUEUE = "queue"
 STOP_WAIT = "wait"
 
@@ -245,6 +249,38 @@ def _deny(reason: str) -> str:
     )
 
 
+def _ask(reason: str) -> str:
+    return json.dumps(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "ask",
+                "permissionDecisionReason": reason,
+            }
+        }
+    )
+
+
+def maintainer_confirm(tool_name: str, tool_input: dict[str, Any]) -> str | None:
+    """The prompt shown for a Bash segment that runs a maintainer-only command (``cp.py halt clear``), or ``None``.
+
+    The matcher works on each segment's unquoted words: ``cp.py`` (or a path ending in ``/cp.py``) followed
+    by the command's words. A wrapper (``bash -c '…'``) is not caught: the guard covers agent mistakes.
+    """
+    if tool_name != "Bash":
+        return None
+    for seg in _segments(str(tool_input.get("command", ""))):
+        words = _unquoted_words(seg)
+        for i, word in enumerate(words):
+            if word != "cp.py" and not word.endswith("/cp.py"):
+                continue
+            for command in MAINTAINER_COMMANDS:
+                if tuple(words[i + 1 : i + 1 + len(command)]) == command:
+                    name = " ".join(command)
+                    return f"`cp.py {name}` is the maintainer's decision: approve only if the maintainer asked for it"
+    return None
+
+
 def registered_denial(
     conn: sqlite3.Connection | None, session_id: str, tool_name: str, tool_input: dict[str, Any]
 ) -> str | None:
@@ -268,6 +304,9 @@ def hook_pre_tool_use(stdin_text: str, clock: clock_mod.Clock) -> str:
         tool_name = str(payload.get("tool_name", ""))
         tool_input = payload.get("tool_input") or {}
         static = db_access_denial(tool_name, tool_input)  # needs no DB: decided before touching it
+        ask = maintainer_confirm(tool_name, tool_input) if static is None else None  # a deny wins over an ask
+        if ask is not None and payload.get("permission_mode") not in ASK_MODES:
+            static, ask = f"{ask}; switch this session to default mode in the app, then ask again", None
     except Exception as exc:  # noqa: BLE001 — PreToolUse fails open
         _log(f"pre-tool-use hook failed open: {exc!r}")
         _try_record(clock, "pre-tool-use", session_id, {"kind": "error", "error": repr(exc)})
@@ -279,12 +318,16 @@ def hook_pre_tool_use(stdin_text: str, clock: clock_mod.Clock) -> str:
                 reason = registered_denial(conn, str(session_id), tool_name, tool_input)
             if reason is not None and conn is not None:
                 _record(conn, clock, "pre-tool-use", session_id, "deny", {"tool": tool_name, "reason": reason})
+            elif ask is not None and conn is not None:  # the decision CHECK has no `ask`: an allow, by kind
+                _record(conn, clock, "pre-tool-use", session_id, "allow", {"kind": "maintainer_ask", "reason": ask})
     except Exception as exc:  # noqa: BLE001 — the DB-backed part fails open; a decided deny still stands
         _log(f"pre-tool-use hook: DB part failed{' (deny kept)' if reason else ' open'}: {exc!r}")
         if reason is None:
             _try_record(clock, "pre-tool-use", session_id, {"kind": "error", "error": repr(exc)})
-            return ""
-    return "" if reason is None else _deny(reason)
+            return "" if ask is None else _ask(ask)
+    if reason is not None:
+        return _deny(reason)
+    return "" if ask is None else _ask(ask)
 
 
 # --------------------------------------------------------------------------- pre-push (§10.3)
