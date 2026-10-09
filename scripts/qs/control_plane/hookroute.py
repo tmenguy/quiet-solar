@@ -66,7 +66,12 @@ def _transient(exc: Exception) -> bool:
 def route_locked(conn: sqlite3.Connection, clock: clock_mod.Clock) -> dict[str, Any]:
     """Route the next batch inside the caller's transaction → ``{read, routed, cursor}``."""
     row = conn.execute("SELECT value FROM meta WHERE key = ?", (CURSOR,)).fetchone()
-    cursor = int(row[0]) if row is not None else 0
+    try:
+        cursor = int(row[0]) if row is not None else 0
+    except TypeError, ValueError:  # a hand-edited cursor: reseeded past the history, as migration v3 seeds it (I6)
+        cursor = int(conn.execute("SELECT COALESCE(max(id), 0) FROM hook_events").fetchone()[0])
+        conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (CURSOR, str(cursor)))
+        _log(f"the cursor {row[0]!r} is not an integer: reseeded to {cursor}")
     events = conn.execute(
         "SELECT id, hook, session_id, decision, detail FROM hook_events WHERE id > ? ORDER BY id LIMIT ?",
         (cursor, BATCH),

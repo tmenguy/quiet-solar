@@ -317,7 +317,11 @@ def hook_pre_tool_use(stdin_text: str, clock: clock_mod.Clock) -> str:
                 else "switch this session to default mode in the app, then ask again"
             )
             static, ask = f"{ask}; {hint}", None
-    except Exception as exc:  # noqa: BLE001 — PreToolUse fails open
+    except Exception as exc:  # noqa: BLE001 — PreToolUse fails open, except on a possible `cp.py` command (I7)
+        if "cp.py" in (stdin_text or ""):
+            _log(f"pre-tool-use hook could not parse a cp.py command, asking: {exc!r}")
+            _try_record(clock, "pre-tool-use", session_id, {"kind": "error", "error": repr(exc)})
+            return _ask("`cp.py` may be the maintainer's decision: approve only if the maintainer asked for it")
         _log(f"pre-tool-use hook failed open: {exc!r}")
         _try_record(clock, "pre-tool-use", session_id, {"kind": "error", "error": repr(exc)})
         return ""

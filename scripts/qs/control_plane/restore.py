@@ -240,6 +240,15 @@ def _unlink_staged(staged: Path) -> None:
         Path(str(staged) + suffix).unlink(missing_ok=True)
 
 
+def _staging_failed(exc: BaseException, src: Path, staged: Path, where: str, kept: dict[str, str]) -> errors.CpError:
+    return errors.CpError(
+        "INTERNAL",
+        f"staging a copy of the backup {src.name} failed: {exc}; the live DB was not touched",
+        hint=f"nothing was restored{where}; free space in {staged.parent}, then retry",
+        **kept,
+    )
+
+
 def _restore_into(path: Path, src: Path, live: tuple[int, int] | None, clock: clock_mod.Clock) -> str | None:
     """Keep the live DB, stage the backup, fix the staged copy up, copy it into the live DB → the ``replaced`` path.
 
@@ -270,7 +279,7 @@ def _restore_into(path: Path, src: Path, live: tuple[int, int] | None, clock: cl
                 dest = backups.db_dir(path) / f"harness_state.replaced.{stamp}.db"
                 try:
                     replaced = str(backups.write_copy(conn, dest))
-                except OSError as exc:  # disk full, a backup directory it cannot write (H1)
+                except (OSError, sqlite3.OperationalError) as exc:  # disk full, an unwritable backup dir (H1, I1)
                     raise errors.CpError(
                         "CONFLICT",
                         f"the live DB cannot be kept: {exc}; nothing was restored and the live DB was not touched",
@@ -280,13 +289,16 @@ def _restore_into(path: Path, src: Path, live: tuple[int, int] | None, clock: cl
                 waiters, meta = _carry(conn)
             try:
                 stage = _staged_copy(src, staged)
-            except (sqlite3.Error, OSError, errors.CpError) as exc:  # disk full is the likeliest (H1)
-                raise errors.CpError(
-                    "INTERNAL",
-                    f"staging a copy of the backup {src.name} failed: {exc}; the live DB was not touched",
-                    hint=f"nothing was restored{where()}; free space in {staged.parent}, then retry",
-                    **kept(),
+            except errors.CpError as exc:
+                if exc.code == "INTERNAL":
+                    raise _staging_failed(exc, src, staged, where(), kept()) from exc
+                raise errors.CpError(  # a policy refusal (a directory owned by another user…) passes through (I2)
+                    exc.code,
+                    f"{exc.detail}; nothing was restored and the live DB was not touched",
+                    **{"hint": f"nothing was restored{where()}", **exc.extra, **kept()},
                 ) from exc
+            except (sqlite3.Error, OSError) as exc:  # disk full is the likeliest (H1)
+                raise _staging_failed(exc, src, staged, where(), kept()) from exc
             try:
                 try:
                     _fix_up(stage, waiters, meta)

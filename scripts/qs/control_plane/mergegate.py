@@ -92,10 +92,10 @@ def _pending_age(clock: clock_mod.Clock, pending: dict[str, Any]) -> float | Non
 
 
 def _int_or(value: Any, default: int) -> int:
-    """``int(value)``; ``default`` for a missing, zero or hand-edited value (``"x"``, a list…) (H6)."""
+    """``int(value)``; ``default`` for a missing, zero or hand-edited value (``"x"``, a list, ``1e999``…) (H6, I3)."""
     try:
         return int(value or default)
-    except TypeError, ValueError:
+    except TypeError, ValueError, OverflowError:
         return default
 
 

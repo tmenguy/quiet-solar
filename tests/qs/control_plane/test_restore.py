@@ -668,11 +668,11 @@ def _restore_now(migrated: Path, fake_clock, fake_probe, fake_kill, fake_popen) 
 
 
 class TestReviewFix03:
-    @pytest.mark.parametrize("failure", ["disk_full", "o_excl", "private_dir"])
+    @pytest.mark.parametrize("failure", ["disk_full", "cannot_open", "o_excl"])
     def test_a_staging_failure_leaves_the_live_db_untouched(
         self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch, failure: str
     ) -> None:
-        if failure == "disk_full":
+        if failure in ("disk_full", "cannot_open"):
             real_connect = db.connect
 
             class Full:
@@ -684,11 +684,13 @@ class TestReviewFix03:
 
             def connect(path: Any, *a: Any, **k: Any) -> Any:
                 if Path(path) == backed_up["src"] and k.get("mode") == "ro" and _staged(migrated):
+                    if failure == "cannot_open":  # `db.connect`'s own INTERNAL error keeps the INTERNAL path
+                        raise restore.errors.CpError("INTERNAL", f"cannot open {path}: unable to open database file")
                     return Full()  # the staging read only (the source checks come before it)
                 return real_connect(path, *a, **k)
 
             monkeypatch.setattr(restore.db, "connect", connect)
-        elif failure == "o_excl":
+        else:
             real_open = os.open
 
             def no_space(path: Any, flags: int, *a: Any) -> int:
@@ -697,17 +699,6 @@ class TestReviewFix03:
                 return real_open(path, flags, *a)
 
             monkeypatch.setattr(restore.os, "open", no_space)
-        else:
-            real_private = paths.ensure_private_dir
-            seen: list[Path] = []
-
-            def refuse(d: Path) -> Path:
-                seen.append(d)
-                if len(seen) > 2:  # the two `write_copy` calls pass; the staging ones are refused
-                    raise restore.errors.CpError("POLICY_REFUSED", f"{d} is owned by another user")
-                return real_private(d)
-
-            monkeypatch.setattr(restore.paths, "ensure_private_dir", refuse)
         before = _dump(migrated)
         with pytest.raises(restore.errors.CpError) as exc:
             _restore_now(migrated, fake_clock, fake_probe, fake_kill, fake_popen)
@@ -752,6 +743,49 @@ class TestReviewFix03:
         assert c.execute("SELECT x FROM notes").fetchall() == [("keep me",)]
         c.close()
         assert sql(migrated, "SELECT id FROM runs")[0][0] == backed_up["run"]
+
+
+# --------------------------------------------------------------------------- review fix #04 (I1, I2)
+
+
+class TestReviewFix04:
+    def test_a_full_disk_reported_by_sqlite_while_keeping_the_live_db_is_a_clean_refusal(
+        self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
+    ) -> None:
+        def full(*a: Any, **k: Any) -> Path:
+            raise sqlite3.OperationalError("database or disk is full")  # what `backup()` raises on ENOSPC
+
+        monkeypatch.setattr(backups, "write_copy", full)
+        before = _dump(migrated)
+        with pytest.raises(restore.errors.CpError) as exc:
+            _restore_now(migrated, fake_clock, fake_probe, fake_kill, fake_popen)
+        err = exc.value
+        assert err.code == "CONFLICT" and "not touched" in err.detail and "replaced" not in err.extra
+        assert "free space" in err.extra["hint"] and "move it aside" not in err.extra["hint"]
+        assert _dump(migrated) == before and _staged(migrated) == []
+
+    def test_a_policy_refusal_while_staging_passes_through(
+        self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
+    ) -> None:
+        real_private = paths.ensure_private_dir
+        seen: list[Path] = []
+
+        def refuse(d: Path) -> Path:
+            seen.append(d)
+            if len(seen) > 2:  # the two `write_copy` calls pass; the staging ones are refused
+                raise restore.errors.CpError("POLICY_REFUSED", f"{d} is owned by another user")
+            return real_private(d)
+
+        monkeypatch.setattr(restore.paths, "ensure_private_dir", refuse)
+        before = _dump(migrated)
+        with pytest.raises(restore.errors.CpError) as exc:
+            _restore_now(migrated, fake_clock, fake_probe, fake_kill, fake_popen)
+        err = exc.value
+        assert err.code == "POLICY_REFUSED" and "owned by another user" in err.detail and "not touched" in err.detail
+        assert "free space" not in err.extra["hint"] and "nothing was restored" in err.extra["hint"]
+        replaced = Path(err.extra["replaced"])
+        assert replaced.exists() and str(replaced) in err.extra["hint"]
+        assert _dump(migrated) == before and _staged(migrated) == []
 
 
 def test_a_failed_directory_fsync_still_keeps_the_copy(conn, migrated, fake_clock, monkeypatch, capsys) -> None:

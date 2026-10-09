@@ -227,6 +227,14 @@ class _Branch:
     files: tuple[str, ...]
 
 
+def _branch_tips(git: _Git, row: sqlite3.Row) -> tuple[str | None, str | None]:
+    """The task's tip and, for a work item, its deliverable's tip (``None`` for a missing ref)."""
+    tip = _resolve(git, f"refs/heads/{row['branch']}")
+    if tip is None or row["deliverable_id"] is None or row["base_branch"] is None:
+        return tip, None
+    return tip, _resolve(git, f"refs/heads/{row['base_branch']}")
+
+
 def _walk(conn: sqlite3.Connection, git: _Git) -> list[alerts.Condition]:
     """Every overlapping pair. A branch whose diff failed is unknown: its last alerts are kept as they were."""
     terminal, params = _in(tasks.TERMINAL)
@@ -239,13 +247,19 @@ def _walk(conn: sqlite3.Connection, git: _Git) -> list[alerts.Condition]:
     branches: list[_Branch] = []
     unknown: set[str] = set()
     for row in rows:
-        tip = _resolve(git, f"refs/heads/{row['branch']}")
+        try:
+            tip, base = _branch_tips(git, row)
+        except GitFailed as exc:  # one bad ref is that task's unknown, not the walk's (I4); main's still fails it
+            if exc.aborts:
+                raise
+            unknown.add(row["id"])
+            _log_once(f"overlap:{row['id']}:rev-parse", f"overlap: {row['id']} skipped: {exc}")
+            continue
+        _recovered(f"overlap:{row['id']}:rev-parse")
         if tip is None:
             continue
         if row["deliverable_id"] is None:
             base = _main_base(git)
-        else:
-            base = None if row["base_branch"] is None else _resolve(git, f"refs/heads/{row['base_branch']}")
         if base is None:
             continue
         files = _files(git, row["id"], base, tip)
@@ -320,8 +334,10 @@ def detect_overlap(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seam
         _overlap.last_at = now  # the next attempt waits OVERLAP_EVERY_S, keeping `last` (H4)
         _log_once(f"overlap:walk:{exc.returncode}", f"overlap: {exc}")
         return NONE
-    except BaseException:  # anything else (a failed beat…): no stale walk state leaks into the next (H3)
+    except BaseException as exc:  # anything else (a failed beat…): no stale walk state leaks into the next (H3)
         _end_walk()
+        if isinstance(exc, Exception):
+            _overlap.last_at = now  # a persistent failure waits OVERLAP_EVERY_S, not every tick (I4)
         raise
     _end_walk()
     _recovered("overlap:walk:")

@@ -173,7 +173,7 @@ class TestOverlap:
     def test_a_failed_rev_parse_leaves_both_kinds_out(self, conn, migrated, git, fake_clock, capsys) -> None:
         self._two_runs(migrated, git)
         _tick(conn, fake_clock)
-        git.fail.add("rev-parse")  # the refs themselves are unknown: the whole walk is
+        _failing_rev_parse(git, "refs/heads/main")  # main's tip is unknown: the whole walk is
         _tick(conn, fake_clock, detectors.OVERLAP_EVERY_S)
         assert detectors.detect_overlap(conn, fake_clock, activeloop.seams()) == detectors.NONE
         assert len(_open(migrated)) == 2 and "overlap: git rev-parse" in capsys.readouterr().err
@@ -604,6 +604,18 @@ def _failing_diff(git: FakeGit, tip_suffix: str, result: RunResult) -> None:
     activeloop.seams().runner.on(("git",), respond)  # type: ignore[attr-defined]
 
 
+def _failing_rev_parse(git: FakeGit, ref: str) -> None:
+    real = git.__call__
+
+    def respond(call: Call) -> RunResult:
+        if call.argv[3] == "rev-parse" and call.argv[-1] == ref:
+            git.calls.append(call.argv[3:])
+            return RunResult(128, "", f"fatal: bad ref {ref}")
+        return real(call)
+
+    activeloop.seams().runner.on(("git",), respond)  # type: ignore[attr-defined]
+
+
 def _diff_calls(git: FakeGit, tip_suffix: str = "") -> int:
     return sum(1 for c in git.calls if c[0] == "diff" and c[-1].endswith(tip_suffix))
 
@@ -802,6 +814,9 @@ class TestReviewFix03:
             detectors.detect_overlap(conn, fake_clock, activeloop.seams())
         assert _diff_calls(git, "...t1") == 1 and not detectors._overlap.failed_diffs
         assert not detectors._overlap.refs and not detectors._overlap.walking
+        detectors.detect_overlap(conn, fake_clock, activeloop.seams())  # it backs off: no new walk (I4)
+        assert _diff_calls(git, "...t1") == 1
+        fake_clock.advance(detectors.OVERLAP_EVERY_S)
         detectors.detect_overlap(conn, fake_clock, activeloop.seams())  # the next walk retries T1's diff
         assert _diff_calls(git, "...t1") == 2
 
@@ -832,3 +847,54 @@ class TestReviewFix03:
         git.fail.add("worktree")
         assert detectors._leftover_scratch(conn, fake_clock, activeloop.seams()) is None
         assert capsys.readouterr().err.count("leftover scratch") == 1  # a new episode
+
+
+# --------------------------------------------------------------------------- review fix #04 (I4)
+
+
+class TestReviewFix04:
+    def test_an_unexpected_error_backs_off_the_overlap_interval(
+        self, conn, migrated, git, fake_clock, monkeypatch
+    ) -> None:
+        r1, _ = open_run()
+        insert_task(migrated, "T1", r1, branch="QS_1", is_deliverable=1)
+        git.refs["refs/heads/QS_1"] = "t1"
+
+        def beat(c: sqlite3.Connection, k: clock.Clock) -> None:
+            raise errors.CpError("INTERNAL", "database disk image is malformed")  # a persistent failure
+
+        monkeypatch.setattr(detectors.daemon, "beat", beat)
+        with pytest.raises(errors.CpError):
+            detectors.detect_overlap(conn, fake_clock, activeloop.seams())
+        n = git.count()
+        fake_clock.advance(detectors.DETECT_EVERY_S)
+        detectors.detect_overlap(conn, fake_clock, activeloop.seams())  # not due: no re-walk every tick
+        assert git.count() == n
+        fake_clock.advance(detectors.OVERLAP_EVERY_S)
+        with pytest.raises(errors.CpError):
+            detectors.detect_overlap(conn, fake_clock, activeloop.seams())
+        assert git.count() == n + 1
+
+    @pytest.mark.parametrize("bad", ["refs/heads/QS_2", "refs/heads/QS_1"])
+    def test_a_failed_rev_parse_of_one_branch_marks_only_its_tasks_unknown(
+        self, conn, migrated, git, fake_clock, capsys, bad: str
+    ) -> None:
+        r1, _ = open_run()
+        insert_task(migrated, "T1", r1, branch="QS_1", is_deliverable=1)
+        insert_task(migrated, "T2", r1, branch="QS_2", is_deliverable=1)
+        insert_task(migrated, "T3", r1, branch="QS_3", is_deliverable=1)
+        insert_task(migrated, "T4", r1, branch="QS_4", deliverable_id="T1", item_k=4)  # based on T1's branch
+        git.refs.update({f"refs/heads/QS_{i}": f"t{i}" for i in range(1, 5)})
+        git.diffs.update({("m", "t1"): ["a.py"], ("m", "t2"): ["a.py"], ("m", "t3"): ["a.py"], ("t1", "t4"): ["a.py"]})
+        _tick(conn, fake_clock, detectors.OVERLAP_EVERY_S)
+        before = _open(migrated)
+        assert (r1, "overlap", "T2|T3") in before
+        _failing_rev_parse(git, bad)
+        for _ in range(2):  # two complete walks
+            _tick(conn, fake_clock, detectors.OVERLAP_EVERY_S)
+            assert detectors._overlap.last is not None and not detectors._overlap.walking
+            assert _open(migrated) == before  # the unknown tasks keep their alerts; the others are recomputed
+        err = capsys.readouterr().err
+        affected = {"refs/heads/QS_2": 1, "refs/heads/QS_1": 2}[bad]  # QS_1 is also T4's base
+        assert err.count(f"bad ref {bad}") == affected  # once per task, not once per walk
+        assert "overlap: git rev-parse" not in err  # the walk itself did not fail

@@ -400,6 +400,31 @@ class TestReviewFix02:
         assert "messenger launch failed" not in err and "the beat after a messenger launch raised" in err
 
 
+class TestReviewFix04:
+    def test_a_raising_spawn_still_beats(
+        self, conn, migrated, stalled, fake_claude, fake_runner, fake_clock, monkeypatch
+    ) -> None:
+        spawned: list[int] = []
+        beats_after_spawn: list[str] = []
+        real = watchdog.daemon.beat
+
+        def boom(*args: Any, **kwargs: Any) -> Any:
+            spawned.append(1)
+            raise RuntimeError("spawn exploded")
+
+        def beat(c: Any, k: Any) -> None:
+            if spawned:  # the messenger row's state when the beat runs
+                beats_after_spawn.extend(r["state"] for r in _messenger_rows(migrated))
+            real(c, k)
+
+        monkeypatch.setattr(fake_claude, "spawn_bg", boom)
+        monkeypatch.setattr(watchdog.daemon, "beat", beat)
+        _tick(conn, fake_clock)
+        assert beats_after_spawn[:1] == ["started"]  # beaten right after the spawn, before the row is closed
+        [row] = _messenger_rows(migrated)
+        assert row["state"] == "failed" and "spawn exploded" in json.loads(row["result"])["error"]
+
+
 def test_the_messenger_never_inherits_the_session_identity(
     conn, migrated, stalled, fake_runner, fake_clock, monkeypatch
 ) -> None:

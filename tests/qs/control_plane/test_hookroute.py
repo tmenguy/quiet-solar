@@ -190,3 +190,18 @@ def test_a_cp_error_other_than_busy_is_isolated(conn, migrated, fake_clock, monk
     monkeypatch.setattr(alerts, "event_locked", flaky)
     hookroute.hook_route_hook(conn, fake_clock)
     assert _cursor(migrated) == bad
+
+
+# --------------------------------------------------------------------------- review fix #04 (I6)
+
+
+def test_a_non_integer_cursor_is_reseeded_and_routing_goes_on(conn, migrated, fake_clock, capsys) -> None:
+    r1, _ = open_run()
+    old = _event(migrated, {"kind": "k", "run_id": r1})
+    sql(migrated, "UPDATE meta SET value = 'x' WHERE key = 'hook_events_cursor'")  # hand-edited
+    hookroute.hook_route_hook(conn, fake_clock)  # reseeded past the history, as migration v3 seeds it
+    assert _cursor(migrated) == old and _queue(migrated, r1) == []
+    new = _event(migrated, {"kind": "k", "run_id": r1})
+    hookroute.hook_route_hook(conn, fake_clock)
+    assert [p["hook_event_id"] for _, p in _queue(migrated, r1)] == [new] and _cursor(migrated) == new
+    assert capsys.readouterr().err.count("not an integer") == 1  # logged once

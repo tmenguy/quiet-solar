@@ -296,10 +296,10 @@ def _launch(
         result: dict[str, Any] = {"error": f"{type(exc).__name__}: {exc}"[-300:]}
     else:
         result = {"stdout_tail": res.stdout.strip().splitlines()[-5:], "stderr_tail": res.stderr.strip()[-300:]}
-        try:  # a spawn that ran is a launch: a failed beat never turns it into a failed one
-            daemon.beat(conn, clock)
-        except Exception as exc:  # noqa: BLE001
-            _log_once(f"the beat after a messenger launch raised: {exc!r}")
+    try:  # after every spawn attempt (I5); a spawn that ran is a launch: a failed beat never turns it into a failed one
+        daemon.beat(conn, clock)
+    except Exception as exc:  # noqa: BLE001
+        _log_once(f"the beat after a messenger launch raised: {exc!r}")
     ok = res is not None and res.ok
     with db.write(conn):  # if this write fails, `_fail_stale_messengers` reaps the row after MESSENGER_TTL_S
         conn.execute(

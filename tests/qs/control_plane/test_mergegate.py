@@ -484,3 +484,34 @@ def test_a_hand_edited_tries_counts_as_one(conn, migrated, fake_clock, real_gate
     with db.write(conn):
         rec = mergegate.record(conn, fake_clock, "v1", ok=False, failures=[])
     assert rec["tries"] == 1
+
+
+# --------------------------------------------------------------------------- review fix #04 (I3, I7)
+
+
+def test_an_infinite_tries_counts_as_one(conn, migrated, fake_clock, real_gate) -> None:
+    _seed(migrated, mergegate.RECORD, {"code_version": "v1", "ok": False, "at": "garbage", "tries": float("inf")})
+    verdict = mergegate.merge_allowed(conn, "v1", fake_clock)  # JSON `Infinity` (or 1e999) loads as inf
+    assert f"(1 of {mergegate.SELFCHECK_ESCALATE_AFTER} tries)" in verdict.reason
+
+
+class TestAskGuardParseFailure:
+    def _raise(self, monkeypatch) -> None:
+        from control_plane import hooks
+
+        def broken(tool_name: str, tool_input: dict[str, Any]) -> str | None:
+            raise ValueError("No closing quotation")
+
+        monkeypatch.setattr(hooks, "maintainer_confirm", broken)
+
+    def test_a_cp_py_command_that_cannot_be_parsed_asks(self, monkeypatch, capsys) -> None:
+        self._raise(monkeypatch)
+        code, out = _pre("python scripts/qs/cp.py restore --confirm")
+        assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+        assert "maintainer's decision" in out["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "failed open" not in capsys.readouterr().err
+
+    def test_an_unrelated_command_still_fails_open(self, monkeypatch, capsys) -> None:
+        self._raise(monkeypatch)
+        assert _decision(_pre("echo hello")) is None
+        assert "failed open" in capsys.readouterr().err
