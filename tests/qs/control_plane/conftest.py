@@ -59,12 +59,15 @@ MODULES = (
     "items",
     "export",
     "snapshot",
+    "ticks",
+    "activeloop",
     "cli",
 )
 for _name in MODULES:
     importlib.import_module(f"control_plane.{_name}")
 
 from control_plane import (  # noqa: E402
+    activeloop,
     cli,
     clock,
     db,
@@ -76,6 +79,7 @@ from control_plane import (  # noqa: E402
     migrations,
     paths,
     procsetup,
+    ticks,
     tools,
 )
 from control_plane.runner import RunResult  # noqa: E402
@@ -88,6 +92,8 @@ REAL_CODE_ROOT = paths.code_root
 REAL_MAIN_CHECKOUT = paths.main_checkout
 REAL_MAIN_HEAD_BRANCH = paths.main_head_branch
 REAL_MAKE_DEPS = cli.make_deps
+REAL_MAKE_SEAMS = activeloop.make_seams
+REAL_TICK_HOOKS = ticks.hooks
 
 ENV_CLEARED = (
     "CLAUDE_CODE_SESSION_ID",
@@ -344,15 +350,31 @@ def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deps: cli.Dep
     setup = FakeProcessSetup()
     monkeypatch.setattr(procsetup, "get", lambda: setup)
     monkeypatch.setattr(cli, "make_deps", lambda: deps)
+    # QS-406: hook-less daemons by default (`active_loop` opts in); hooks get seams over the test deps.
+    monkeypatch.setattr(ticks, "hooks", lambda: [])
+    monkeypatch.setattr(
+        activeloop,
+        "make_seams",
+        lambda: activeloop.Seams(runner=deps.runner, probe=deps.probe, claude=deps.claude, main=fake_main),
+    )
     faults.reset()
     try:
         yield setup
     finally:
         faults.reset()
+        ticks._reset_for_tests()
+        activeloop._reset_for_tests()
+        activeloop.register_builtin()
         merge_policy.reset()
         tools.reset()
         items.register_item_tools()
         export.LEDGER_SECTIONS.clear()
+
+
+@pytest.fixture
+def active_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt in to the real tick hooks under ``cp.py daemon`` / ``daemon.run``."""
+    monkeypatch.setattr(ticks, "hooks", REAL_TICK_HOOKS)
 
 
 @pytest.fixture

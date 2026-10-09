@@ -20,8 +20,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, NoReturn, TextIO
 
-from . import clock as clock_mod
 from . import (
+    activeloop,
     daemon,
     db,
     decisions,
@@ -42,11 +42,14 @@ from . import (
     runs,
     snapshot,
     tasks,
+    ticks,
     tools,
     wait,
 )
+from . import clock as clock_mod
 
 items.register_item_tools()  # #400's tools: the parser and the parametrized tests read REGISTRY at import
+activeloop.register_builtin()  # QS-406: the daemon's tick hooks (idempotent; main() calls it again)
 
 
 @dataclass(frozen=True)
@@ -169,11 +172,22 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _version(args: argparse.Namespace, io: Io) -> dict[str, Any]:
-    return {"package": "control_plane", "schema_version": migrations.current_schema_version()}
+    return {
+        "package": "control_plane",
+        "schema_version": migrations.current_schema_version(),
+        "tools": sorted(tools.REGISTRY),
+        "tick_hooks": [name for name, _ in ticks.registered()],
+    }
 
 
 def _daemon(args: argparse.Namespace, io: Io) -> dict[str, Any]:
-    return daemon.run(io.deps.clock, probe=io.deps.probe, idle_exit_s=daemon.IDLE_EXIT_S, tick_s=daemon.TICK_S)
+    return daemon.run(
+        io.deps.clock,
+        probe=io.deps.probe,
+        tick_hooks=ticks.hooks(),
+        idle_exit_s=daemon.IDLE_EXIT_S,
+        tick_s=daemon.TICK_S,
+    )
 
 
 def _ensure(args: argparse.Namespace, io: Io) -> dict[str, Any]:
@@ -857,6 +871,7 @@ def _emit(out: TextIO, payload: dict[str, Any]) -> None:
 
 def main(argv: Sequence[str] | None = None, *, stdin: TextIO | None = None, stdout: TextIO | None = None) -> int:
     items.register_item_tools()  # cheap, and keeps a reset registry whole before build_parser()
+    activeloop.register_builtin()  # likewise for the tick hooks
     io = Io(stdin=stdin or sys.stdin, stdout=stdout or sys.stdout, deps=make_deps())
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
