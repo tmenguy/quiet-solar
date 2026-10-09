@@ -36,6 +36,7 @@ MODULES = (
     "runner",
     "procsetup",
     "paths",
+    "backups",
     "liveness",
     "schema_v1",
     "schema_v2",
@@ -331,6 +332,7 @@ def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deps: cli.Dep
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("QS_CP_DB", str(tmp_path / "state" / "test_state.db"))
     monkeypatch.setenv("QS_CP_BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("QS_CP_MESSENGER_DIR", str(tmp_path / "messenger"))
     (tmp_path / "state").mkdir()
     # A fake main checkout, identical locally (a linked worktree) and in CI.
     fake_main = tmp_path / "main"

@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 
 import pytest
-from control_plane import SCHEMA_VERSION, db, errors, faults, migrations, paths, schema_v1
+from control_plane import SCHEMA_VERSION, backups, db, errors, faults, migrations, paths, schema_v1
 
 from .conftest import CUR, V_NEXT
 
@@ -77,7 +77,7 @@ class TestUpgrade:
         result = migrations.migrate(migrated, role="test")
         assert result["from"] == CUR and result["to"] == V_NEXT
         backup = Path(result["backup"])
-        assert backup.parent == (tmp_path / "backups").resolve()
+        assert backup.parent == backups.db_dir(migrated)
         assert backup.name.startswith(f"harness_state.v{CUR}.") and backup.suffix == ".db"
         assert _version(backup) == CUR and "extra" not in _tables(backup)
         assert {"extra", "extra2"} <= _tables(migrated) and _version(migrated) == V_NEXT
@@ -88,7 +88,7 @@ class TestUpgrade:
             migrations.migrate(migrated, role="test")
         assert _version(migrated) == CUR
         assert "extra" not in _tables(migrated)
-        assert len(list((tmp_path / "backups").glob(f"harness_state.v{CUR}.*.db"))) == 1
+        assert len(list(backups.db_dir(migrated).glob(f"harness_state.v{CUR}.*.db"))) == 1
 
     def test_failing_statement_rolls_back(self, migrated: Path, monkeypatch) -> None:
         bad = migrations.Migration(V_NEXT, "bad", ("CREATE TABLE extra (a INTEGER)", "NOT SQL"))
