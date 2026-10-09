@@ -305,6 +305,16 @@ class TestConnection:
         assert isinstance(d.clock, clock.SystemClock) and isinstance(d.runner, runner.Runner)
         assert isinstance(d.probe, liveness.ProcessProbe) and isinstance(d.claude, liveness.ClaudeCli)
         assert d.popen is subprocess.Popen
+        import models  # type: ignore[import-not-found]
+
+        assert d.resolve_model("qs-node", "feature-factory") == models.spawn_policy("qs-node", "feature-factory")
+
+    def test_the_policy_comes_from_the_control_planes_own_tree(self) -> None:
+        """QS-405 D6 regression pin: ``models`` loads from the ``scripts/qs`` that holds ``control_plane``."""
+        from control_plane import cli
+
+        cli._policy_resolver("qs-node", None)
+        assert Path(sys.modules["models"].__file__).parent == Path(cli.__file__).parents[1]
 
 
 # --------------------------------------------------------------------------- review fix #01 (F6, F7, F8, F9)

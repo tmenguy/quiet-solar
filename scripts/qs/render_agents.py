@@ -8,6 +8,13 @@ module renders them into the gitignored harness output directories
 (``.claude/agents/`` and ``.opencode/agents/``) with the task facts and
 the lane protocol inlined into the lane-aware orchestrators.
 
+The second pipeline's agents (:data:`SECOND_PIPELINE`, QS-405) render
+with no task facts at all: their base context is
+:data:`_TASK_AGNOSTIC_FACTS`, and their model is resolved with no lane, so
+each file is byte-identical at every render site (worktree birth, the
+handoff, the post-merge render on ``main``). The facts reach those agents
+through the launch prompt and the Control Plane instead.
+
 Public API:
 
 - :func:`build_render_context` — resolve every render variable for a
@@ -94,6 +101,40 @@ SUBAGENTS: frozenset[str] = frozenset(
         "qs-review-regression-proof",
     }
 )
+
+# The second pipeline's agents (epic #369, QS-405 D1): disjoint from the
+# frozen sets above and absent from ``PHASE_TO_AGENT``. Child 6b adds the
+# node's sub-agents. A stem may have its policy row before its template
+# exists — ``render_all`` iterates over the discovered templates. They
+# render with NO task facts (``_TASK_AGNOSTIC_FACTS``), so the file is the
+# same at every render site.
+SECOND_PIPELINE: frozenset[str] = frozenset(
+    {
+        "qs-orchestrator",
+        "qs-node",
+        "qs-global-review",
+        "qs-cross-run-review",
+        "qs-final-review",
+    }
+)
+
+# The base context a second-pipeline stem renders with (QS-405 D2): an
+# ALLOWLIST — every key ``build_render_context`` returns except ``model``,
+# set to its unbound value. ``render_all`` REPLACES the caller's context
+# with it (plus ``model``), so nothing task-bound can leak in; a key a later
+# child adds to the context fails the key-set test until it is decided here.
+_TASK_AGNOSTIC_FACTS: dict[str, str | None] = {
+    "branch": None,
+    "issue": None,
+    "title": None,
+    "labels": None,
+    "lane": None,
+    "worktree": None,
+    "story_file": None,
+    "lane_protocol": None,
+    "lane_protocol_state": "no_lane",
+    "facts_state": "unbound",
+}
 
 _HARNESSES = ("claude", "opencode")
 _HARNESS_DIR = {"claude": ".claude", "opencode": ".opencode"}
@@ -382,8 +423,10 @@ def render_all(
     spec_for: dict[str, str] = {}
     for stem in stems:
         if model_spec is None:
+            # A second-pipeline stem never sees the worktree's lane (QS-405 D2).
+            lane = None if stem in SECOND_PIPELINE else context.get("lane")
             try:
-                spec_for[stem] = models.resolve(context.get("lane"), stem)
+                spec_for[stem] = models.resolve(lane, stem)
             except models.ModelPolicyError as exc:
                 raise RenderError(
                     f"no model policy row for agent {stem!r}; add it to scripts/qs/models.py"
@@ -410,9 +453,15 @@ def render_all(
         value = spec_for[stem]
         cls = models.class_of(value)
         effort = models.effort_for(cls) if cls else None
+        # QS-405 D2: a replacement, not a merge — only ``model`` survives.
+        base = (
+            {**_TASK_AGNOSTIC_FACTS, "model": context.get("model")}
+            if stem in SECOND_PIPELINE
+            else context
+        )
         for harness in _HARNESSES:
             render_ctx = {
-                **context,
+                **base,
                 "harness": harness,
                 "stem": stem,
                 "template": f"{stem}.md.j2",

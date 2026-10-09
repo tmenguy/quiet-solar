@@ -117,6 +117,34 @@ def resolve(env: Env, content: str = "resolved\n") -> None:
 
 
 # ---------------------------------------------------------------------------
+# QS-405 AC3 — an integration scratch renders no agents
+# ---------------------------------------------------------------------------
+
+
+def test_integration_scratch_renders_no_agents(env: Env) -> None:
+    """A render on main leaves untracked agent files there; the scratch gets none."""
+    for hdir in (".claude", ".opencode"):
+        agents = env.repo.clone / hdir / "agents"
+        agents.mkdir(parents=True, exist_ok=True)
+        (agents / "qs-node.md").write_text("---\nname: qs-node\n---\n")
+    rc, out = env.prepare()
+    assert (rc, out["status"]) == (0, "merged"), out
+    assert env.scratch.is_dir()
+    assert not (env.scratch / ".claude" / "agents").exists()
+    assert not (env.scratch / ".opencode" / "agents").exists()
+
+
+@pytest.mark.parametrize(
+    "rel", ["scripts/worktree-setup.sh", "scripts/qs/integrate_item.py", "scripts/qs/control_plane/items.py"]
+)
+def test_the_scratch_path_never_calls_the_renderer(rel: str) -> None:
+    """A cheap second guard for AC3: no call or import of the renderer on the scratch path."""
+    text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+    for token in ("import render_agents", "render_agents.py", "render_all("):
+        assert token not in text, f"{rel} mentions {token!r}"
+
+
+# ---------------------------------------------------------------------------
 # AC 10 — the clean path
 # ---------------------------------------------------------------------------
 

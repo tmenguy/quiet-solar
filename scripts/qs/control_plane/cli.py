@@ -67,6 +67,25 @@ class Deps:
     claude: liveness.ClaudeCli
     popen: Callable[..., Any]
     kill: Callable[[int, int], None]
+    resolve_model: tools.ResolveModel
+
+
+def _policy_resolver(stem: str, lane: str | None) -> tuple[str, str | None]:
+    """``models.spawn_policy(stem, lane)``, imported at call time (QS-405 D6).
+
+    The single import outside the standard library in the Control Plane
+    (the purity test allows exactly this one). ``models`` resolves from
+    ``sys.path[0]`` — ``cp.py``'s own ``scripts/qs``, i.e. the running
+    Control Plane's tree (always ``<MAIN>``). Nothing is caught: an import
+    failure or a refusal propagates (``tool spawn`` maps a ``ValueError`` to
+    ``USAGE``; anything else is ``INTERNAL``). Only a spawn with no caller
+    model ever runs it, so the hooks, ``wait`` and the daemon never touch
+    the policy.
+    """
+    import models  # type: ignore[import-not-found]  # lazy on purpose (D6)
+
+    result: tuple[str, str | None] = models.spawn_policy(stem, lane)
+    return result
 
 
 def make_deps() -> Deps:
@@ -78,6 +97,7 @@ def make_deps() -> Deps:
         claude=liveness.ClaudeCli(run),
         popen=subprocess.Popen,
         kill=os.kill,
+        resolve_model=_policy_resolver,
     )
 
 
@@ -808,6 +828,7 @@ def _tool_handler(name: str) -> Callable[[argparse.Namespace, Io], dict[str, Any
             probe=d.probe,
             claude=d.claude,
             main=paths.main(),
+            resolve_model=d.resolve_model,
         )
         return tools.invoke(name, key=args.key, task_id=args.task, args=tool_args, token=args.token, actor="", ctx=ctx)
 

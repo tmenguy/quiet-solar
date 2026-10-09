@@ -45,7 +45,18 @@ _FLAT_TABLE = [
     ("qs-setup-task", "light"),
     ("qs-release", "fast"),
     ("qs-decompose-epic", "frontier"),
+    # QS-405 D3 — the second pipeline's flat roles.
+    ("qs-orchestrator", "frontier"),
+    ("qs-global-review", "frontier"),
+    ("qs-cross-run-review", "deep"),
+    ("qs-final-review", "frontier"),
 ]
+
+# QS-405 D4 — the stems a Control Plane tool launches: the only stems,
+# besides the planning orchestrators, whose row may depend on the lane.
+# Growing this set is a deliberate edit of this test.
+CP_LAUNCHED = frozenset({"qs-node", "qs-global-review", "qs-cross-run-review", "qs-final-review"})
+_BY_LANE_STEMS = {"qs-create-plan", "qs-diagnose-task", "qs-node"}
 
 _ROW_LITERALS = [
     ("claude", "build", "claude-opus-5-5"),
@@ -76,9 +87,13 @@ def test_classes_exact() -> None:
 
 
 def test_stems_match_registry_and_templates() -> None:
-    assert len(models.STEMS) == 22
-    assert models.STEMS == render_agents.ORCHESTRATORS | render_agents.SUBAGENTS
-    assert set(render_agents._discover_stems(TEMPLATES_DIR)) == models.STEMS
+    frozen = render_agents.ORCHESTRATORS | render_agents.SUBAGENTS
+    assert len(frozen) == 22
+    assert len(render_agents.SECOND_PIPELINE) == 5
+    assert frozen | render_agents.SECOND_PIPELINE == models.STEMS
+    # A stem may have its row before its template exists (QS-405 D1).
+    assert frozen <= set(render_agents._discover_stems(TEMPLATES_DIR)) <= models.STEMS
+    assert CP_LAUNCHED <= render_agents.SECOND_PIPELINE
 
 
 def test_phase_agents_have_policy_rows() -> None:
@@ -107,8 +122,26 @@ def test_flat_table_literal(stem: str, cls: str) -> None:
     assert models.resolve(None, stem) == cls
 
 
-def test_flat_table_covers_every_non_planning_stem() -> None:
-    assert {s for s, _ in _FLAT_TABLE} == models.STEMS - {"qs-create-plan", "qs-diagnose-task"}
+def test_flat_table_covers_every_non_by_lane_stem() -> None:
+    assert models._BY_LANE == _BY_LANE_STEMS
+    assert {s for s, _ in _FLAT_TABLE} == models.STEMS - models._BY_LANE
+
+
+def test_node_class_by_lane() -> None:
+    for lane in ("bug-product", "bug-factory"):
+        assert models.resolve(lane, "qs-node") == "deep"
+    for lane in ("feature-product", "feature-factory", "epic-product", "epic-factory"):
+        assert models.resolve(lane, "qs-node") == "frontier"
+    for lane in _ODD_LANES:
+        assert models.resolve(lane, "qs-node") == "deep"
+
+
+def test_d4_only_planning_and_cp_launched_stems_depend_on_lane() -> None:
+    by_lane = {
+        s for s in models.STEMS if len({models.resolve(lane, s) for lane in (*models.LANES, None)}) > 1
+    }
+    assert by_lane == _BY_LANE_STEMS
+    assert by_lane <= models._PLANNING | CP_LAUNCHED
 
 
 def test_unknown_stem_raises() -> None:
@@ -124,6 +157,33 @@ def test_lanes_derivation_and_lane_files() -> None:
     assert expected == models.LANES
     lane_files = {p.stem for p in (REPO_ROOT / "docs" / "workflow" / "lanes").glob("*.md")}
     assert set(models.LANES) == lane_files
+
+
+# --- spawn_policy (QS-405 D5) -------------------------------------------------
+
+
+@pytest.mark.parametrize("lane", (*models.LANES, None))
+@pytest.mark.parametrize("stem", sorted(render_agents.SECOND_PIPELINE))
+def test_spawn_policy_grid(stem: str, lane: str | None) -> None:
+    cls = models.resolve(lane, stem)
+    assert models.spawn_policy(stem, lane) == (models.model_for("claude", cls), models.effort_for(cls))
+
+
+def test_spawn_policy_fast_stem_has_no_effort() -> None:
+    assert models.resolve(None, "qs-finish-task") == "fast"
+    assert models.spawn_policy("qs-finish-task", None) == (models.model_for("claude", "fast"), None)
+
+
+@pytest.mark.parametrize("lane", ["", "not-a-lane", "feature-nope"])
+def test_spawn_policy_invalid_lane_raises(lane: str) -> None:
+    with pytest.raises(ValueError, match="is not one of models.LANES") as info:
+        models.spawn_policy("qs-node", lane)
+    assert not isinstance(info.value, models.ModelPolicyError)
+
+
+def test_spawn_policy_unknown_stem_raises() -> None:
+    with pytest.raises(models.ModelPolicyError, match="qs-nope"):
+        models.spawn_policy("qs-nope", None)
 
 
 # --- harness rows ----------------------------------------------------------
