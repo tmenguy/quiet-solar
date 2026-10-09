@@ -193,15 +193,20 @@ def check_schema(
     )
 
 
-def next_id(conn: sqlite3.Connection, kind: str, prefix: str) -> str:
-    """Allocate ``<prefix><n>`` from ``counters`` inside the caller's transaction."""
+def next_seq(conn: sqlite3.Connection, kind: str) -> int:
+    """Allocate the next number of ``kind`` from ``counters`` inside the caller's transaction (``1, 2, …``)."""
     row = conn.execute("SELECT next FROM counters WHERE kind = ?", (kind,)).fetchone()
     n = 1 if row is None else int(row[0])
     conn.execute(
         "INSERT INTO counters (kind, next) VALUES (?, ?) ON CONFLICT(kind) DO UPDATE SET next = excluded.next",
         (kind, n + 1),
     )
-    return f"{prefix}{n}"
+    return n
+
+
+def next_id(conn: sqlite3.Connection, kind: str, prefix: str) -> str:
+    """Allocate ``<prefix><n>`` from ``counters`` inside the caller's transaction."""
+    return f"{prefix}{next_seq(conn, kind)}"
 
 
 def now(clock: clock_mod.Clock) -> str:

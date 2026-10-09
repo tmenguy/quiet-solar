@@ -72,7 +72,8 @@ Kinds:
 | `hooks-settings` | `--role node\|orchestrator` | — | exempt |
 | `session status` | `[--session-id]` | — | read |
 | `snapshot` | `[--run R]` | — | read |
-| `task show` | `--task T` | — | read |
+| `task show` | `--task T` (the task in full, its ledger and `convergence` included) | — | read |
+| `ledger show` | `--task T [--phase plan\|build] [--family] [--state S[,S…]]` (see [The ledger](#the-ledger-375)) | — | read |
 | `export-summary` | `--task T --out-worktree WT` | — | read |
 | `run open` | `--name SLUG --title … [--session-id] [--session-name] [--permission-mode] [--full-grant]` | returns run | write |
 | `run claim` | `RUN [--session-id] [--session-name] [--permission-mode] [--full-grant] [--takeover]` | returns run | write |
@@ -81,7 +82,7 @@ Kinds:
 | `run set-plan` | `--run R --file F` | run | write |
 | `run close` | — | run | write |
 | `task add` | `[--run R] --title --kind epic\|feature\|bug [--target] [--parent T] [--issue N] [--lane L] [--deliverable] [--item-of T]` (`--parent` / `--item-of` must be a task of the caller's run, or of none: `CONFLICT` otherwise; `--item-of` with `--deliverable` or `--issue` is `USAGE` — a work item lands in its deliverable's PR, a deliverable is its own issue `QS_<M>`, #400) | run | write |
-| `task set` | `--task T [--issue] [--worktree] [--branch] [--pr-number --pr-url] [--ci-state --ci-sha]` (`--issue` / `--pr-number` / `--pr-url` on a work item is `INVALID_STATE`, #400) | run | write |
+| `task set` | `--task T [--issue] [--worktree] [--branch] [--pr-number --pr-url] [--ci-state --ci-sha]` (`--issue` / `--pr-number` / `--pr-url` on a work item is `INVALID_STATE`, #400; the `ci_state` vocabulary `pending\|green\|red` is child 14's contract, not checked by the schema) | run | write |
 | `task state` | `--task T --to STATE\|unblock [--note]` | run, or node (own task, node range) | write |
 | `task dep` / `task root` / `task work-list` | `add\|remove …` (both tasks of a `task dep` must be of the caller's run, or of none: `CONFLICT` otherwise) | run | write |
 | `criteria set` / `validate` / `state` | `--task T …` | run | write |
@@ -96,6 +97,11 @@ Kinds:
 | `node stop` / `node take-over` | `--task T` (`stop` on a stopped node is a noop) | run | write |
 | `node hand-back` | `--task T --summary-file F` | run, or node (own task) | write |
 | `lock acquire` / `lock release` | `--name integration:<branch> [--purpose] [--session-id] [--timeout S]` | run, or node (own deliverable, own session) | write |
+| `round start` | `--task T --phase plan\|build [--head SHA] [--base SHA]` (`--head` required for `build`) | run, or node (own task) | write |
+| `finding open` | `--task T --phase P --source S [--round R] --input F\|-` | run, or node (own task) | write |
+| `finding classify` | `ID --class must_fix\|should_fix\|nice_to_have\|out_of_scope [--note]` | run, or node (own task) | write |
+| `finding state` | `ID --to open\|resolved\|rejected\|deferred\|settled [--reason] [--commit] [--cause ID]` | run, or node (own task) | write |
+| `blast-radius set` | `--task T --value ok\|doubt\|too_large --head-sha S --review R [--reason]` | run | write |
 | `tool <name>` | `--task T --key K [--args-file F]` | per tool | write |
 
 Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 and at most 86400 seconds; `lock acquire --timeout` may be 0 (try once). `wait --poll` must also be at least 0.05 and, when both are given, no more than `--timeout`. Anything else is `USAGE`.
@@ -108,7 +114,7 @@ Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 
 - **`hooks-settings` and `version`.** No DB at all.
 - **`daemon`.** It migrates.
 - **`ensure`.** It reads the daemon lease defensively.
-- **The read commands** (`session status`, `snapshot`, `task show`, `export-summary`):
+- **The read commands** (`session status`, `snapshot`, `task show`, `ledger show`, `export-summary`):
   - a missing DB is an empty answer;
   - an older DB is `SCHEMA_PENDING` at once;
   - a newer DB is `SCHEMA_TOO_NEW`.
@@ -117,7 +123,7 @@ Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 
 
 ### Tables
 
-`harness_state.db` holds, at schema v1:
+`harness_state.db` holds, at schema v2 (v1, the tables below except the ledger; v2, the finding ledger of #375):
 
 | group | tables |
 |---|---|
@@ -127,6 +133,7 @@ Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 
 | queues and records | `messages`, `questions`, `decisions`, `digests`, `reports`, `integrations` |
 | coordination | `locks`, `cap_slots`, `tool_calls`, `waiters`, `daemon_lease`, `hook_events` |
 | bookkeeping | `meta`, `counters` |
+| the ledger (v2) | `rounds`, `findings`, `finding_events`, `blast_radius` (see [The ledger](#the-ledger-375)) |
 
 The schema version is `PRAGMA user_version`.
 
@@ -155,9 +162,10 @@ Before migrating an existing DB, the daemon backs it up to `QS_CP_BACKUP_DIR`, w
 
 ### Migration recipe for later children (#375 and others)
 
-1. **Append** `Migration(n + 1, "<name>", (<single statements>…))` to `MIGRATIONS` in `migrations.py`.
+1. **Append** `Migration(n + 1, "<name>", (<single statements>…))` to `MIGRATIONS` in `migrations.py` (v2 is #375's `Migration(2, "the finding ledger (#375)", schema_ledger.STATEMENTS)`).
    - Use single statements only, never `executescript`.
-   - A test pins the versions as `1..N`.
+   - Keep the statements in a module named by what it holds (`schema_ledger.py`), so a renumbering at a catch-up leaves no wrong name.
+   - A test pins the versions as `1..N`. The tests use `conftest.CUR` / `NEXT` (the current and a newer version), never a literal, so a renumbering needs no test edit.
 2. **Land it on `main`.** The next `ensure` sees a lower-schema daemon lease, stops the old daemon (or SIGKILLs a hung one, see below; details in [The daemon and `ensure`](#the-daemon-and-ensure)), and starts one that backs up and migrates. If the old daemon cannot be proven gone after `DAEMON_RESTART_WAIT_S`, `ensure` answers `restart_pending` and starts nothing; `wait` then exits 5 with `restart_wait`.
 3. **If the migration fails,** the daemon writes `<db>.migrate-error.json`. `ensure` does not respawn the daemon for `MIGRATE_BACKOFF_S`, and waiting commands get `SCHEMA_PENDING` with the error.
 
@@ -175,6 +183,126 @@ Before migrating an existing DB, the daemon backs it up to `QS_CP_BACKUP_DIR`, w
   - The wait ends as soon as the lease is cleared or another daemon's pid holds it, the singleton is free, or the pid is proven dead.
   - When `DAEMON_RESTART_WAIT_S` passes, `ensure` sends SIGKILL only if the old pid is still proven alive, has the same start time, and its heartbeat has not moved since the SIGTERM and is at least `STALE_AFTER_S` old; it then waits up to `KILL_WAIT_S` (same exits) and starts the new daemon.
   - Otherwise (liveness unknown with the singleton held, a heartbeat still moving, or a SIGKILL that did not take) it answers `restart_pending` for an older schema or `stale_alive` for the same one, and starts nothing. `wait` treats both as `restart_wait` (exit 5).
+
+## The ledger (#375)
+
+The finding ledger is the shared, durable record of the review findings of both loops (plan and build) of the second pipeline's nodes (6b). It **recognises, records and flags by code**; the node judges. It refuses only malformed input (`USAGE`), a token used out of its scope (`CONFLICT`), and a red-CI finding off the task's red sha (`INVALID_STATE`). Nothing is refused to force convergence. Code: [`ledger.py`](../../scripts/qs/control_plane/ledger.py), schema [`schema_ledger.py`](../../scripts/qs/control_plane/schema_ledger.py); design: [`docs/stories/QS-375.story.md`](../stories/QS-375.story.md).
+
+### The tables
+
+| table | one row per | notes |
+|---|---|---|
+| `rounds` | review pass of one phase of one task: `(task_id, phase, round)` | `base_sha..head_sha` is the round's diff. It shares the natural key `(task_id, phase, round)` with its `reports` rows, with no foreign key |
+| `findings` | finding | its `source`, `reviewer`, `severity`, `classification`, `category`, `title`, `body`, `file` / `symbol` / lines, `fingerprint`, `replay_key`, `matched_id`, `flags` (JSON), `unchanged_lines`, `state`, `decided_seq`, `reason`, `resolved_sha`, `ci_sha`, `integration_id`, `actor` |
+| `finding_events` | `classify` or `state` change | `from_value` / `to_value`, `reason`, `commit_sha`, `cause_id`, the phase's latest `round` at the time, `actor`. A finding's opening is its row, so there is no `open` event |
+| `blast_radius` | rating, append-only | `value` (`ok\|doubt\|too_large`), `head_sha`, `review` (the id of the review it came from), `reason`, `actor` |
+
+The vocabularies live in `schema_ledger`: `PHASES` (`plan`, `build`), `SOURCES` (reviewer-type `reviewer`, `coderabbit`, `global_review`, `cross_run_review`; authority `ci`, `gate`, `detector`, `orchestrator`, `maintainer`), `SEVERITIES`, `CLASSES` (the severities plus `out_of_scope`), `STATES` (`open`, `resolved`, `rejected`, `deferred`, `settled`) and `CATEGORIES` (`correctness`, `edge-case`, `test`, `security`, `performance`, `design`, `scope`, `docs`, `style`, `ci`, `gate`, `other`). `CATEGORIES` is checked in Python, not by SQL, so a later child extends it without a migration.
+
+### Rounds
+
+`round start` numbers rounds `1, 2, …` per `(task, phase)` and answers `{"ok": true, "task_id", "phase", "round", "base_sha", "head_sha"}`.
+
+- **The base.** Round 1 takes the node's `--base` (NULL allowed): `git merge-base origin/main QS_<N>` for a deliverable, the fork point on the local `QS_<N>` for a work item. A later round defaults to the previous round's head; after a catch-up with `main`, the node passes `--base <the catch-up merge commit>`, so `main`'s changes stay out of the delta.
+- **`--head`** is required for `build` rounds, optional for `plan`.
+- **What is not a round:** a catch-up's conflict-resolution delta. Every `round start` call is a new round (no idempotency key); a restarted node, or one that lost `round start`'s answer, reads `latest_round` and its head through `ledger show` before calling it again.
+- `--head` and `--base` are stripped; a blank one is absent.
+
+### Opening findings
+
+`finding open` reads one JSON object, or a non-empty list, from a file or from stdin (`--input -`), and opens it in one transaction. It answers **only the ids**, one per item in order: `{"ok": true, "ids": [...]}`. `--round` defaults to the phase's latest round, or `0` before any round; a given `--round` must be `>= 1` and exist (`NOT_FOUND`).
+
+| key | type | required |
+|---|---|---|
+| `severity` | `must_fix\|should_fix\|nice_to_have` | yes, except `ci` / `gate` (overridden to `must_fix`) |
+| `category` | one of `CATEGORIES` | yes |
+| `title` | string holding at least one letter or digit | yes |
+| `body` | string | yes |
+| `file`, `symbol` | string; `file` repo-relative and normalised (NFC, each segment stripped, `a//b/ ./c` → `a/b/c`; absolute, a drive letter, `..`, a backslash or a `:<line>` suffix is `USAGE`: lines go in `line_start` / `line_end`), `symbol` trimmed and NFC | no |
+| `line_start`, `line_end` | int `>= 1`; `line_end` defaults to `line_start` | no |
+| `reviewer` | string, trimmed and NFC (the lens, e.g. `qs-review-blind-hunter`) | no |
+| `unchanged_lines` | bool, recorded as given (`1` / `0` / NULL) | no |
+| `relates_to` | list of finding ids, de-duplicated (`NOT_FOUND` if one is unknown, or of another run) | no |
+| `sha` | string | `ci` only, required there |
+| `integration_id` | int | `gate` only, required there |
+
+An unknown key, a wrong type, a value off its vocabulary, `line_start > line_end`, `line_end` alone, a bad path, an integer beyond SQLite's range, a lone surrogate in any string, the separator U+001F in `title`, `file`, `symbol`, `reviewer` or `sha`, non-JSON or non-UTF-8 input (file or stdin) and an empty object or list are all `USAGE`. The optional key fields (`file`, `symbol`, `reviewer`, `sha`) are stripped, and a blank one is absent; `title` and `body` are stored as given.
+
+- **`ci` findings** need `sha` equal to `tasks.ci_sha` while `tasks.ci_state = 'red'`, else `INVALID_STATE`. They are stored with `ci_sha`, `must_fix` / `must_fix`.
+- **`gate` findings** need `integration_id`, an `integrations` row whose item or deliverable is the task (`NOT_FOUND` / `CONFLICT`), and are stored `must_fix` / `must_fix`.
+- **Exact replay.** `replay_key` is a `sha256` over task, phase, round, source, `reviewer`, the fingerprint, the normalised title, the lines, `ci_sha` and `integration_id` (the round is left out for `ci` and `gate`). A replayed item returns its existing id, even after a new round started or the CI turned green; its other fields (`severity`, `body`) are ignored: **the first write wins**. Two findings on one symbol, a second reviewer and a red CI on a new sha are never merged.
+
+### Matching, flags and the born state
+
+- **The fingerprint** is `sha256(file␟symbol␟category)` (`␟` is U+001F, NULL encoded as ""), plus `␟norm(title)` when both `file` and `symbol` are empty. `norm` applies NFKC, case-folds, and folds every run of non-alphanumerics into one space. Task and lines are left out.
+- **The family:** the task's deliverable (or the task itself) and every work item of that deliverable. Matching looks across the family and across phases; inside a batch, item 2 can match item 1.
+- **Flags** are computed at open and stored on the row: `{"kind", "id", "state", "reason", "commit", "source", "strong", "cross_task", "escalated"}`. They record what was true at open; `ledger show` adds each flagged row's `current_state`.
+  - `matches`: an earlier family row with the same fingerprint. `strong` when the normalised title is equal too; `escalated` on a strong match when the new item is `must_fix` and the flagged row's effective class (`classification`, else `severity`) is not.
+  - `overlaps_fix`: an earlier family row, `resolved` or `settled`, with the same `file` and the same non-empty `symbol` but another fingerprint: the code-detected flip-flop candidates.
+  - `relates_to`: the rows the item names. This is how a reviewer holding the ledger excerpt, or the orchestrator opening a CI finding, points at a settled or resolved row that has no shared symbol.
+  - `cross_task` is true on any kind whose row is on another task; `strong` and `escalated` are false off `matches`.
+- **"Latest"** is the most recent state decision: the highest `decided_seq`, a monotonic number drawn from `counters` (kind `finding_decision`, `db.next_seq`) at birth and at every state change, never on a state-preserving classify, a noop or a replay.
+- **`matched_id`** is the first hit of: the latest same-task strong match, the latest family strong match, the latest weak match.
+- **Born closed.** A reviewer-type item whose latest **same-task** strong match is `rejected` or `settled` is born in that state, whatever its severity, with the reason `matches #<id>: <reason>` (a reason already starting with `matches #` is reused verbatim, so it names the root and never nests). It stays closed until the node reopens it.
+- **Born open:** everything else, with its `reason` NULL and the earlier rationale in its flag: a weak match, a cross-task strong match with no same-task one (the node re-assesses it in the deliverable's wider context; once decided, that decision is the task's own), a same-task strong match that is `open`, `deferred` or `resolved`, an overlap or a relation alone, and **every** authority source (`ci`, `gate`, `detector`, `orchestrator`, `maintainer`). A red CI check reopens a settled decision, never the reverse.
+
+### States and classification
+
+- **`finding state`**: free transitions between `open`, `resolved`, `rejected`, `deferred` and `settled`. `resolved` needs `--commit`; `rejected` and `settled` need `--reason`; a reopen (`open`) and `deferred` take an optional `--reason` (blank is none); `--commit` on any other target is `USAGE`. `--cause <id>` (any target, `NOT_FOUND` if unknown or of another run, `USAGE` if it is the finding itself) records why, e.g. the red CI finding that reopened a settled row. The same state is a noop (`"changed": false`, no event), checked after the arguments and `--cause`. The row holds only the latest state (`reason` the new `--reason` or NULL, `resolved_sha` set on `resolved` only); the history is in `finding_events`. Answers `{"ok": true, "finding_id", "state", "changed"}`.
+- **`finding classify`** records the class in any state, with a `classify` event (its reason is `--note`), and drives open ⇄ deferred: an open row classed `nice_to_have` or `out_of_scope` moves to `deferred`; a deferred row classed `must_fix` or `should_fix` moves back to `open` (a reopening, so it blocks again). A move also writes a `state` event and sets the row's `reason`, both `classified <class>`. The same class is a noop. Answers `{"ok": true, "finding_id", "state", "classification", "changed"}`. At birth `classification` is NULL, except `ci` / `gate` (`must_fix`).
+- **Deferred rows** stay in `findings`, with their class: `ledger show --state deferred`, `task show`, `snapshot` and the exported summary show them, and the run's final review (child 13) reads them.
+
+### Who writes
+
+`ledger.writer(conn, token, task_id, *, kinds)` is the one check, the point child 15 extends: a node token writes on its own task, a run token on any task of its run (another run's task is `CONFLICT`). The arguments are validated first (`USAGE`); then the ID-taking commands check the token, then the finding (`NOT_FOUND`), then its task's scope, so a stale token is `STALE_TOKEN`, never `NOT_FOUND`. `relates_to` and `--cause` read only findings of the writer's run (`NOT_FOUND` otherwise). The CLI flags (`--head`, `--base`, `--commit`, `--reason`, `--note`, `--head-sha`, `--review`) are stripped; a blank optional one is absent, but a blank `--commit` on another target than `resolved` is still `USAGE`. A task with no run is written with a run token and records the principal's `run_id`. Every row and event records its `actor` (`orchestrator` for a run token, `node:<task>` for a node token); `source` is recorded as given. `blast-radius set` takes a run token only: a node never rates its own blast radius, which feeds the merge's second human gate. Cross-run writes wait on child 15.
+
+### Convergence
+
+`ledger.convergence(conn, task_id, phase)` → `{converged, consistent, blocking, latest_round, counts}`, shown under `convergence: {plan, build}` by `task show` and `ledger show`.
+
+- **`converged`**: the node has declared it. `latest_round >= 1` and the latest `reports` row (highest id) of `(task, phase, latest_round)` has `status = 'converged'`; a report posted with the run token counts too. A round still in review never reads as converged, a later non-converged report of the same round withdraws the declaration, and a report counts only when its `phase` is exactly `plan` or `build`.
+- **`blocking`**: the task's rows of that phase that are `open` with an effective class of `must_fix` or `should_fix` (round-0 rows and unclassified should-fixes included; an open nice-to-have or `out_of_scope` row never blocks).
+- **`consistent`**: `blocking == []`. A node that declares convergence with blocking rows still open is converged and **not** consistent; nothing overrides it, so a flip-flop left open (for example while it waits for another perspective) never stalls the loop by code. The orchestrator, child 7's merge conditions and child 17 read the discrepancy.
+- No hard round stop here: `ROUNDS_ALERT` stays child 14's.
+
+`ledger.convergence` on an unknown task is `NOT_FOUND`.
+
+**`blast-radius set`** appends a rating and answers `{"ok": true, "id", "task_id", "value", "head_sha"}`. `ledger.blast_radius(conn, task_id, head_sha=None)` is child 7's reader: the latest rating (`head_sha` omitted), or the latest for that sha, else `None`; a given but blank `head_sha` is `None`, never another head's rating.
+
+### Reading the ledger
+
+`ledger show --task T [--phase P] [--family] [--state S[,S…]]` answers `{"ok": true, "task_id", "rounds", "findings", "finding_events", "blast_radius", "convergence": {"plan", "build"}}`:
+
+- `findings` are the rows (flags parsed), each flag with the flagged row's `current_state`; `finding_events` are those rows' events;
+- `--phase` filters `rounds` and `findings`; `--state` filters `findings` (an unknown or empty state list is `USAGE`); `--family` widens `findings` and their events to the family;
+- `rounds` and `blast_radius` (every rating, oldest first) stay per task; no DB is `NOT_FOUND`, as for `task show`.
+
+`task show` carries the same ledger keys (`rounds`, `findings`, `finding_events`, `blast_radius`, `convergence`), unfiltered, next to its `task`.
+
+### The focused-reviewer contract
+
+**What a reviewer receives** in its prompt from the node:
+
+- **the diff:** `git diff <base>..<head>` from `round start`'s answer (round 1 is the full integrated diff; later rounds are the delta);
+- **the acceptance criteria:** `task show` → `criteria`;
+- **the ledger excerpt:** for example `ledger show --task T --phase P --family --state open,rejected,settled,deferred` (6b may tune the filter), so it does not raise them again. `--family` widens only `findings` and their events to the family; `rounds`, `blast_radius` and `convergence` stay per task. A re-raise of a work item's closed row on the deliverable is born `open`, `cross_task`, and blocks until the node triages it;
+- **the write coordinates:** `--task`, `--phase`, `--round` and the node's `--token` (the reviewer runs inside the node's session, so a superseded node's reviewers get `STALE_TOKEN` too);
+- **its instructions:** apply a relevance-to-this-task test; suggest no refactor outside the scope; in a later round raise no finding on lines the round did not change (a red CI is the exception); set `unchanged_lines` from the diff; put the ids of the excerpt rows a finding touches in `relates_to`. These are instructions only: the ledger records and refuses nothing for them.
+
+**What it writes:** one heredoc call, `finding open --source reviewer --input -`, with the items above. **What it returns** to the node: only the ids. It calls no other ledger command (the token would allow `finding state` / `finding classify` on its task: an accepted risk, forbidden by this contract and by 6b's reviewer templates, with every write's actor recorded; a reviewer-scoped token is 6b's / 15's).
+
+**Then the node:**
+
+1. reads the rows and flags with `ledger show`, the `escalated`, `cross_task` and weak-match flags first;
+2. triages them (`finding classify`, `finding state`). On a flip-flop it may ask the orchestrator for another perspective (`question open` or `msg post`) instead of deciding alone; that decision lands as `finding state --to settled` with its rationale, written with the run token (actor `orchestrator`);
+3. reads `convergence.blocking`;
+4. posts its report with the round number, `converged` when it judges the loop done, with its `blocking` ids in the report's fields. The orchestrator does the same when it declares with the run token.
+
+**A correction from the orchestrator:** `finding open` (`ci`, `gate`, `detector`, `orchestrator` or `maintainer`, with `relates_to` when it touches a settled row), then `msg post --kind fix` with `{"finding_id": <id>, …}` in the payload (a convention; `messages` does not check it).
+
+### What child 17 reads
+
+From the tables alone: the rounds; the findings per round with `source` and `reviewer`; `unchanged_lines`; the classification and its changes (`classify` events); the reopenings (`state` events to `open`, with `cause_id`); the convergence declarations (`consistent` is computed live, so the node's `converged` report carries its `blocking` ids); the flip-flops (`overlaps_fix` / `relates_to` flags, `matches` on a resolved row, `settled` rows and their rationale).
 
 ## Locks and caps
 
@@ -448,7 +576,7 @@ Most are overridable by a function argument. These are module-level only (tests 
 | `faults.hit(name)` | no-op | `faults.arm(name, exc, skip=n)` |
 | `merge_policy` | refuses | `install(fn)` |
 | `Deps.resolve_model` → `Ctx.resolve_model` (QS-405) | `cli._policy_resolver`: `models.spawn_policy`, imported at call time — the Control Plane's one import outside the standard library (a test pins it) | the same resolver, or a stand-in; child 15 reuses the seam |
-| `export.LEDGER_SECTIONS` | empty: "No ledger recorded." | #375 fills it |
+| `export.LEDGER_SECTIONS` | the ledger's three sections (`Rounds`, `Findings`, `Blast radius`), registered by `cli` at import (`ledger.register_export()`); an empty registry renders "No ledger recorded." | the conftest teardown clears it and registers it again |
 | the daemon's `tick_hooks` | none | child 14's active loop. A tick hook must return within `STALE_AFTER_S` or beat the lease itself (`daemon.beat(conn, clock)`); the daemon beats before and after every hook. `ensure` SIGKILLs only a daemon whose heartbeat is at least `STALE_AFTER_S` old, so a hook that keeps this contract is never killed |
 
 ## Conventions: what no hook enforces
