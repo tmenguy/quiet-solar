@@ -209,7 +209,7 @@ erDiagram
     nodes |o--o{ reports : "node_id"
     tasks ||--o{ integrations : "item_task_id / deliverable_id"
     runs ||--o{ decisions : ""
-    runs ||--o{ alerts : "one row per occurrence (v2)"
+    runs ||--o{ alerts : "one row per occurrence (v3)"
     messages |o--o| alerts : "message_id"
 
     runs {
