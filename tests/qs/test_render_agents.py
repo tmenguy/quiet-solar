@@ -408,7 +408,7 @@ def test_render_policy_path_translates_per_harness(tmp_path: Path) -> None:
     )
     agents_c = out / ".claude" / "agents"
     agents_o = out / ".opencode" / "agents"
-    assert (agents_c / "qs-finish-task.md").read_text() == "model=claude-haiku-4-5 effort=None\n"
+    assert (agents_c / "qs-finish-task.md").read_text() == "model=claude-haiku-5-5 effort=None\n"
     assert (agents_o / "qs-finish-task.md").read_text() == (
         "model=github-copilot/claude-haiku-4.5 effort=None\n"
     )
@@ -432,7 +432,7 @@ def test_render_context_missing_model_key_applies_policy(tmp_path: Path) -> None
     out = tmp_path / "o"
     r.render_all(tmp_path, context=ctx, out_root=out, templates_dir=tdir)
     agents_c = out / ".claude" / "agents"
-    assert (agents_c / "qs-finish-task.md").read_text() == "model=claude-haiku-4-5 effort=None\n"
+    assert (agents_c / "qs-finish-task.md").read_text() == "model=claude-haiku-5-5 effort=None\n"
     assert (agents_c / "qs-implement-task.md").read_text() == "model=claude-opus-5-5 effort=high\n"
     for hdir in (".claude", ".opencode"):
         for f in (out / hdir / "agents").glob("*.md"):

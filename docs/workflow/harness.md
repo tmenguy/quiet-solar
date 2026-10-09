@@ -395,7 +395,7 @@ hand-sets a model.
   | `deep` | `claude-opus-5-5` | `claude-opus-5.5` | `high` |
   | `frontier` | `claude-fable-5-1` | `gpt-6-astra` | `high` |
   | `light` | `claude-sonnet-5` | `claude-sonnet-5` | `medium` |
-  | `fast` | `claude-haiku-4-5` | `claude-haiku-4.5` | — |
+  | `fast` | `claude-haiku-5-5` | `claude-haiku-4.5` | — |
 
   `deep` → Opus 5.5 for analysis/review; `build` → Opus 5.5 too since
   2026-10-04 (maintainer; it kept Opus 4.8 for implementer footprint

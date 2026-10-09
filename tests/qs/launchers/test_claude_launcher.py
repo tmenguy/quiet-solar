@@ -1434,7 +1434,7 @@ def test_fast_phase_without_prior_effort_level(tmp_path: Path) -> None:
         ("create-plan", "bug-product", "claude-opus-5-5"),
         ("create-plan", None, "claude-opus-5-5"),
         ("review-task", None, "claude-fable-5-1"),
-        ("finish-task", None, "claude-haiku-4-5"),
+        ("finish-task", None, "claude-haiku-5-5"),
     ],
 )
 def test_payload_names_phase_model(

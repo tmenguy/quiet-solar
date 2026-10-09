@@ -50,7 +50,7 @@ HARNESS_MODELS: dict[str, dict[str, str]] = {
         "deep": "claude-opus-5-5",  # QS-367 E2: analysis/review
         "frontier": "claude-fable-5-1",
         "light": "claude-sonnet-5",
-        "fast": "claude-haiku-4-5",
+        "fast": "claude-haiku-5-5",  # maintainer 2026-10-09 (QS-406 T1): Haiku 4.5 is deprecated; 5.5 has auto mode
     },
     "opencode": {  # OpenCode v2.0.14, github-copilot
         "build": "github-copilot/claude-opus-5.5",  # maintainer 2026-10-04 (was 4.8, QS-367 E1)
@@ -71,7 +71,7 @@ CLAUDE_CLI_FLOOR: tuple[int, int, int] = (2, 1, 280)
 
 # --- thinking effort per class (D19) ---------------------------------------
 # Claude Code frontmatter ``effort`` / settings ``effortLevel`` vocabulary
-# (low | medium | high | xhigh | max). None = do not set (Haiku 4.5 does
+# (low | medium | high | xhigh | max). None = do not set (the fast row was Haiku 4.5, which does
 # not take the parameter). Claude-only: OpenCode documents no per-agent effort.
 CLASS_EFFORT: dict[str, str | None] = {
     "build": "high",

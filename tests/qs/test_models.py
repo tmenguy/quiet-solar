@@ -52,7 +52,7 @@ _ROW_LITERALS = [
     ("claude", "deep", "claude-opus-5-5"),
     ("claude", "frontier", "claude-fable-5-1"),
     ("claude", "light", "claude-sonnet-5"),
-    ("claude", "fast", "claude-haiku-4-5"),
+    ("claude", "fast", "claude-haiku-5-5"),
     ("opencode", "build", "github-copilot/claude-opus-5.5"),
     ("opencode", "deep", "github-copilot/claude-opus-5.5"),
     ("opencode", "frontier", "github-copilot/gpt-6-astra"),
