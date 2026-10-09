@@ -129,6 +129,9 @@ class TestSeams:
         assert isinstance(s.runner, runner.Runner)
         assert isinstance(s.probe, liveness.ProcessProbe) and isinstance(s.claude, liveness.ClaudeCli)
         assert s.main == fake_main
+        from control_plane import ciwatch
+
+        assert type(s.github) is ciwatch.GitHub
 
 
 def test_version_lists_tools_and_tick_hooks(invoke, monkeypatch) -> None:

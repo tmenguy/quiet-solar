@@ -12,8 +12,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from . import liveness, paths, runner, ticks
+
+if TYPE_CHECKING:
+    from .ciwatch import GitHub
 
 
 @dataclass(frozen=True)
@@ -24,11 +28,21 @@ class Seams:
     probe: liveness.ProcessProbe
     claude: liveness.ClaudeCli
     main: Path
+    github: GitHub
 
 
 def make_seams() -> Seams:
+    from . import ciwatch
+
     run = runner.Runner()
-    return Seams(runner=run, probe=liveness.ProcessProbe(run), claude=liveness.ClaudeCli(run), main=paths.main())
+    main = paths.main()
+    return Seams(
+        runner=run,
+        probe=liveness.ProcessProbe(run),
+        claude=liveness.ClaudeCli(run),
+        main=main,
+        github=ciwatch.GitHub(run, main),
+    )
 
 
 _seams: Seams | None = None
@@ -44,17 +58,18 @@ def seams() -> Seams:
 
 def _builtin() -> list[tuple[str, ticks.Hook]]:
     """The built-in hooks, in tick order (each task adds its own, and its name to ``BUILTIN_NAMES``)."""
-    from . import detectors, hookroute, selfcheck
+    from . import ciwatch, detectors, hookroute, selfcheck
 
     return [
         (selfcheck.CODE_VERSION, selfcheck.code_version_hook),
         (selfcheck.SELFCHECK, selfcheck.selfcheck_hook),
         (detectors.DETECTORS, detectors.detectors_hook),
         (hookroute.HOOK_ROUTE, hookroute.hook_route_hook),
+        (ciwatch.CI_WATCH, ciwatch.ci_watch_hook),
     ]
 
 
-BUILTIN_NAMES: frozenset[str] = frozenset({"code_version", "selfcheck", "detectors", "hook_route"})
+BUILTIN_NAMES: frozenset[str] = frozenset({"code_version", "selfcheck", "detectors", "hook_route", "ci_watch"})
 
 
 def register_builtin() -> None:
@@ -69,6 +84,7 @@ def _reset_for_tests() -> None:
     """Drop the cached seams and every hook module's in-memory state (a new daemon)."""
     global _seams
     _seams = None
-    from . import detectors
+    from . import ciwatch, detectors
 
     detectors._reset_for_tests()
+    ciwatch._reset_for_tests()

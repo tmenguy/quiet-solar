@@ -67,6 +67,7 @@ MODULES = (
     "selfcheck",
     "detectors",
     "hookroute",
+    "ciwatch",
     "cli",
 )
 for _name in MODULES:
@@ -74,6 +75,7 @@ for _name in MODULES:
 
 from control_plane import (  # noqa: E402
     activeloop,
+    ciwatch,
     cli,
     clock,
     codever,
@@ -298,6 +300,28 @@ class FakeKill:
             self.on_call(pid, sig)
 
 
+class FakeGitHub(ciwatch.GitHub):
+    """Scripted ``prs``: a ``PrCi`` per PR number (absent → ``None``), a rate, or a ``CiFailure``; counts calls."""
+
+    def __init__(self) -> None:
+        super().__init__(FakeRunner(), Path("/nonexistent"))
+        self.prs_by_number: dict[int, ciwatch.PrCi] = {}
+        self.rate = ciwatch.Rate(5000, None)
+        self.fail: ciwatch.CiFailure | None = None
+        self.calls: list[list[int]] = []
+
+    def prs(self, numbers: Sequence[int]) -> tuple[dict[int, ciwatch.PrCi | None], ciwatch.Rate]:
+        self.calls.append(list(numbers))
+        if self.fail is not None:
+            raise self.fail
+        return {n: self.prs_by_number.get(n) for n in numbers}, self.rate
+
+
+@pytest.fixture
+def fake_github() -> FakeGitHub:
+    return FakeGitHub()
+
+
 @pytest.fixture
 def fake_probe() -> FakeProbe:
     return FakeProbe()
@@ -346,7 +370,9 @@ def conn(migrated: Path) -> Iterator[Any]:
 
 
 @pytest.fixture(autouse=True)
-def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deps: cli.Deps) -> Iterator[FakeProcessSetup]:
+def _cp_isolation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deps: cli.Deps, fake_github: FakeGitHub
+) -> Iterator[FakeProcessSetup]:
     for name in ENV_CLEARED:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("QS_CP_DB", str(tmp_path / "state" / "test_state.db"))
@@ -370,12 +396,15 @@ def _cp_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deps: cli.Dep
     monkeypatch.setattr(
         activeloop,
         "make_seams",
-        lambda: activeloop.Seams(runner=deps.runner, probe=deps.probe, claude=deps.claude, main=fake_main),
+        lambda: activeloop.Seams(
+            runner=deps.runner, probe=deps.probe, claude=deps.claude, main=fake_main, github=fake_github
+        ),
     )
     faults.reset()
     # A whole registry for every test, built before the test patches anything (the teardown below runs
     # while the test's monkeypatches are still in place).
     ticks._reset_for_tests()
+    activeloop._reset_for_tests()
     activeloop.register_builtin()
     try:
         yield setup
