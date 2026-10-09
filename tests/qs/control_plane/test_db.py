@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 from control_plane import db, errors, migrations, paths
 
+from .conftest import CUR, V_NEXT
+
 
 class TestConnect:
     def test_never_creates_the_file(self, db_path: Path) -> None:
@@ -37,17 +39,17 @@ class TestWrite:
         with pytest.raises(RuntimeError), db.write(conn):
             conn.execute("INSERT INTO meta (key, value) VALUES ('b', '2')")
             raise RuntimeError
-        assert [r[0] for r in conn.execute("SELECT key FROM meta")] == ["a"]
+        assert [r[0] for r in conn.execute("SELECT key FROM meta WHERE key IN ('a', 'b')")] == ["a"]
         assert not conn.in_transaction
 
     def test_write_after_a_migration_is_refused(self, conn: sqlite3.Connection, migrated: Path) -> None:
         other = sqlite3.connect(migrated)
-        other.execute("PRAGMA user_version = 2")
+        other.execute(f"PRAGMA user_version = {V_NEXT}")
         other.close()
         with pytest.raises(errors.CpError) as exc, db.write(conn):
             conn.execute("INSERT INTO meta (key, value) VALUES ('a', '1')")
-        assert exc.value.code == "SCHEMA_TOO_NEW" and exc.value.extra == {"db_version": 2, "code_version": 1}
-        assert conn.execute("SELECT count(*) FROM meta").fetchone()[0] == 0
+        assert exc.value.code == "SCHEMA_TOO_NEW" and exc.value.extra == {"db_version": V_NEXT, "code_version": CUR}
+        assert conn.execute("SELECT count(*) FROM meta WHERE key = 'a'").fetchone()[0] == 0
 
     def test_busy(self, conn: sqlite3.Connection, migrated: Path) -> None:
         holder = db.connect(migrated)
@@ -86,7 +88,7 @@ class TestProbeAndSidecar:
     def test_probe_version(self, db_path: Path) -> None:
         assert db.probe_version(db_path) is None
         migrations.migrate(db_path, role="test")
-        assert db.probe_version(db_path) == 1
+        assert db.probe_version(db_path) == CUR
         with db.file_lock(paths.sidecar(db_path, ".migrate.lock"), exclusive=True, timeout=0):
             assert db.probe_version(db_path) == -1
 
@@ -114,7 +116,7 @@ class TestCheckSchema:
 
     @pytest.mark.parametrize("wait", [False, True])
     def test_newer_refuses(self, migrated: Path, fake_clock, wait: bool) -> None:
-        _set_version(migrated, 2)
+        _set_version(migrated, V_NEXT)
         calls: list[int] = []
         with pytest.raises(errors.CpError) as exc:
             db.check_schema(migrated, wait=wait, clock=fake_clock, ensure=lambda: calls.append(1) or {})

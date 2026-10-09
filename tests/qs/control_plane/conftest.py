@@ -38,6 +38,7 @@ MODULES = (
     "paths",
     "liveness",
     "schema_v1",
+    "schema_v2",
     "migrations",
     "db",
     "daemon",
@@ -77,6 +78,9 @@ from control_plane import (  # noqa: E402
     tools,
 )
 from control_plane.runner import RunResult  # noqa: E402
+
+CUR = migrations.current_schema_version()  # the schema this code writes (QS-406 §11: pins rebased on it)
+V_NEXT = CUR + 1  # a schema newer than the code
 
 REAL_PROCSETUP_GET = procsetup.get
 REAL_CODE_ROOT = paths.code_root

@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from control_plane import export, snapshot
 
-from .conftest import ORCH, insert_node, open_run, run_cli, sql
+from .conftest import CUR, ORCH, insert_node, open_run, run_cli, sql
 
 GOLDEN = Path(__file__).parent / "golden"
 
@@ -177,7 +177,8 @@ def busy_world(world, fake_clock) -> dict[str, Any]:
     )
     sql(
         w["db"],
-        "INSERT INTO daemon_lease (id, pid, schema_version, started_at, heartbeat_at) VALUES (1, 9, 1, 'x', '2026-10-03T11:59:50.000000Z')",
+        "INSERT INTO daemon_lease (id, pid, schema_version, started_at, heartbeat_at) VALUES (1, 9, ?, 'x', '2026-10-03T11:59:50.000000Z')",
+        [CUR],
     )
     sql(
         w["db"],
@@ -206,7 +207,7 @@ class TestSnapshot:
         assert snap["queues"] == [
             {"run_id": "R1", "recipient": "orchestrator", "depth": 3, "in_flight": 0, "dead": 0, "oldest_age_s": 0.0}
         ]
-        assert snap["daemon"]["heartbeat_age_s"] == 10.0 and snap["daemon"]["code_schema_version"] == 1
+        assert snap["daemon"]["heartbeat_age_s"] == 10.0 and snap["daemon"]["code_schema_version"] == CUR
         assert snap["tool_calls_in_flight"][0]["age_s"] == 60.0
         assert snap["alerts"][0]["detail"] == {"kind": "queue_not_draining"}
         assert snap["reports"][0]["fields"] == {"tests": 1}

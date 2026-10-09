@@ -13,9 +13,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from control_plane import cli, migrations, schema_v1, tools
+from control_plane import cli, migrations, tools
 
-from .conftest import ORCH, agent, insert_node, insert_task, open_run, run_cli, sql
+from .conftest import ORCH, V_NEXT, agent, insert_node, insert_task, open_run, run_cli, sql
 
 EXEMPT = {"version", "daemon", "ensure", "hook stop", "hook pre-tool-use", "hook pre-push", "hooks-settings"}
 READ = {"session status", "snapshot", "task show", "export-summary"}
@@ -129,7 +129,10 @@ def _other_task(argv: list[str]) -> list[str]:
 
 
 def counts(path: Path) -> dict[str, int]:
-    return {t: sql(path, f"SELECT count(*) FROM {t}")[0][0] for t in schema_v1.TABLES}
+    tables = [
+        r[0] for r in sql(path, "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+    ]
+    return {t: sql(path, f"SELECT count(*) FROM {t}")[0][0] for t in tables}
 
 
 @pytest.fixture
@@ -276,7 +279,7 @@ def test_read_commands_never_wait(world, name: str, fake_popen, fake_clock) -> N
 
 
 def test_an_older_db_with_a_migrating_daemon_proceeds(world, fake_popen, monkeypatch) -> None:
-    v2 = migrations.Migration(2, "test v2", ("CREATE TABLE extra (a INTEGER)",))
+    v2 = migrations.Migration(V_NEXT, "test v2", ("CREATE TABLE extra (a INTEGER)",))
     monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, v2))
     fake_popen.on_call = lambda argv, kw: migrations.migrate(world["db"], role="test")
     code, out = run_cli("decision", "add", "--text", "t", "--reason", "r", "--source", "s", "--token", world["token"])

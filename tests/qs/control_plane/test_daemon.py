@@ -16,9 +16,9 @@ from typing import Any
 import pytest
 from control_plane import cli, clock, daemon, db, errors, migrations, paths
 
-from .conftest import FakeKill, FakePopen, FakeProbe
+from .conftest import CUR, V_NEXT, FakeKill, FakePopen, FakeProbe
 
-V2 = migrations.Migration(2, "test v2", ("CREATE TABLE extra (a INTEGER)",))
+V2 = migrations.Migration(V_NEXT, "test v2", ("CREATE TABLE extra (a INTEGER)",))
 
 
 def _lease(path: Path) -> dict[str, Any] | None:
@@ -59,12 +59,12 @@ class TestRun:
             fake_clock, probe=fake_probe, db_path=db_path, tick_hooks=[lambda c, k: seen.append((c, k))], max_ticks=3
         )
         assert result["ticks"] == 3 and result["exit"] == "max_ticks"
-        assert result["migrated"]["to"] == 1
+        assert result["migrated"]["to"] == CUR
         assert len(seen) == 3 and seen[0][1] is fake_clock
         assert fake_clock.sleeps == [daemon.TICK_S] * 2
         lease = _lease(db_path)
         assert lease is not None and lease["pid"] is None and lease["heartbeat_at"] is None
-        assert lease["schema_version"] == 1 and lease["pid_start"].startswith("start-")
+        assert lease["schema_version"] == CUR and lease["pid_start"].startswith("start-")
         assert fake_setup.calls == [("sigterm", daemon._on_sigterm)]
 
     def test_second_daemon_exits_held_elsewhere(self, db_path, fake_clock, fake_probe) -> None:
@@ -95,7 +95,7 @@ class TestRun:
         assert daemon.run(fake_clock, probe=fake_probe, db_path=db_path, max_ticks=1)["exit"] == "max_ticks"
 
     def test_failing_migration_writes_the_sidecar(self, migrated, fake_clock, fake_probe, monkeypatch) -> None:
-        bad = migrations.Migration(2, "bad", ("NOT SQL",))
+        bad = migrations.Migration(V_NEXT, "bad", ("NOT SQL",))
         monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, bad))
         with pytest.raises(errors.CpError) as exc:
             daemon.run(fake_clock, probe=fake_probe, db_path=migrated)
@@ -145,7 +145,7 @@ def _ensure(**kw: Any) -> dict[str, Any]:
 
 class TestEnsure:
     def test_fresh_lease_same_version_is_a_noop(self, migrated, fake_clock, fake_probe, fake_popen) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(10)
         res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated)
         assert res == {"status": "already_running", "pid": 7}
@@ -158,11 +158,11 @@ class TestEnsure:
         elif lease != "missing-db":
             migrations.migrate(db_path, role="test")
             if lease == "stale":
-                _set_lease(db_path, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+                _set_lease(db_path, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
                 fake_clock.advance(31)
                 fake_probe.kill(7)  # a stale lease of a dead daemon (alive and stale: G18)
             elif lease == "cleared":
-                _set_lease(db_path, pid=None, version=1, heartbeat=None)
+                _set_lease(db_path, pid=None, version=CUR, heartbeat=None)
         res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=db_path)
         assert res == {"status": "started"}
         [(argv, kwargs)] = fake_popen.calls
@@ -189,7 +189,7 @@ class TestEnsure:
     def test_lower_schema_daemon_is_restarted_and_migrates(
         self, held, migrated, fake_clock, fake_probe: FakeProbe, fake_kill: FakeKill, monkeypatch
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, V2))
 
         def stopped(pid: int, sig: int) -> None:  # the old daemon exits: clears its lease, drops its flock
@@ -204,12 +204,12 @@ class TestEnsure:
         res = daemon.ensure(popen=popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
         assert res == {"status": "restarted"}
         assert fake_kill.calls == [(7, signal.SIGTERM)]
-        assert db.probe_version(migrated) == 2  # the pending migration completed
+        assert db.probe_version(migrated) == V_NEXT  # the pending migration completed
 
     def test_restart_waits_then_starts_anyway(
         self, migrated, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, V2))
         fake_probe.kill(7)  # already dead: no signal sent
         res = daemon.ensure(
@@ -262,7 +262,7 @@ class TestEnsure:
 
 class TestCli:
     def test_version_has_the_schema(self, invoke) -> None:
-        assert invoke("version")[1]["schema_version"] == 1
+        assert invoke("version")[1]["schema_version"] == CUR
 
     def test_ensure_command(self, invoke, fake_popen) -> None:
         code, out = invoke("ensure")
@@ -272,7 +272,7 @@ class TestCli:
         monkeypatch.setattr(daemon, "IDLE_EXIT_S", 10.0)
         code, out = invoke("daemon")
         assert code == 0 and out["exit"] == "idle" and out["ticks"] == 3
-        assert db.probe_version(db_path) == 1
+        assert db.probe_version(db_path) == CUR
 
 
 class TestConnection:
@@ -293,7 +293,7 @@ class TestConnection:
     def test_write_waits_for_the_daemon(self, deps, fake_popen, db_path) -> None:
         fake_popen.on_call = lambda a, k: migrations.migrate(db_path, role="test")
         with cli.connection(self._io(deps), "write") as c:
-            assert c is not None and db.user_version(c) == 1
+            assert c is not None and db.user_version(c) == CUR
         assert len(fake_popen.calls) == 1
 
     def test_real_deps(self) -> None:
@@ -356,7 +356,9 @@ class TestReviewFix01:
 
     def test_an_auto_rolled_back_step_lands_in_the_sidecar(self, migrated, fake_clock, fake_probe, monkeypatch) -> None:
         rb = migrations.Migration(
-            2, "rb", ("CREATE TABLE t (x UNIQUE)", "INSERT INTO t VALUES (1)", "INSERT OR ROLLBACK INTO t VALUES (1)")
+            V_NEXT,
+            "rb",
+            ("CREATE TABLE t (x UNIQUE)", "INSERT INTO t VALUES (1)", "INSERT OR ROLLBACK INTO t VALUES (1)"),
         )
         monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, rb))
         with pytest.raises(errors.CpError):
@@ -392,7 +394,7 @@ class TestReviewFix01:
         self, held, migrated, fake_clock, fake_probe, fake_kill, monkeypatch
     ) -> None:
         """F9: SIGTERM whenever the older daemon is alive, fresh or not."""
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(120)  # stale: hung, but alive
         monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, V2))
 
@@ -412,7 +414,7 @@ class TestReviewFix01:
         self, held, migrated, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
     ) -> None:
         """F9: never spawn a new daemon that would exit at once on the singleton lock."""
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(daemon.STALE_AFTER_S)  # J4: a beat that will be stale at the deadline
         monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, V2))
         res = daemon.ensure(
@@ -425,7 +427,7 @@ class TestReviewFix01:
         self, held, migrated, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
     ) -> None:
         """F4 + F9: the pid exists but its start time is unknown — maybe reused: no SIGTERM, no spawn."""
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(120)
         monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, V2))
         monkeypatch.setattr(fake_probe, "alive", lambda pid, start: None)
@@ -438,7 +440,7 @@ class TestReviewFix01:
     def test_a_stale_dead_older_daemon_is_just_started_over(
         self, migrated, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(120)
         monkeypatch.setattr(migrations, "MIGRATIONS", (*migrations.MIGRATIONS, V2))
         fake_probe.kill(7)
@@ -448,7 +450,7 @@ class TestReviewFix01:
 
     def test_a_heartbeat_on_a_migrated_db_still_stops_the_daemon(self, migrated, fake_clock, fake_probe) -> None:
         def migrate_away(c: sqlite3.Connection, k: Any) -> None:
-            sqlite3.connect(migrated).execute("PRAGMA user_version = 2").connection.close()
+            sqlite3.connect(migrated).execute(f"PRAGMA user_version = {V_NEXT}").connection.close()
 
         with pytest.raises(errors.CpError) as exc:
             daemon.run(fake_clock, probe=fake_probe, db_path=migrated, tick_hooks=[migrate_away], max_ticks=3)
@@ -488,7 +490,7 @@ class TestReviewFix02:
     def test_a_stale_lease_without_pid_start_is_never_signalled(
         self, migrated, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         _no_start(migrated)
         fake_clock.advance(120)
         res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
@@ -498,7 +500,7 @@ class TestReviewFix02:
     def test_a_fresh_lease_without_pid_start_is_signalled(
         self, held, migrated, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         _no_start(migrated)
         fake_kill.on_call = lambda pid, sig: _clear_lease(migrated)
         res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
@@ -507,7 +509,7 @@ class TestReviewFix02:
     def test_a_dead_old_daemon_is_not_waited_for(
         self, migrated, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))  # fresh, but proven dead
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))  # fresh, but proven dead
         fake_probe.kill(7)
         res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
         assert res == {"status": "restarted"} and fake_kill.calls == [] and fake_clock.sleeps == []
@@ -516,7 +518,7 @@ class TestReviewFix02:
     def test_the_wait_ends_when_another_daemon_took_the_lease(
         self, held, migrated, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_kill.on_call = lambda pid, sig: _clear_lease(migrated, pid=99)
         res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
         assert res == {"status": "restarted"} and fake_clock.sleeps == [] and len(fake_popen.calls) == 1
@@ -524,7 +526,7 @@ class TestReviewFix02:
     def test_a_vanished_pid_at_sigterm_is_fine(
         self, held, migrated, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
 
         def gone(pid: int, sig: int) -> None:
             raise ProcessLookupError(pid)
@@ -556,7 +558,7 @@ class TestReviewFix02:
     def test_a_hung_old_daemon_is_killed_then_replaced(
         self, held, migrated, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(daemon.STALE_AFTER_S)  # J4: a beat that will be stale at the deadline
 
         def on_kill(pid: int, sig: int) -> None:
@@ -573,7 +575,7 @@ class TestReviewFix02:
     def test_a_kill_that_does_not_take_is_restart_pending(
         self, held, migrated, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(daemon.STALE_AFTER_S)  # J4: a beat that will be stale at the deadline
         res = daemon.ensure(
             popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill, restart_wait_s=2
@@ -584,7 +586,7 @@ class TestReviewFix02:
     def test_a_kill_on_a_vanished_pid_starts_the_new_daemon(
         self, held, migrated, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(daemon.STALE_AFTER_S)  # J4: a beat that will be stale at the deadline
 
         def on_kill(pid: int, sig: int) -> None:
@@ -600,7 +602,7 @@ class TestReviewFix02:
     def test_an_old_daemon_still_beating_is_not_killed(
         self, held, migrated, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_kill.on_call = lambda pid, sig: _beat(migrated, "2099-01-01T00:00:00.000000Z")
         res = daemon.ensure(
             popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill, restart_wait_s=2
@@ -610,7 +612,7 @@ class TestReviewFix02:
     def test_an_old_daemon_dead_at_the_deadline_is_replaced(
         self, held, migrated, fake_clock, fake_probe, fake_kill, fake_popen, v2, monkeypatch
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         answers = iter([True, False])
         monkeypatch.setattr(fake_probe, "alive", lambda pid, start: next(answers))
         res = daemon.ensure(
@@ -621,7 +623,7 @@ class TestReviewFix02:
     def test_a_lease_unreadable_during_the_wait_ends_it(
         self, held, migrated, fake_clock, fake_probe, fake_kill, fake_popen, v2, monkeypatch
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         real = daemon.read_lease
         answers = iter([real(migrated), None])
         monkeypatch.setattr(daemon, "read_lease", lambda path: next(answers))
@@ -632,7 +634,7 @@ class TestReviewFix02:
     def test_a_stale_alive_same_schema_daemon_is_killed_then_replaced(
         self, held, migrated, fake_clock, fake_probe, fake_kill, fake_popen
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(120)
 
         def on_kill(pid: int, sig: int) -> None:
@@ -649,7 +651,7 @@ class TestReviewFix02:
     def test_a_stale_alive_same_schema_daemon_that_resumes_is_stale_alive(
         self, held, migrated, fake_clock, fake_probe, fake_kill, fake_popen
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(120)
         fake_kill.on_call = lambda pid, sig: _beat(migrated, "2099-01-01T00:00:00.000000Z")
         res = daemon.ensure(
@@ -660,7 +662,7 @@ class TestReviewFix02:
     def test_a_stale_same_schema_daemon_of_unknown_liveness_is_just_started_over(
         self, migrated, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(120)
         monkeypatch.setattr(fake_probe, "alive", lambda pid, start: None)
         res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
@@ -671,7 +673,7 @@ class TestReviewFix02:
         self, migrated, fake_clock, fake_probe, capsys, monkeypatch
     ) -> None:
         def migrate_away(c: sqlite3.Connection, k: Any) -> None:
-            sqlite3.connect(migrated).execute("PRAGMA user_version = 2").connection.close()
+            sqlite3.connect(migrated).execute(f"PRAGMA user_version = {V_NEXT}").connection.close()
             monkeypatch.setattr(daemon, "beat", lambda conn, clock: None)  # only the final clear meets v2
 
         result = daemon.run(fake_clock, probe=fake_probe, db_path=migrated, tick_hooks=[migrate_away], max_ticks=1)
@@ -691,7 +693,7 @@ class TestReviewFix03:
     def test_a_newer_schema_daemon_is_never_signalled(
         self, migrated, held, fake_clock, fake_probe, fake_kill, fake_popen
     ) -> None:
-        _set_lease(migrated, pid=7, version=2, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=V_NEXT, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(120)  # stale and alive: newer code, never ours to stop
         res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
         assert res == {"status": "newer_running", "pid": 7} and fake_kill.calls == [] and fake_clock.sleeps == []
@@ -749,7 +751,7 @@ class TestReviewFix03:
         self, migrated, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
         """The probe says alive (a zombie), but nothing holds the singleton flock: it is gone."""
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
         assert res == {"status": "restarted"} and fake_kill.calls == [] and fake_clock.sleeps == []
         assert len(fake_popen.calls) == 1
@@ -757,7 +759,7 @@ class TestReviewFix03:
     def test_a_zombie_stale_same_schema_daemon_is_replaced_without_any_signal(
         self, migrated, fake_clock, fake_probe, fake_kill, fake_popen
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(120)
         res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
         assert res == {"status": "restarted"} and fake_kill.calls == [] and len(fake_popen.calls) == 1
@@ -765,7 +767,7 @@ class TestReviewFix03:
     def test_the_flock_freed_after_sigterm_ends_the_wait(
         self, migrated, held, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_kill.on_call = lambda pid, sig: held.release()  # exited; its parent has not reaped it yet
         res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
         assert res == {"status": "restarted"} and fake_kill.calls == [(7, signal.SIGTERM)]
@@ -774,7 +776,7 @@ class TestReviewFix03:
     def test_a_proven_dead_daemon_after_sigterm_ends_the_wait(
         self, migrated, held, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_kill.on_call = lambda pid, sig: fake_probe.kill(7)  # died without clearing its lease
         res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
         assert res == {"status": "restarted"} and fake_clock.sleeps == []
@@ -782,7 +784,7 @@ class TestReviewFix03:
     def test_the_flock_freed_after_sigkill_ends_the_wait(
         self, migrated, held, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(daemon.STALE_AFTER_S)  # J4: a beat that will be stale at the deadline
 
         def on_kill(pid: int, sig: int) -> None:
@@ -800,7 +802,7 @@ class TestReviewFix03:
         self, migrated, held, fake_clock, fake_probe, fake_kill, fake_popen, v2, monkeypatch
     ) -> None:
         """SIGKILL needs proof: the flock held is not enough (a newer daemon may hold it before its lease)."""
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         answers = iter([True])
         monkeypatch.setattr(fake_probe, "alive", lambda pid, start: next(answers, None))
         res = daemon.ensure(
@@ -819,7 +821,7 @@ class TestReviewFix04:
         self, migrated, held, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
         """Inside a tick hook (within STALE_AFTER_S): healthy, so SIGTERM only, never SIGKILL."""
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         res = daemon.ensure(
             popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill, restart_wait_s=2
         )
@@ -829,7 +831,7 @@ class TestReviewFix04:
     def test_an_older_daemon_with_a_beat_stale_at_the_deadline_is_killed(
         self, migrated, held, fake_clock, fake_probe, fake_kill, fake_popen, v2
     ) -> None:
-        _set_lease(migrated, pid=7, version=1, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=CUR, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(daemon.STALE_AFTER_S - 2)  # the beat turns STALE_AFTER_S old exactly at the deadline
         res = daemon.ensure(
             popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill, restart_wait_s=2
@@ -841,7 +843,7 @@ class TestReviewFix04:
     def test_a_stale_live_newer_daemon_is_newer_running_without_a_spawn(
         self, migrated, held, fake_clock, fake_probe, fake_kill, fake_popen
     ) -> None:
-        _set_lease(migrated, pid=7, version=2, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=V_NEXT, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(120)
         res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)
         assert res == {"status": "newer_running", "pid": 7}
@@ -850,7 +852,7 @@ class TestReviewFix04:
     def test_a_stale_dead_newer_daemon_is_started_over(
         self, migrated, fake_clock, fake_probe, fake_kill, fake_popen
     ) -> None:
-        _set_lease(migrated, pid=7, version=2, heartbeat=clock.stamp(fake_clock))
+        _set_lease(migrated, pid=7, version=V_NEXT, heartbeat=clock.stamp(fake_clock))
         fake_clock.advance(120)
         fake_probe.kill(7)
         res = daemon.ensure(popen=fake_popen, clock=fake_clock, probe=fake_probe, db_path=migrated, kill=fake_kill)

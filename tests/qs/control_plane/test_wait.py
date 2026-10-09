@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from control_plane import clock, wait
 
-from .conftest import ORCH, insert_node, insert_task, open_run, run_cli, sql
+from .conftest import CUR, ORCH, V_NEXT, insert_node, insert_task, open_run, run_cli, sql
 
 
 def _hook(fake_clock: clock.FakeClock, fn: Callable[[int], None]) -> None:
@@ -113,8 +113,8 @@ def test_fresh_daemon_is_not_reensured(migrated, run, fake_popen, fake_clock) ->
     def beat(n: int = 0) -> None:
         sql(
             migrated,
-            "INSERT OR REPLACE INTO daemon_lease (id, pid, schema_version, started_at, heartbeat_at) VALUES (1, 7, 1, 'x', ?)",
-            [clock.stamp(fake_clock)],
+            "INSERT OR REPLACE INTO daemon_lease (id, pid, schema_version, started_at, heartbeat_at) VALUES (1, 7, ?, 'x', ?)",
+            [CUR, clock.stamp(fake_clock)],
         )
 
     beat()
@@ -125,7 +125,7 @@ def test_fresh_daemon_is_not_reensured(migrated, run, fake_popen, fake_clock) ->
 
 def test_migration_mid_wait_exits_5_restart_wait(migrated, run, fake_clock) -> None:
     run_id, token = run
-    _hook(fake_clock, lambda n: sql(migrated, "PRAGMA user_version = 2"))
+    _hook(fake_clock, lambda n: sql(migrated, f"PRAGMA user_version = {V_NEXT}"))
     code, out = run_cli("wait", "--run", run_id, "--token", token)
     assert code == 5 and out["restart_wait"] is True
     assert _waiters(migrated) == 0

@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from . import errors, faults, paths, schema_v1
+from . import errors, faults, paths, schema_v1, schema_v2
 
 MIGRATE_LOCK_TIMEOUT_S = 120.0
 
@@ -31,6 +31,7 @@ class Migration:
 
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "schema v1: the task tree, queues, tools and hooks", schema_v1.STATEMENTS),
+    Migration(2, "the active loop: alerts", schema_v2.STATEMENTS),
 )
 SCHEMA_VERSION = MIGRATIONS[-1].version
 
