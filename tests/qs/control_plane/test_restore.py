@@ -753,7 +753,7 @@ class TestReviewFix04:
         self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
     ) -> None:
         def full(*a: Any, **k: Any) -> Path:
-            raise sqlite3.OperationalError("database or disk is full")  # what `backup()` raises on ENOSPC
+            raise _sqlite_error("database or disk is full", 13)  # what `backup()` raises on ENOSPC (SQLITE_FULL)
 
         monkeypatch.setattr(backups, "write_copy", full)
         before = _dump(migrated)
@@ -817,3 +817,89 @@ def test_a_failed_directory_fsync_still_keeps_the_copy(conn, migrated, fake_cloc
     _hook(conn, fake_clock)
     assert len(_periodic(migrated)) == 2
     assert capsys.readouterr().err.count("directory fsync") == 1  # logged once
+
+
+# --------------------------------------------------------------------------- review fix #05 (J4, J5, J6)
+
+
+def _sqlite_error(message: str, code: int) -> sqlite3.OperationalError:
+    exc = sqlite3.OperationalError(message)
+    exc.sqlite_errorcode = code  # type: ignore[attr-defined]  # what SQLite itself sets on a raised error
+    return exc
+
+
+class TestReviewFix05:
+    @pytest.mark.parametrize(
+        ("code", "says", "never"),
+        [
+            (13, "free space", "retry in a moment"),  # SQLITE_FULL
+            (14, "free space", "retry in a moment"),  # SQLITE_CANTOPEN
+            (13 | (1 << 8), "free space", "retry in a moment"),  # an extended code: only the primary byte counts
+            (5, "retry in a moment", "free space"),  # SQLITE_BUSY
+            (6, "retry in a moment", "free space"),  # SQLITE_LOCKED
+            (10, "could not be copied", "free space"),  # SQLITE_IOERR: no free-space claim
+        ],
+    )
+    def test_the_keep_guard_hint_follows_the_sqlite_error_code(
+        self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch, code, says, never
+    ) -> None:
+        def fail(*a: Any, **k: Any) -> Path:
+            raise _sqlite_error("some sqlite error", code)
+
+        monkeypatch.setattr(backups, "write_copy", fail)
+        with pytest.raises(restore.errors.CpError) as exc:
+            _restore_now(migrated, fake_clock, fake_probe, fake_kill, fake_popen)
+        err = exc.value
+        assert err.code == "CONFLICT" and "not touched" in err.detail
+        assert says in err.extra["hint"] and never not in err.extra["hint"]
+
+    def test_an_os_error_keeping_the_live_db_says_free_space(
+        self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
+    ) -> None:
+        def full(*a: Any, **k: Any) -> Path:
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(backups, "write_copy", full)
+        with pytest.raises(restore.errors.CpError) as exc:
+            _restore_now(migrated, fake_clock, fake_probe, fake_kill, fake_popen)
+        assert "free space" in exc.value.extra["hint"]
+
+    def test_a_passed_through_refusal_keeps_its_own_hint(
+        self, migrated, backed_up, fake_clock, fake_probe, fake_kill, fake_popen, monkeypatch
+    ) -> None:
+        real_private = paths.ensure_private_dir
+        seen: list[Path] = []
+
+        def refuse(d: Path) -> Path:
+            seen.append(d)
+            if len(seen) > 2:
+                raise restore.errors.CpError("POLICY_REFUSED", f"{d} is owned by another user", hint="chown it")
+            return real_private(d)
+
+        monkeypatch.setattr(restore.paths, "ensure_private_dir", refuse)
+        with pytest.raises(restore.errors.CpError) as exc:
+            _restore_now(migrated, fake_clock, fake_probe, fake_kill, fake_popen)
+        err = exc.value
+        hint = err.extra["hint"]
+        assert err.code == "POLICY_REFUSED" and hint.startswith("chown it; nothing was restored")
+        assert err.extra["replaced"] in hint  # the `replaced` pointer is never lost
+
+    def test_a_restore_drops_a_stale_backup_error(
+        self, conn, migrated, fake_clock, fake_probe, fake_kill, fake_popen
+    ) -> None:
+        open_run()
+        stale = json.dumps({"at": "x", "error": "OSError: full"})
+        sql(migrated, "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", [restore.LAST_ERROR, stale])
+        backups.take(conn, fake_clock.now(), migrated)  # a copy taken right after a failed attempt
+        fake_clock.advance(600)
+        _restore_now(migrated, fake_clock, fake_probe, fake_kill, fake_popen)  # the live key is not carried either
+        assert _meta(migrated, restore.LAST_ERROR) is None
+        _hook(conn, fake_clock)
+        assert _failed_alerts(migrated) == []
+
+
+def test_a_new_daemon_forgets_the_log_once_flags(monkeypatch) -> None:  # J8
+    monkeypatch.setattr(restore, "_logged_error", "OSError: full")
+    monkeypatch.setattr(backups, "_dir_fsync_logged", True)
+    activeloop._reset_for_tests()
+    assert restore._logged_error is None and backups._dir_fsync_logged is False

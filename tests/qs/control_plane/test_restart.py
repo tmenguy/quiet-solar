@@ -290,12 +290,13 @@ class TestEnsure:
         monkeypatch.setenv("CLAUDECODE", "1")
         monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
         monkeypatch.setenv("QS_KEEP_ME", "1")
+        monkeypatch.setenv("QS_CP_TOKEN", "run-token")  # a run token in the caller's env never reaches the daemon (J7)
         popen = FakePopen()
         daemon.ensure(popen=popen, clock=fake_clock, probe=fake_probe, db_path=migrated)
         env = popen.calls[0][1]["env"]
         assert env["QS_KEEP_ME"] == "1" and "PATH" in env
         assert not [k for k in env if k.startswith("CLAUDE_CODE_MESSAGING_")]
-        assert not {"CLAUDE_CODE_SESSION_ID", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"} & set(env)
+        assert not {"CLAUDE_CODE_SESSION_ID", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "QS_CP_TOKEN"} & set(env)
 
 
 # --------------------------------------------------------------------------- killed during wait (AC 5)

@@ -205,3 +205,20 @@ def test_a_non_integer_cursor_is_reseeded_and_routing_goes_on(conn, migrated, fa
     hookroute.hook_route_hook(conn, fake_clock)
     assert [p["hook_event_id"] for _, p in _queue(migrated, r1)] == [new] and _cursor(migrated) == new
     assert capsys.readouterr().err.count("not an integer") == 1  # logged once
+
+
+# --------------------------------------------------------------------------- review fix #05 (J3)
+
+
+@pytest.mark.parametrize("bad", ["99999999999999999999", "-5"])
+def test_an_out_of_range_cursor_is_reseeded(conn, migrated, fake_clock, capsys, bad: str) -> None:
+    r1, _ = open_run()
+    old = _event(migrated, {"kind": "k", "run_id": r1})
+    sql(migrated, "UPDATE meta SET value = ? WHERE key = 'hook_events_cursor'", [bad])  # hand-edited
+    hookroute.hook_route_hook(conn, fake_clock)
+    assert _cursor(migrated) == old and _queue(migrated, r1) == []
+    new = _event(migrated, {"kind": "k", "run_id": r1})
+    hookroute.hook_route_hook(conn, fake_clock)
+    assert [p["hook_event_id"] for _, p in _queue(migrated, r1)] == [new] and _cursor(migrated) == new
+    assert capsys.readouterr().err.count("reseeded") == 1  # logged once
+

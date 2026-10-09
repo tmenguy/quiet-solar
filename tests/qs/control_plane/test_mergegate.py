@@ -504,12 +504,15 @@ class TestAskGuardParseFailure:
 
         monkeypatch.setattr(hooks, "maintainer_confirm", broken)
 
-    def test_a_cp_py_command_that_cannot_be_parsed_asks(self, monkeypatch, capsys) -> None:
+    def test_a_cp_py_command_that_cannot_be_parsed_is_denied(self, migrated, monkeypatch, capsys) -> None:
         self._raise(monkeypatch)
         code, out = _pre("python scripts/qs/cp.py restore --confirm")
-        assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
-        assert "maintainer's decision" in out["hookSpecificOutput"]["permissionDecisionReason"]
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny"  # like an unknown mode (J2)
+        reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "maintainer's decision" in reason and "in a terminal" in reason
         assert "failed open" not in capsys.readouterr().err
+        [(decision, detail)] = sql(migrated, "SELECT decision, detail FROM hook_events WHERE hook = 'pre-tool-use'")
+        assert decision == "deny" and json.loads(detail)["kind"] == "error"  # the decision actually returned
 
     def test_an_unrelated_command_still_fails_open(self, monkeypatch, capsys) -> None:
         self._raise(monkeypatch)

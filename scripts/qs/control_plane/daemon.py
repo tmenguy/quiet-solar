@@ -47,8 +47,9 @@ LOG_NAME = "harness_state.daemon.log"
 
 TickHook = Callable[[Any, clock_mod.Clock], None]
 
-# QS-406 D16: the daemon is never a Claude session; these never reach it (nor the messenger it spawns).
-STRIPPED_ENV = frozenset({"CLAUDE_CODE_SESSION_ID", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"})
+# QS-406 D16: the daemon is never a Claude session, nor a run's tool call (J7); these never reach it (nor the
+# messenger it spawns).
+STRIPPED_ENV = frozenset({"CLAUDE_CODE_SESSION_ID", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", liveness.TOKEN_ENV})
 STRIPPED_ENV_PREFIXES = ("CLAUDE_CODE_MESSAGING_",)
 
 _stop = threading.Event()
@@ -85,7 +86,7 @@ def stripped_names(environ: Mapping[str, str]) -> tuple[str, ...]:
 
 
 def strip_env(environ: Mapping[str, str]) -> dict[str, str]:
-    """``environ`` without the spawning session's messaging secret and identity (D16)."""
+    """``environ`` without the spawning session's messaging secret and identity, nor a run token (D16, J7)."""
     removed = set(stripped_names(environ))
     return {k: v for k, v in environ.items() if k not in removed}
 

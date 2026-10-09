@@ -91,8 +91,10 @@ def _reset_for_tests() -> None:
     """Drop the cached seams and every hook module's in-memory state (a new daemon)."""
     global _seams
     _seams = None
-    from . import ciwatch, detectors, watchdog
+    from . import backups, ciwatch, detectors, restore, watchdog
 
+    backups._reset_for_tests()
+    restore._reset_for_tests()
     detectors._reset_for_tests()
     ciwatch._reset_for_tests()
     watchdog._reset_for_tests()

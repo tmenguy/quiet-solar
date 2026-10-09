@@ -41,6 +41,12 @@ FIXED_UP_TABLES = ("waiters", "daemon_lease", "meta")  # the restore's fix-up wr
 _logged_error: str | None = None
 
 
+def _reset_for_tests() -> None:
+    """Forget the logged backup error (a new daemon)."""
+    global _logged_error
+    _logged_error = None
+
+
 def _log(message: str) -> None:
     sys.stderr.write(f"[cp-backup] {message}\n")
     sys.stderr.flush()
@@ -194,7 +200,11 @@ def _carry(conn: sqlite3.Connection) -> tuple[list[tuple[Any, ...]], dict[str, s
 
 
 def _fix_up(conn: sqlite3.Connection, waiters: list[tuple[Any, ...]], meta: dict[str, str]) -> None:
-    """Re-apply the carried rows on the copied data and clear the copied daemon lease (one transaction)."""
+    """Re-apply the carried rows on the copied data, clear the copied daemon lease and ``last_backup_error`` (one transaction).
+
+    The copied ``last_backup_error`` is dropped (a copy taken right after a failed attempt holds it) and the live one is not
+    carried: a restore starts a fresh backup cycle (J6).
+    """
     db.begin(conn, "BEGIN IMMEDIATE")
     try:
         conn.execute("DELETE FROM waiters")
@@ -203,7 +213,7 @@ def _fix_up(conn: sqlite3.Connection, waiters: list[tuple[Any, ...]], meta: dict
             waiters,
         )
         conn.execute("UPDATE daemon_lease SET pid = NULL, heartbeat_at = NULL")
-        conn.executemany("DELETE FROM meta WHERE key = ?", [(k,) for k in CARRIED_META])
+        conn.executemany("DELETE FROM meta WHERE key = ?", [(k,) for k in (*CARRIED_META, LAST_ERROR)])  # (J6)
         conn.executemany("INSERT INTO meta (key, value) VALUES (?, ?)", list(meta.items()))
         conn.execute("COMMIT")
     except BaseException:
@@ -238,6 +248,20 @@ def _overwrite(stage: sqlite3.Connection, live: sqlite3.Connection) -> None:
 def _unlink_staged(staged: Path) -> None:
     for suffix in ("", "-journal", "-wal", "-shm"):
         Path(str(staged) + suffix).unlink(missing_ok=True)
+
+
+SQLITE_SPACE = frozenset({13, 14})  # SQLITE_FULL, SQLITE_CANTOPEN
+SQLITE_CONTENDED = frozenset({5, 6})  # SQLITE_BUSY, SQLITE_LOCKED
+
+
+def _keep_hint(exc: OSError | sqlite3.OperationalError, directory: Path) -> str:
+    """The hint for a failed copy of the live DB, from SQLite's primary error code (J4); an ``OSError`` is space."""
+    code = (getattr(exc, "sqlite_errorcode", None) or 0) & 0xFF if isinstance(exc, sqlite3.Error) else 13
+    if code in SQLITE_CONTENDED:
+        return "the live DB is busy: retry in a moment"
+    if code in SQLITE_SPACE:
+        return f"free space in (or fix) {directory}, then retry"
+    return f"the live DB could not be copied into {directory}; nothing was restored"
 
 
 def _staging_failed(exc: BaseException, src: Path, staged: Path, where: str, kept: dict[str, str]) -> errors.CpError:
@@ -283,7 +307,7 @@ def _restore_into(path: Path, src: Path, live: tuple[int, int] | None, clock: cl
                     raise errors.CpError(
                         "CONFLICT",
                         f"the live DB cannot be kept: {exc}; nothing was restored and the live DB was not touched",
-                        hint=f"free space in (or fix) {dest.parent}, then retry",
+                        hint=_keep_hint(exc, dest.parent),
                     ) from exc
             if live is not None:
                 waiters, meta = _carry(conn)
@@ -292,10 +316,15 @@ def _restore_into(path: Path, src: Path, live: tuple[int, int] | None, clock: cl
             except errors.CpError as exc:
                 if exc.code == "INTERNAL":
                     raise _staging_failed(exc, src, staged, where(), kept()) from exc
-                raise errors.CpError(  # a policy refusal (a directory owned by another user…) passes through (I2)
+                own = exc.extra.get("hint")  # a policy refusal (a directory owned by another user…) passes through (I2)
+                raise errors.CpError(
                     exc.code,
                     f"{exc.detail}; nothing was restored and the live DB was not touched",
-                    **{"hint": f"nothing was restored{where()}", **exc.extra, **kept()},
+                    **{
+                        **exc.extra,
+                        "hint": "; ".join(h for h in (own, f"nothing was restored{where()}") if h),  # (J5)
+                        **kept(),
+                    },
                 ) from exc
             except (sqlite3.Error, OSError) as exc:  # disk full is the likeliest (H1)
                 raise _staging_failed(exc, src, staged, where(), kept()) from exc

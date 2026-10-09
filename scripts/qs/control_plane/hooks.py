@@ -101,12 +101,14 @@ def _record(
         )
 
 
-def _try_record(clock: clock_mod.Clock, hook: str, session_id: str | None, detail: dict[str, Any]) -> None:
-    """Best effort: record a fail-open event when the DB is usable."""
+def _try_record(
+    clock: clock_mod.Clock, hook: str, session_id: str | None, detail: dict[str, Any], decision: str = "allow"
+) -> None:
+    """Best effort: record a fail-open event (or the fallback ``decision`` actually returned) when the DB is usable."""
     try:
         with _db_if_current(clock) as conn:
             if conn is not None:
-                _record(conn, clock, hook, session_id, "allow", detail)
+                _record(conn, clock, hook, session_id, decision, detail)
     except Exception:  # noqa: BLE001 — failing open means never raising from here
         pass
 
@@ -317,11 +319,13 @@ def hook_pre_tool_use(stdin_text: str, clock: clock_mod.Clock) -> str:
                 else "switch this session to default mode in the app, then ask again"
             )
             static, ask = f"{ask}; {hint}", None
-    except Exception as exc:  # noqa: BLE001 — PreToolUse fails open, except on a possible `cp.py` command (I7)
+    except Exception as exc:  # noqa: BLE001 — PreToolUse fails open, except on a possible `cp.py` command (I7, J2)
         if "cp.py" in (stdin_text or ""):
-            _log(f"pre-tool-use hook could not parse a cp.py command, asking: {exc!r}")
-            _try_record(clock, "pre-tool-use", session_id, {"kind": "error", "error": repr(exc)})
-            return _ask("`cp.py` may be the maintainer's decision: approve only if the maintainer asked for it")
+            _log(f"pre-tool-use hook could not parse a cp.py command, denying: {exc!r}")
+            _try_record(clock, "pre-tool-use", session_id, {"kind": "error", "error": repr(exc)}, "deny")
+            return _deny(  # the mode is unknown here: deny, like an unknown mode (J2)
+                "`cp.py` may be the maintainer's decision; the maintainer runs the command in a terminal"
+            )
         _log(f"pre-tool-use hook failed open: {exc!r}")
         _try_record(clock, "pre-tool-use", session_id, {"kind": "error", "error": repr(exc)})
         return ""

@@ -26,6 +26,7 @@ from . import clock as clock_mod
 HOOK_ROUTE = "hook_route"
 CURSOR = "hook_events_cursor"
 BATCH = 500
+SQLITE_MAX_INT = 2**63 - 1
 DAEMON_KINDS = alerts.KINDS - alerts.ROUTED_HOOK_KINDS  # a hook event may not pose as one of these
 
 
@@ -68,10 +69,12 @@ def route_locked(conn: sqlite3.Connection, clock: clock_mod.Clock) -> dict[str, 
     row = conn.execute("SELECT value FROM meta WHERE key = ?", (CURSOR,)).fetchone()
     try:
         cursor = int(row[0]) if row is not None else 0
-    except TypeError, ValueError:  # a hand-edited cursor: reseeded past the history, as migration v3 seeds it (I6)
+        if not 0 <= cursor <= SQLITE_MAX_INT:  # SQLite cannot bind it, or no id is ever below it (J3)
+            raise ValueError(cursor)
+    except TypeError, ValueError, OverflowError:  # a hand-edited cursor: reseeded past the history, as v3 seeds it (I6)
         cursor = int(conn.execute("SELECT COALESCE(max(id), 0) FROM hook_events").fetchone()[0])
         conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (CURSOR, str(cursor)))
-        _log(f"the cursor {row[0]!r} is not an integer: reseeded to {cursor}")
+        _log(f"the cursor {row[0]!r} is not an integer in range: reseeded to {cursor}")
     events = conn.execute(
         "SELECT id, hook, session_id, decision, detail FROM hook_events WHERE id > ? ORDER BY id LIMIT ?",
         (cursor, BATCH),

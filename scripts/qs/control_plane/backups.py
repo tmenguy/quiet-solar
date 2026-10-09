@@ -31,6 +31,12 @@ def _journal_delete(copy: sqlite3.Connection) -> str:
 _dir_fsync_logged = False  # a directory fsync failure is logged once per process
 
 
+def _reset_for_tests() -> None:
+    """Forget the logged directory fsync failure (a new daemon)."""
+    global _dir_fsync_logged
+    _dir_fsync_logged = False
+
+
 def _fsync(path: Path) -> None:
     fd = os.open(path, os.O_RDONLY)
     try:

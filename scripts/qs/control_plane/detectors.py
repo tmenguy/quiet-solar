@@ -139,6 +139,7 @@ class _OverlapState:
     touched_conflicts: set[tuple[str, str]] = field(default_factory=set)
     failed_diffs: set[tuple[str, str]] = field(default_factory=set)  # failed in the current walk: not retried
     failed_conflicts: set[tuple[str, str]] = field(default_factory=set)
+    failed_refs: dict[str, GitFailed] = field(default_factory=dict)  # a ref whose rev-parse failed: not retried (J1)
     last: list[alerts.Condition] | None = None  # the last complete result
     last_at: datetime | None = None
     walking: bool = False
@@ -149,8 +150,17 @@ OVERLAP_KINDS = frozenset({alerts.OVERLAP, alerts.OVERLAP_CROSS_RUN})
 
 
 def _resolve(git: _Git, ref: str) -> str | None:
+    """``ref``'s sha, ``None`` when missing. A failed (non-aborting) ``rev-parse`` is re-raised, uncalled, for the rest of the walk."""
+    if ref in _overlap.failed_refs:
+        exc = _overlap.failed_refs[ref]
+        raise GitFailed(str(exc), exc.returncode)
     if ref not in _overlap.refs:
-        code, out = git.run("rev-parse", "--verify", "--quiet", ref, ok=(0, 1))
+        try:
+            code, out = git.run("rev-parse", "--verify", "--quiet", ref, ok=(0, 1))
+        except GitFailed as exc:
+            if not exc.aborts:
+                _overlap.failed_refs[ref] = exc
+            raise
         _overlap.refs[ref] = out.strip() if code == 0 and out.strip() else None
     return _overlap.refs[ref]
 
@@ -244,6 +254,8 @@ def _walk(conn: sqlite3.Connection, git: _Git) -> list[alerts.Condition]:
         f" WHERE t.branch IS NOT NULL AND t.state NOT IN {terminal} ORDER BY t.id",
         params,
     ).fetchall()
+    # main first: a repo-wide failure (every git call exits 128) fails the walk here, not each task (J1)
+    main = _main_base(git) if rows else None
     branches: list[_Branch] = []
     unknown: set[str] = set()
     for row in rows:
@@ -259,7 +271,7 @@ def _walk(conn: sqlite3.Connection, git: _Git) -> list[alerts.Condition]:
         if tip is None:
             continue
         if row["deliverable_id"] is None:
-            base = _main_base(git)
+            base = main
         if base is None:
             continue
         files = _files(git, row["id"], base, tip)
@@ -313,6 +325,7 @@ def _end_walk() -> None:
     _overlap.refs.clear()
     _overlap.failed_diffs.clear()
     _overlap.failed_conflicts.clear()
+    _overlap.failed_refs.clear()
     _overlap.walking = False
 
 

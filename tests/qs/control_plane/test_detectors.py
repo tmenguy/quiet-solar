@@ -898,3 +898,53 @@ class TestReviewFix04:
         affected = {"refs/heads/QS_2": 1, "refs/heads/QS_1": 2}[bad]  # QS_1 is also T4's base
         assert err.count(f"bad ref {bad}") == affected  # once per task, not once per walk
         assert "overlap: git rev-parse" not in err  # the walk itself did not fail
+
+
+# --------------------------------------------------------------------------- review fix #05 (J1)
+
+
+class TestReviewFix05:
+    def test_a_repo_wide_rev_parse_failure_fails_the_walk_with_one_call(
+        self, conn, migrated, git, fake_clock, capsys
+    ) -> None:
+        r1, _ = open_run()
+        for i in range(1, detectors.OVERLAP_MAX_CALLS + 6):  # more tasks than one tick's budget
+            insert_task(migrated, f"T{i:02}", r1, branch=f"QS_{i}", is_deliverable=1)
+            git.refs[f"refs/heads/QS_{i}"] = f"t{i}"
+        git.fail.add("rev-parse")  # dubious ownership, a corrupt ref store: every rev-parse exits 128
+        assert detectors.detect_overlap(conn, fake_clock, activeloop.seams()) == detectors.NONE
+        assert git.count() == 1 and not detectors._overlap.walking  # main's rev-parse fails first: the H4 path
+        assert "overlap: git rev-parse" in capsys.readouterr().err
+        fake_clock.advance(detectors.OVERLAP_EVERY_S - 1)
+        detectors.detect_overlap(conn, fake_clock, activeloop.seams())  # not due: no new walk
+        assert git.count() == 1
+        fake_clock.advance(1)
+        detectors.detect_overlap(conn, fake_clock, activeloop.seams())
+        assert git.count() == 2
+
+    def test_no_task_no_git(self, conn, migrated, git, fake_clock) -> None:
+        assert detectors.detect_overlap(conn, fake_clock, activeloop.seams()) == (detectors.OVERLAP_KINDS, [])
+        assert git.count() == 0
+
+    def test_a_broken_deliverable_ref_fails_once_across_a_resumed_walk(
+        self, conn, migrated, git, fake_clock, capsys
+    ) -> None:
+        r1, _ = open_run()
+        insert_task(migrated, "D", r1, branch="QS_9", is_deliverable=1)  # its ref is broken
+        insert_task(migrated, "A1", r1, branch="QS_9_1", deliverable_id="D", item_k=1)  # walked first
+        insert_task(migrated, "Z2", r1, branch="QS_9_2", deliverable_id="D", item_k=2)  # walked last
+        git.refs.update({"refs/heads/QS_9_1": "i1", "refs/heads/QS_9_2": "i2"})
+        for i in range(1, 16):  # 2 calls each: the walk needs more than one tick
+            insert_task(migrated, f"F{i:02}", r1, branch=f"QS_{100 + i}", is_deliverable=1)
+            git.refs[f"refs/heads/QS_{100 + i}"] = f"t{i}"
+        _failing_rev_parse(git, "refs/heads/QS_9")
+        ticks_taken = 0
+        while True:
+            ticks_taken += 1
+            kinds, _conds = detectors.detect_overlap(conn, fake_clock, activeloop.seams())
+            if kinds:
+                break
+            assert ticks_taken < 10
+        assert ticks_taken > 1 and not detectors._overlap.walking and not detectors._overlap.failed_refs
+        assert sum(1 for c in git.calls if c[0] == "rev-parse" and c[-1] == "refs/heads/QS_9") == 1
+        assert capsys.readouterr().err.count("bad ref refs/heads/QS_9") == 3  # once per task (D, A1, Z2)
