@@ -139,3 +139,43 @@ def test_version_lists_tools_and_tick_hooks(invoke, monkeypatch) -> None:
     out = invoke("version")[1]
     assert set(out["tools"]) >= tools.BUILTIN_NAMES and out["tools"] == sorted(out["tools"])
     assert "t-listed" in out["tick_hooks"]
+
+
+def test_guard_with_an_open_run_and_work_for_every_hook(
+    migrated, monkeypatch, active_loop, fake_runner, fake_claude, fake_github, fake_clock, fake_probe
+) -> None:
+    """The same guard, with a run whose state gives every built-in hook something to do."""
+    from control_plane import ciwatch
+    from control_plane import clock as clock_mod
+
+    from .conftest import ORCH, agent, insert_node, insert_task, open_run, sql
+
+    run_id, _ = open_run()
+    insert_task(migrated, "T1", run_id, branch="QS_1", is_deliverable=1, pr_number=7, state="building")
+    insert_node(migrated, "N1", run_id, "T1", state="running", session_id="S-n1")
+    old = clock_mod.stamp(fake_clock, plus=-3600)
+    sql(
+        migrated,
+        "INSERT INTO messages (run_id, recipient, kind, sender, payload, state, visible_at, created_at)"
+        " VALUES (?, 'orchestrator', 'k', 'node:T1', '{}', 'queued', ?, ?)",
+        [run_id, old, old],
+    )
+    fake_claude.listing = [agent(ORCH, "r1", status="idle")]
+    fake_github.prs_by_number[7] = ciwatch.PrCi("OPEN", "h", "FAILURE", ("tests",), False)
+
+    def refuse(*a: Any, **k: Any) -> Any:
+        raise AssertionError(f"a real subprocess or socket under cp.py daemon: {a!r}")
+
+    monkeypatch.setattr(subprocess, "run", refuse)
+    monkeypatch.setattr(subprocess, "Popen", refuse)
+    monkeypatch.setattr(socket, "socket", refuse)
+    from control_plane import codever
+
+    loaded = codever.code_version(activeloop.seams().main)
+    out = daemon.run(
+        fake_clock, probe=fake_probe, db_path=migrated, tick_hooks=ticks.hooks(), max_ticks=3, loaded_version=loaded
+    )
+    assert out["exit"] == "max_ticks" and out["ticks"] == 3  # an open run: the daemon never idles out
+    kinds = {r[0] for r in sql(migrated, "SELECT DISTINCT kind FROM alerts")}
+    assert {"ci_red", "selfcheck_failed"} <= kinds
+    assert fake_runner.matching("claude", "--bg") and fake_github.calls
