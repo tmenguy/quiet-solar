@@ -14,9 +14,9 @@ isolated in `scripts/qs/launchers/`.
 
 The sketch above is the default path. The diagram below is the full
 picture: the lane variants, the review ⇄ implement fix loop, and, marked
-✋, where the maintainer decides in each phase. Red-outlined boxes are the
-review phases that can send a fix plan back to implement; the dashed
-arrow is a separate decision.
+✋, where the maintainer decides in each phase. Red-outlined boxes
+(review-task, verify-task) are the review phases that can send a fix plan
+back to implement; the dashed arrow is a separate decision.
 
 ```mermaid
 flowchart TB

@@ -269,9 +269,11 @@ def test_overview_documents_claude_desktop_limitation() -> None:
 # full structure: every line must parse (_parse_pipeline_diagram), and the
 # node set, the phase names in each node, the hand in each node, the edges
 # with their arrow style and label, and the subgraph membership are all
-# compared with the constants below (review fix #01). It does NOT detect a
-# phase added to the pipeline later, nor check label wording beyond the
-# phase names and the hand: both stay a review responsibility.
+# compared with the constants below (review fix #01). A link line inside a
+# subgraph is rejected, the hand must open its own line and every subgraph
+# title is checked (review fix #02). It does NOT detect a phase added to the
+# pipeline later, nor check label wording beyond the phase names and the
+# hand: both stay a review responsibility.
 # --------------------------------------------------------------------------- #
 
 # Node id -> the phase names its label must contain.
@@ -290,7 +292,9 @@ PIPELINE_DIAGRAM_NODE_PHASES: dict[str, tuple[str, ...]] = {
 PIPELINE_DIAGRAM_NODES = set(PIPELINE_DIAGRAM_NODE_PHASES)
 
 # (src, dst) -> (arrow, label), exactly as in overview.md. "\u00d7" is the
-# multiplication sign of the lane names, escaped to keep this file ASCII.
+# multiplication sign of the lane names. It is escaped because ruff's
+# confusable-character rules (RUF001/RUF003) flag a literal one; the only
+# non-ASCII literal kept in this file is the hand.
 PIPELINE_DIAGRAM_EDGES: dict[tuple[str, str], tuple[str, str | None]] = {
     ("setup", "plan"): ("-->", None),
     ("setup", "diag"): ("-->", None),
@@ -317,6 +321,7 @@ PIPELINE_DIAGRAM_SUBGRAPHS = {
 
 # Subgraph id -> ASCII substrings its title must contain.
 PIPELINE_DIAGRAM_SUBGRAPH_TITLE_WORDS = {
+    "STD": ("feature", "bug", "factory"),
     "BUG": ("bug", "product"),
     "EPIC": ("epic", "factory"),
 }
@@ -327,14 +332,16 @@ _DIAGRAM_HEADER_RE = re.compile(r"^flowchart (TB|LR|TD|BT|RL)$")
 _DIAGRAM_NODE_RE = re.compile(r'^(\w+)\["([^"]*)"\]$')
 _DIAGRAM_EDGE_RE = re.compile(r'^(\w+)\s*(-->|-\.->)(?:\|"([^"]*)"\|)?\s*(\w+)$')
 _DIAGRAM_SUBGRAPH_RE = re.compile(r'^subgraph (\w+)\["([^"]*)"\]$')
+# `~~~` is an invisible layout link: it changes placement only, so it is
+# allowed at top level and not pinned as an edge. Like any link line, it is
+# rejected inside a subgraph (it would pull its endpoints into that box).
+_DIAGRAM_INVISIBLE_LINK_RE = re.compile(r"^(\w+)\s*~~~\s*(\w+)$")
 # Lines that are recognised but carry nothing the test pins: classDef,
-# class, style, an invisible link (allowed by the story's Free list, not an
-# edge) and a comment.
+# class, style and a comment.
 _DIAGRAM_IGNORED_RES = (
     re.compile(r"^classDef \w+ .+$"),
     re.compile(r"^class [\w,]+ \w+$"),
     re.compile(r"^style \w+ .+$"),
-    re.compile(r"^\w+ ~~~ \w+$"),
     re.compile(r"^%%"),
 )
 
@@ -352,7 +359,8 @@ def _parse_pipeline_diagram(block: str) -> PipelineDiagram:
 
     Raises ``AssertionError`` on a line of no known kind, a missing
     header, a duplicate node or edge, a nested, unopened or unclosed
-    subgraph.
+    subgraph, or a link line (edge or ``~~~``) inside a subgraph: Mermaid
+    makes both endpoints of such a line members of that subgraph.
     """
     lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
     assert lines and _DIAGRAM_HEADER_RE.match(lines[0]), (
@@ -378,9 +386,16 @@ def _parse_pipeline_diagram(block: str) -> PipelineDiagram:
             if current is not None:
                 subgraphs[current][1].add(m[1])
         elif m := _DIAGRAM_EDGE_RE.match(line):
+            assert current is None, (
+                f"links must be declared outside subgraphs: {line!r}"
+            )
             key = (m[1], m[4])
             assert key not in edges, f"duplicate edge: {line!r}"
             edges[key] = (m[2], m[3])
+        elif _DIAGRAM_INVISIBLE_LINK_RE.match(line):
+            assert current is None, (
+                f"links must be declared outside subgraphs: {line!r}"
+            )
         elif not any(rx.match(line) for rx in _DIAGRAM_IGNORED_RES):
             raise AssertionError(f"unrecognised diagram line: {line!r}")
     assert current is None, f"subgraph {current!r} is never closed"
@@ -396,9 +411,9 @@ def _assert_pipeline_diagram(block: str) -> None:
         f"{sorted(parsed.nodes)}, expected {sorted(PIPELINE_DIAGRAM_NODES)}."
     )
     for node_id, label in parsed.nodes.items():
-        assert "✋" in label, (
+        assert "<br/>✋" in label, (
             f"Pipeline diagram node {node_id!r} has no maintainer "
-            f"touchpoint line (QS-417)."
+            f"touchpoint on its own line (QS-417)."
         )
         for phase in PIPELINE_DIAGRAM_NODE_PHASES[node_id]:
             assert re.search(rf"(?<![\w-]){re.escape(phase)}(?![\w-])", label), (
@@ -472,6 +487,12 @@ def _move_ver_out_of_bug(block: str) -> str:
     return head + sep + line + tail
 
 
+def _move_setup_edge_into_std(block: str) -> str:
+    """Move the ``setup --> plan`` line to just before the first ``end``."""
+    line = "    setup --> plan\n"
+    return block.replace(line, "").replace("    end\n", line + "    end\n", 1)
+
+
 # Each case mutates the real block once; the strengthened checks must
 # reject every one of them (review fix #01). The first nine are the fix
 # plan's required cases, the rest cover the parser's other rejections.
@@ -506,6 +527,18 @@ PIPELINE_DIAGRAM_MUTATIONS: dict[str, Callable[[str], str]] = {
     "duplicate-subgraph": lambda b: b + '    subgraph BUG["bug"]\n    end\n',
     "stray-end": lambda b: b + "    end\n",
     "unclosed-subgraph": lambda b: b + '    subgraph X["x"]\n',
+    # Review fix #02: a link line inside a subgraph makes both endpoints
+    # members of that subgraph, so the parser rejects it.
+    "edge-inside-subgraph": _move_setup_edge_into_std,
+    "invisible-link-inside-subgraph": lambda b: b.replace(
+        "    end\n", "    impl ~~~ rev\n    end\n", 1
+    ),
+    "hand-not-on-own-line": lambda b: b.replace(
+        "<br/>✋ merge authorization", " ✋ merge authorization"
+    ),
+    "std-title-drift": lambda b: re.sub(
+        r'subgraph STD\["[^"]*"\]', 'subgraph STD["default lanes"]', b
+    ),
 }
 
 
@@ -517,3 +550,12 @@ def test_pipeline_diagram_rejects_mutation(case: str) -> None:
     assert mutated != block, f"Mutation {case!r} no longer applies (stale case)."
     with pytest.raises(AssertionError):
         _assert_pipeline_diagram(mutated)
+
+
+def test_pipeline_diagram_accepts_top_level_invisible_link() -> None:
+    """QS-417 review fix #02: a top-level ``~~~`` stays allowed, not an edge."""
+    (block,) = _mermaid_blocks(_six_phases_section())
+    with_link = block + "    plan ~~~ diag\n"
+    _assert_pipeline_diagram(with_link)
+    parsed = _parse_pipeline_diagram(with_link)
+    assert parsed.edges == _parse_pipeline_diagram(block).edges
