@@ -14,9 +14,9 @@ isolated in `scripts/qs/launchers/`.
 
 The sketch above is the default path. The diagram below is the full
 picture: the lane variants, the review ⇄ implement fix loop, and, marked
-✋, where the maintainer decides in each phase. Red boxes are the review
-phases that can send a fix plan back to implement; the dashed arrow is a
-separate decision.
+✋, where the maintainer decides in each phase. Red-outlined boxes are the
+review phases that can send a fix plan back to implement; the dashed
+arrow is a separate decision.
 
 ```mermaid
 flowchart TB
@@ -59,9 +59,9 @@ flowchart TB
     classDef loop fill:#FFF5F5,stroke:#C92A2A,color:#212529
     class setup,plan,diag,dec,impl,fin,rel phase
     class rev,ver loop
-    style STD fill:#F8F9FA,stroke:#868E96
-    style BUG fill:#F8F9FA,stroke:#868E96
-    style EPIC fill:#F8F9FA,stroke:#868E96
+    style STD fill:#F8F9FA,stroke:#868E96,color:#212529
+    style BUG fill:#F8F9FA,stroke:#868E96,color:#212529
+    style EPIC fill:#F8F9FA,stroke:#868E96,color:#212529
 ```
 
 The **bug × product** lane (QS-335) diverges into a diagnose-first flow:
