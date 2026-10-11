@@ -20,8 +20,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, NoReturn, TextIO
 
-from . import clock as clock_mod
 from . import (
+    activeloop,
+    alerts,
+    codever,
     daemon,
     db,
     decisions,
@@ -32,6 +34,7 @@ from . import (
     ledger,
     liveness,
     locks,
+    mergegate,
     messages,
     migrations,
     nodes,
@@ -39,17 +42,21 @@ from . import (
     procsetup,
     questions,
     reports,
+    restore,
     runner,
     runs,
     schema_ledger,
     snapshot,
     tasks,
+    ticks,
     tools,
     wait,
 )
+from . import clock as clock_mod
 
 items.register_item_tools()  # #400's tools: the parser and the parametrized tests read REGISTRY at import
 ledger.register_export()  # #375's summary sections; the export is reachable only through this module
+activeloop.register_builtin()  # QS-406: the daemon's tick hooks (idempotent; main() calls it again)
 
 
 @dataclass(frozen=True)
@@ -192,11 +199,66 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _version(args: argparse.Namespace, io: Io) -> dict[str, Any]:
-    return {"package": "control_plane", "schema_version": migrations.current_schema_version()}
+    return {
+        "package": "control_plane",
+        "schema_version": migrations.current_schema_version(),
+        "tools": sorted(tools.REGISTRY),
+        "tick_hooks": [name for name, _ in ticks.registered()],
+    }
 
 
 def _daemon(args: argparse.Namespace, io: Io) -> dict[str, Any]:
-    return daemon.run(io.deps.clock, probe=io.deps.probe, idle_exit_s=daemon.IDLE_EXIT_S, tick_s=daemon.TICK_S)
+    loaded = codever.loaded_version()  # first: a pull landing during the migration is never "loaded" (D8)
+    result = daemon.run(
+        io.deps.clock,
+        probe=io.deps.probe,
+        tick_hooks=ticks.hooks(),
+        idle_exit_s=daemon.IDLE_EXIT_S,
+        tick_s=daemon.TICK_S,
+        loaded_version=loaded,
+    )
+    if result.get("exit") == "new_code":  # the lease is cleared and the flock released: start the new code
+        try:
+            result["respawn"] = ensure_daemon(io)["status"]
+        except Exception as exc:  # noqa: BLE001 — the next `wait` retries
+            result["respawn"] = "error"
+            result["respawn_error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def _conf_halt_clear(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--reason", required=True)
+
+
+def _halt_clear(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    """The maintainer reopens automatic merges for the code on disk (QS-406 D2; exempt: no token)."""
+    if not args.reason.strip():
+        raise errors.CpError("USAGE", "--reason must not be empty")
+    path = paths.select_db()
+    if db.check_schema(path, wait=False, clock=io.deps.clock) == "missing":
+        raise errors.CpError("NOT_FOUND", "no Control Plane DB yet: there is no gate to clear")
+    version = codever.code_version(paths.main())
+    conn = db.connect(path)
+    try:
+        with db.write(conn):
+            previous = mergegate.get(conn, mergegate.RECORD)
+            override = mergegate.override(conn, io.deps.clock, version, args.reason)
+            alerts.sync_locked(conn, io.deps.clock, kinds={alerts.SELFCHECK_FAILED}, active=[])
+    finally:
+        conn.close()
+    return {"override": override, "previous": previous}
+
+
+def _conf_restore(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--confirm", action="store_true", help="required: everything recorded after the backup is lost")
+
+
+def _restore(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    """The maintainer restores the newest backup in place (QS-406 D14; exempt: the DB may be lost)."""
+    if not args.confirm:
+        raise errors.CpError("USAGE", "restore discards everything recorded since the backup: pass --confirm")
+    d = io.deps
+    return restore.restore(paths.select_db(), clock=d.clock, probe=d.probe, kill=d.kill, popen=d.popen)
 
 
 def _ensure(args: argparse.Namespace, io: Io) -> dict[str, Any]:
@@ -895,6 +957,20 @@ COMMANDS: dict[str, Command] = {
         Command("version", "exempt", _version, help="print the package and schema version (no DB)"),
         Command("daemon", "exempt", _daemon, help="run the daemon (migrates the DB, heartbeats, ticks)"),
         Command("ensure", "exempt", _ensure, help="start or restart the daemon if needed"),
+        Command(
+            "halt clear",
+            "exempt",
+            _halt_clear,
+            _conf_halt_clear,
+            help="the maintainer reopens automatic merges for the code on disk (asks for approval)",
+        ),
+        Command(
+            "restore",
+            "exempt",
+            _restore,
+            _conf_restore,
+            help="the maintainer restores the newest DB backup in place (asks for approval)",
+        ),
         Command("hook stop", "exempt", _hook_stop, help="the orchestrator's Stop hook (stdin: hook JSON)"),
         Command("hook pre-tool-use", "exempt", _hook_pre_tool_use, help="the PreToolUse hook (stdin: hook JSON)"),
         Command("hook pre-push", "exempt", _hook_pre_push, _conf_hook_pre_push, help="git's pre-push hook"),
@@ -1024,6 +1100,7 @@ def _emit(out: TextIO, payload: dict[str, Any]) -> None:
 
 def main(argv: Sequence[str] | None = None, *, stdin: TextIO | None = None, stdout: TextIO | None = None) -> int:
     items.register_item_tools()  # cheap, and keeps a reset registry whole before build_parser()
+    activeloop.register_builtin()  # likewise for the tick hooks
     io = Io(stdin=stdin or sys.stdin, stdout=stdout or sys.stdout, deps=make_deps())
     argv = list(sys.argv[1:] if argv is None else argv)
     try:

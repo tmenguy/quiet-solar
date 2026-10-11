@@ -8,11 +8,14 @@ It is Python with no LLM, and there is one of it for all runs. It holds:
 - the run queues;
 - the commands that LLM sessions call;
 - the tools layer;
-- the hooks.
+- the hooks;
+- the **active loop** (child 14, [#406](https://github.com/tmenguy/quiet-solar/issues/406)):
+  the daemon's tick hooks, which watch every run and alert, but never decide.
 
 Code: [`scripts/qs/control_plane/`](../../scripts/qs/control_plane/), behind the
 entry shim [`scripts/qs/cp.py`](../../scripts/qs/cp.py). Design and decisions:
-[`docs/stories/QS-399.story.md`](../stories/QS-399.story.md).
+[`docs/stories/QS-399.story.md`](../stories/QS-399.story.md) and, for the active
+loop, [`docs/stories/QS-406.story.md`](../stories/QS-406.story.md).
 
 ## Invocation
 
@@ -67,6 +70,8 @@ Kinds:
 | `version` | — | — | exempt |
 | `daemon` | — | — | exempt |
 | `ensure` | — | — | exempt |
+| `halt clear` | `--reason TEXT` | — (the maintainer, through the `ask` prompt) | exempt |
+| `restore` | `--confirm` | — (the maintainer, through the `ask` prompt) | exempt |
 | `hook stop` / `hook pre-tool-use` | stdin: hook JSON | — | exempt |
 | `hook pre-push` | git's args and stdin | (`QS_CP_TOKEN`) | exempt |
 | `hooks-settings` | `--role node\|orchestrator` | — | exempt |
@@ -114,6 +119,7 @@ Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 
 - **`hooks-settings` and `version`.** No DB at all.
 - **`daemon`.** It migrates.
 - **`ensure`.** It reads the daemon lease defensively.
+- **`halt clear` and `restore`** (#406). The maintainer's commands: no token, since the DB may have no open run, or be lost. A newer DB is `SCHEMA_TOO_NEW` before anything else; see [The merge gate](#the-merge-gate-and-the-self-check) and [Backups and restore](#backups-and-restore).
 - **The read commands** (`session status`, `snapshot`, `task show`, `ledger show`, `export-summary`):
   - a missing DB is an empty answer;
   - an older DB is `SCHEMA_PENDING` at once;
@@ -123,7 +129,7 @@ Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 
 
 ### Tables
 
-`harness_state.db` holds, at schema v2 (v1, the tables below except the ledger; v2, the finding ledger of #375):
+`harness_state.db` holds, at schema v3 (v1: the tables below except the ledger and `alerts`; v2: the finding ledger of #375; v3: the active loop's `alerts`, #406):
 
 | group | tables |
 |---|---|
@@ -132,8 +138,11 @@ Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 
 | nodes | `nodes`: one row per generation |
 | queues and records | `messages`, `questions`, `decisions`, `digests`, `reports`, `integrations` |
 | coordination | `locks`, `cap_slots`, `tool_calls`, `waiters`, `daemon_lease`, `hook_events` |
+| active loop (v3, #406) | `alerts`: one row per (run, occurrence) |
 | bookkeeping | `meta`, `counters` |
 | the ledger (v2) | `rounds`, `findings`, `finding_events`, `blast_radius` (see [The ledger](#the-ledger-375)) |
+
+Migration v3 (#406) adds `alerts` and seeds `meta.hook_events_cursor` past the existing `hook_events` (so history is never replayed). The active loop also keeps these `meta` keys, written at runtime: `selfcheck`, `selfcheck_override`, `selfcheck_pending`, `last_backup_at`, `last_backup_error`.
 
 The schema version is `PRAGMA user_version`.
 
@@ -158,7 +167,7 @@ A DB already at the current schema needs no migration, so `migrate` is a noop wi
 
 Contention anywhere in a migration (the migrate lock, opening the DB, reading `user_version`, the backup, a step, `COMMIT`: any SQLite `BUSY` or `LOCKED` code, extended codes included) is `BUSY`. The daemon retries it (`MIGRATE_BUSY_RETRIES` times, one tick apart) and never records it in the backoff sidecar.
 
-Before migrating an existing DB, the daemon backs it up to `QS_CP_BACKUP_DIR`, which is never inside a checkout.
+Before migrating an existing DB, the daemon backs it up to `backups.db_dir(db_path)` (a per-DB subdirectory of `QS_CP_BACKUP_DIR`, never inside a checkout; see [Backups and restore](#backups-and-restore)). A refused backup directory fails the migration, through the `migrate-error` sidecar.
 
 ### Migration recipe for later children (#375 and others)
 
@@ -183,6 +192,107 @@ Before migrating an existing DB, the daemon backs it up to `QS_CP_BACKUP_DIR`, w
   - The wait ends as soon as the lease is cleared or another daemon's pid holds it, the singleton is free, or the pid is proven dead.
   - When `DAEMON_RESTART_WAIT_S` passes, `ensure` sends SIGKILL only if the old pid is still proven alive, has the same start time, and its heartbeat has not moved since the SIGTERM and is at least `STALE_AFTER_S` old; it then waits up to `KILL_WAIT_S` (same exits) and starts the new daemon.
   - Otherwise (liveness unknown with the singleton held, a heartbeat still moving, or a SIGKILL that did not take) it answers `restart_pending` for an older schema or `stale_alive` for the same one, and starts nothing. `wait` treats both as `restart_wait` (exit 5).
+- **`restoring`** (#406). While a `restore` holds the DB (its `<db>.restoring` marker names a live pid), `ensure` answers `restoring` and spawns nothing, and a starting daemon exits at once (`"exit": "restoring"`). `wait` keeps polling. A marker whose pid is proven dead (a killed `restore`) is unlinked by the next `ensure`.
+- **The spawned environment** (#406, D16). `ensure` starts the daemon with `strip_env(os.environ)`: every `CLAUDE_CODE_MESSAGING_*` name, `CLAUDE_CODE_SESSION_ID`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` and the run token `QS_CP_TOKEN` are dropped, so neither the daemon nor anything it spawns carries the spawning session's messaging secret, identity or run token. A daemon started by hand keeps its own environment.
+
+## The active loop (#406)
+
+The daemon is the active loop: one Python process for every run. Each tick (`TICK_S`) runs the registered **tick hooks**, in this order:
+
+| hook | cadence | does |
+|---|---|---|
+| `code_version` | every tick | restart on new Control Plane code ([Restart on new code](#restart-on-new-code)) |
+| `selfcheck` | every tick, deciding from `meta.selfcheck` | the post-merge self-check that opens the merge gate |
+| `detectors` | `DETECT_EVERY_S`; overlap every `OVERLAP_EVERY_S` | overlap, stalled nodes, rounds, state anomalies, cycles, duplicates ([Detectors](#detectors)) |
+| `hook_route` | every tick | routes `hook_events` alerts to their run's orchestrator queue |
+| `ci_watch` | its own schedule | `tasks.ci_state` / `ci_sha` for every open PR; `ci_red` |
+| `liveness_watchdog` | `LIVENESS_EVERY_S` | `node_dead`, `orchestrator_dead`, and the wake-up ladder |
+| `backup` | `BACKUP_EVERY_S`, from `meta` | periodic backups and `backup_failed` |
+
+### Registering a tick hook
+
+`ticks.register(name, fn)` (`ValueError` on a duplicate name); `fn(conn, clock)` gets the daemon's single long-lived connection. The built-in hooks are listed in `activeloop.register_builtin()` and `activeloop.BUILTIN_NAMES`; `cli` calls `register_builtin()` at import and in `main`, so a later child (child 15's cross-run pilot) adds its hook to that list and to `BUILTIN_NAMES`, and the self-check sees a missing one. A hook takes its side effects from `activeloop.seams()` (`Seams`: `runner`, `probe`, `claude`, `main`, `github`), built once per daemon. **The contract:**
+
+- never let `STALE_AFTER_S` pass without a beat;
+- give every subprocess a timeout of at most `HOOK_SUBPROCESS_S`, and call `daemon.beat(conn, clock)` after it;
+- run subprocesses and beats outside any `db.write`: read, release, call, beat, write;
+- bound the work per tick, never launch a long job in-process, and throttle with a `ticks.Throttle` or a DB timestamp.
+
+A hook that raises is logged and skipped. A SIGTERM is honoured after the current hook; a restart request at the end of the tick.
+
+### Alerts
+
+An alert is raised **once per occurrence**: `alerts.sync_locked(conn, clock, kinds=…, active=[Condition(kind, subject, run_ids, payload)])` inserts one `alerts` row per (open run, kind, subject) and posts one orchestrator message whose `dedupe_key` is the fingerprint `<kind>:<sha256(subject)[:16]>:<n>`. While the condition holds, later syncs refresh the row (`last_seen`, `payload`) and post nothing; when it stops holding, the row is cleared, silently; a recurrence is a new occurrence (`n + 1`). A condition raised again per value carries the value in its subject (a CI sha, a round, a lock's `acquired_at`). A hook syncs only the kinds whose input it knows this tick, so an unknown input clears nothing; **cold in-memory state counts as unknown**, so a daemon restart is never a recurrence. `alerts.event_locked` records a one-shot alert (cleared at once, posted once).
+
+Kinds (`alerts.KINDS`, each 1–32 characters; `CROSS_RUN_KINDS` for child 15): `overlap` / `overlap_cross_run`, `node_stalled`, `too_many_rounds`, `task_without_node`, `dependency_violated`, `lock_held_long`, `gate_slot_held_long`, `leftover_item`, `leftover_scratch`, `dependency_cycle` / `dependency_cycle_cross_run`, `duplicate_task` / `duplicate_task_cross_run`, `ci_red` (severity `must-fix`; every other kind is `alert`), `node_dead`, `orchestrator_dead`, `orchestrator_not_listening`, `selfcheck_failed`, `backup_failed`, and the routed hook kinds (`queue_not_draining`, `idle_without_wait`, `merge_state_conflict`, any other 1–32-character kind that is not daemon-owned, else `hook_alert`). `ROUNDS_ALERT` is 5.
+
+**The read path.** `snapshot["alerts"]` lists every open alert row, then the `ALERTS_LIMIT` newest cleared ones (after the `--run` filter). The raw `hook_events` alerts are in `snapshot["hook_alerts"]`, so an unroutable one stays visible. `hook_alerts` is global: `--run` does not filter it, because `hook_events` has no run column and a raw event may name no run at all.
+
+**Hook routing.** `meta.hook_events_cursor` (seeded by migration v3, so history is never replayed) marks the last event read. Each tick routes the next `alert` events to their run (`detail.run_id`, else the run of `detail.task_id`) as one-shot alerts with subject `hook:<id>`, and moves the cursor, routable or not. Each event is routed inside its own SAVEPOINT: one that raises is rolled back alone, logged, and skipped, so it never blocks the cursor. A transient DB failure (`sqlite3.OperationalError` such as a full disk or an I/O error, or `BUSY`) is not the event's fault: it rolls the whole batch back, the cursor stays, and the next tick retries. A cursor that is not an integer, or is out of range (negative, or beyond SQLite's 64-bit integers; a hand edit), is reseeded the way migration v3 seeds it, past the existing `hook_events` (logged); routing goes on from the next new event. An event whose `kind` is daemon-owned (`alerts.KINDS - ROUTED_HOOK_KINDS`, e.g. `ci_red` or `selfcheck_failed`) is routed as `hook_alert`, so a hook can never pose as the daemon or claim `must-fix`.
+
+### Restart on new code
+
+`cli._daemon` first reads `codever.loaded_version()`: the sha256 of `scripts/qs/control_plane/**/*.py`, `cp.py`, `models.py` and `targets.py` in the main checkout, or `unverified:<hash>` when a hashed file changed since the package was imported (a future mtime is logged once and ignored). The `code_version` hook recomputes the disk version every tick; a change seen on **two consecutive ticks**, with no git operation in progress in the main checkout (`index.lock`, `MERGE_HEAD`, `rebase-merge`, `rebase-apply`), asks the daemon to restart. An `index.lock` older than `GIT_LOCK_STALE_S` is a crashed git's leftover: it is ignored (logged once), so it never freezes the restart or the overlap detector; `MERGE_HEAD` and a rebase stay "in progress" however old (the merge gate's `stuck` state names them, and a stale lock too). It finishes its tick, exits `new_code` (lease cleared, `flock` released), and `cli._daemon` calls `ensure`, which starts the new code (`"respawn"` in the result; an `ensure` error is `"respawn": "error"` and the next `wait` retries). Commands and hooks load new code at their next call; a running `wait` keeps its old code until a schema change stops it.
+
+### The merge gate and the self-check
+
+**Automatic merges open only after a self-check pass for the code on disk.** `tool merge`'s `policy` step asks `mergegate.merge_allowed` before the merge policy (after the probe, before `gh pr view --json headRefOid` and `gh pr merge`):
+
+| gate state | `tool merge` |
+|---|---|
+| `open`: a pass, or a maintainer override, for this code version | the merge policy, as before |
+| `pending`: not checked yet | `BUSY`, "replay the same key shortly" (routine for about a minute after a Control Plane merge) |
+| `retrying`: failed fewer than `SELFCHECK_ESCALATE_AFTER` times | `BUSY`, with `next_retry_at` |
+| `failed`: `SELFCHECK_ESCALATE_AFTER` failures | `POLICY_REFUSED`, "ask the maintainer" |
+| `stuck`: pending for more than `PENDING_ESCALATE_S` (the daemon may not start) | `POLICY_REFUSED`, naming a leftover git lock file when there is one, "ask the maintainer" |
+
+The `selfcheck` hook runs while the daemon's loaded code is the disk code: `schema` (the version and `PRAGMA quick_check`), `entry` (`<MAIN>/venv/bin/python cp.py version`, which must list every built-in tool and tick hook) and `registry` (the same, in-process, plus `cli.build_parser()`). Any exception is a recorded failure. A failure is retried every `SELFCHECK_RETRY_S`, forever (the throttle is `meta.selfcheck.at`, so a new daemon does not retry early), and `selfcheck_failed` reaches every open run from the first failure; a pass, an override or a version change clears it.
+
+**Clearing a halt.** The maintainer asks the orchestrator, which runs `cp.py halt clear --reason TEXT`. The `PreToolUse` hook answers `ask`, so the app shows the maintainer an approval prompt and nothing runs before he approves (see [Hooks](#hooks)). The override applies to the current code version only (a revert to that exact version gets it back: same code, same decision); it also clears `selfcheck_failed`. The refusal text never names the command, so an orchestrator escalates instead of clearing on its own.
+
+**The import-failure limit.** A version that cannot start records no pass: merges are `BUSY`, then `stuck` after `PENDING_ESCALATE_S`. If that version also carries a migration, every write command (and `halt clear`) answers `SCHEMA_PENDING`, with the migrate-error sidecar, before reaching the gate. The fix is to revert the code.
+
+### Detectors
+
+Every `DETECT_EVERY_S`, for every run and across runs. Times are compared as ISO strings against `now - threshold`, so a non-ISO stamp is never "older".
+
+- **Overlap:** non-terminal tasks with a resolvable local branch; a deliverable against the newer of `main` / `origin/main` (`origin/main` when they diverge), a work item against `QS_<N>`; `git diff --name-only base...tip` per pair (never an item with its own deliverable), and the conflicting files from `git merge-tree --write-tree --name-only --no-messages` (**git ≥ 2.38**; it writes loose tree objects into the main repository, which `git gc` collects). At most `OVERLAP_MAX_CALLS` git calls per tick: a longer walk continues on the next runs, re-emitting the last complete result meanwhile; skipped while a git operation is in progress. A failed `git diff` for one branch (no merge base: an orphan branch, a shallow clone) skips that branch, logged once per failure episode, and keeps its last overlap alerts as they were (unknown, not cleared) while every task they name is still a live branch; a failed `merge-tree` reports `conflicts: null` for that pair. Either failure is not retried for the rest of the walk (a walk resumed on the next run skips it). A failed `rev-parse` of one task's branch (or of a work item's deliverable branch) is that task's unknown the same way, logged once per task and failure episode, and is not retried for the rest of the walk either. `main` / `origin/main` are resolved first, before any task, so a repo-wide failure (every git call exits 128: dubious ownership, a corrupt ref store) stops the walk on its first call instead of marking each task unknown. A git timeout or a missing git (the runner's exit 124 / 127) stops the whole walk instead, like a failed `rev-parse` of `main` / `origin/main` or a failed ancestry check: both kinds are left out on that tick, the last complete result (if any) is re-emitted on the ticks in between, and the next walk waits `OVERLAP_EVERY_S`. Any other error escaping the walk (a failed lease beat) resets the walk's state, so the next walk retries every key, and also waits `OVERLAP_EVERY_S`, so a persistent failure is not re-walked every tick. A complete walk prunes the diff and merge-tree caches to the keys it used. A fresh daemon takes its "last alerts" from the open overlap alerts, so a restart with an unknown branch is never a recurrence. A detector that raises is logged once per exception type until it succeeds again.
+- **`node_stalled`:** a `running` node with no tool call in flight and no activity (launch, report, message, tool call) for `STALL_S`. A `started` tool call whose holder is dead (a SIGKILLed `cp.py`) is not in flight.
+- **`too_many_rounds`:** a phase past `ROUNDS_ALERT` rounds; each new round is a new occurrence.
+- **State anomalies:** `task_without_node` (`ORPHAN_GRACE_S`); `dependency_violated` (a started, non-terminal task whose dependency is neither `merged` nor `validated`: a dependent starts only after its dependency merged); `lock_held_long` (`LOCK_HELD_*`, routed to the holder's run); `gate_slot_held_long` (`GATE_SLOT_HELD_S`); `leftover_item` and `leftover_scratch` (a finished deliverable's item worktree or `QS_<N>_<k>_integration` scratch; a failed `git worktree list` leaves `leftover_scratch` out, logged once per failure episode).
+- **`dependency_cycle`** (Tarjan over every `task_deps` row, across runs) and **`duplicate_task`** (the same normalised title).
+
+Each detector runs and syncs in its own `try`: one that raises is logged, its kinds are left out (nothing cleared), and the others still run.
+
+### The CI watcher
+
+Every deliverable with a PR, not terminal, in an open run, through one `gh api graphql` call per `CI_BATCH` PRs. A poll writes `tasks.ci_state` (`pending | green | red`) and `ci_sha` on a change only, and only when every batch returned data; a `MERGED` or `CLOSED` PR gets `NULL`. `ci_red` (must-fix) is derived from the stored rows on every tick: once per red sha. The schedule is `CI_FAST_S` while a check is pending or a head moved, else `CI_SLOW_S`; failures (a missing `gh` included) back off from `CI_BACKOFF_MIN_S` to `CI_BACKOFF_MAX_S`; below `CI_RATE_FLOOR` remaining calls it waits for GitHub's `resetAt`, believed at most `CI_RESET_CAP_S` ahead (a stamp without an offset is UTC; one that cannot be read waits `CI_SLOW_S`). A new daemon polls at once. An origin that is not a GitHub remote is logged once. A `null` check context is skipped, and a PR whose answer cannot be parsed is unknown for that poll (no write, logged once until it parses again) instead of failing the batch. A red row with no `ci_sha` gets the subject `<task>@-`.
+
+### Liveness and the watchdog
+
+`claude agents --json` (it lists desktop sessions too, with their idle status) feeds `nodes.refresh`, `node_dead` (a task's current node `reaped` on `LIVENESS_CONFIRM` listings in a row) and `orchestrator_dead` (a lease session absent from `LIVENESS_CONFIRM` listings). A failed listing changes nothing.
+
+**Waking a stalled orchestrator.** A run is stalled when its head message has waited `WATCHDOG_S`, no `wait` is live, and its lease session is listed idle. Then:
+
+1. **the messenger:** one `claude --bg -n qs-wake-<run>-m<msg> --model <models' fast class> --permission-mode auto --allowedTools=SendMessage "<prompt>"`, in `QS_CP_MESSENGER_DIR` (0700, outside every checkout), which sends the session named after the run a wake text (never a token). It is recorded as a `tool_calls` row `('watchdog-messenger', 'msg:<id>')`, so it is launched once per head, and capped at one launch per `MESSENGER_TTL_S`: with N runs stalled at once, the last waits about (N - 1) × 5 min. **This is the one documented exception to "only a task's node is spawned".**
+2. **`orchestrator_not_listening`:** when the run is still stalled `WAKE_RETRY_S` after the launch, at once when the launch failed, or when the run name is not bound to its lease session (`run bind-name`).
+
+A launch never leaves its row `started`: an unusable `QS_CP_MESSENGER_DIR`, or messenger arguments that cannot be built (the `models` import, the `fast` class), fails the launch before the claim, and any failure after the claim closes the row as `failed` (the error text in `result`), while a spawn that ran is recorded as such even if the beat after it fails (the lease is beaten after every spawn attempt, failed or not); a `started` row older than `MESSENGER_TTL_S`, or whose holder is dead, is failed too. The messenger's environment never carries the session identity or the messaging variables (`daemon.STRIPPED_ENV`, `CLAUDE_CODE_MESSAGING_*`) nor the run token, even when the daemon was started by hand inside a session. Its wake text names `<main>/venv/bin/python`, or the daemon's own interpreter when that venv is missing, both paths shell-quoted.
+
+Verified on 2026-10-09 (QS-406 T1): the messenger wakes an idle desktop session. The orchestrator must be addressable by the run's name: `/rename <run name>` sets it (the app's sidebar rename does not). The inbox socket (`$CLAUDE_CODE_MESSAGING_SOCKET`) is **not** used: its frame format is undocumented and the frames tried were not delivered; that rung is a follow-up issue. The full spike results (folder trust in the messenger directory, what a `SessionStart` hook inherits, the `!` pane's missing variables) are in the T1 table of [QS-406's story](../stories/QS-406.story.md#t1--the-inbox-spike-run-2026-10-09-with-the-maintainer-desktop-app-claude-code-21285).
+
+### Backups and restore
+
+**Periodic backups.** While a run is open, the `backup` hook copies the DB every `BACKUP_EVERY_S` to `backups.db_dir(db_path)` = `QS_CP_BACKUP_DIR/<sha256(db path)[:8]>/harness_state.periodic.<stamp>.db`. Every copy (periodic, migration `v<N>`, a restore's `replaced`) is written to a `.partial`, fsynced and renamed; the directory is then fsynced too, so the rename survives a crash (best-effort: a filesystem that refuses a directory fsync, such as FUSE, 9p or SMB, is logged once and the copy still counts), 0600 in 0700 directories (a user-owned 0755 `cp-backups` left by #399 is tightened; a foreign one is refused), with `journal_mode = DELETE`. Rotation keeps every periodic copy of the last 24 h, then the newest per UTC day for 7 days (a copy of the last 24 h counts as its day's newest), and deletes a `.partial` whose stamp is older than `BACKUP_EVERY_S` (a crashed copy's leftover, a restore's staged copy included). A file whose stamp is not a real date is ignored by rotation and by `restore`. A failed rotation is logged only: the copy was taken. `v<N>` and `replaced` copies are never deleted by code: delete old ones by hand. A failed backup is `backup_failed` for every open run until the next success, retried every `BACKUP_EVERY_S` (a `meta.last_backup_error` that is not an object is retried at once). #399's backups at the top of `cp-backups` are left alone; move one into the DB's subdirectory to make it restorable.
+
+**Restoring.** The maintainer asks the orchestrator, which runs `cp.py restore --confirm` behind the same `ask` prompt as `halt clear`. It restores the newest `periodic` or `v<N>` copy **in place** (SQLite's backup API: the file and its WAL stay, open connections see the restored content), after:
+
+- checking the live DB (newer → `SCHEMA_TOO_NEW`; unreadable → `CONFLICT`, "move it aside, then retry"), the backup (none → `NOT_FOUND`; failing `quick_check`, newer, another page size, or missing a `waiters`, `daemon_lease` or `meta` table → `CONFLICT`) and the tool calls (one in flight → `BUSY`) — a refusal here touches nothing;
+- writing the `restoring` marker, stopping the daemon (`daemon.stop`: `not_running`, `stopped`, or `signalled` while it finishes a tick) and taking its `flock` and the migrate lock, within one `RESTORE_LOCK_WAIT_S` deadline (`BUSY` otherwise, "the daemon may be finishing a tick; retry");
+- keeping the live DB as `harness_state.replaced.<stamp>.db` (the undo): any non-empty file at the DB path is kept, migrated or not; only a missing or empty one is not. A copy that cannot be written is a `CONFLICT` refusal, nothing restored and the live DB untouched; its hint follows the error: "free space" for an `OSError` or SQLite's `SQLITE_FULL` / `SQLITE_CANTOPEN` ("database or disk is full"), "retry in a moment" for `SQLITE_BUSY` / `SQLITE_LOCKED`, and a plain "could not be copied" (no free-space claim) for any other SQLite error; only a live DB SQLite reports as corrupt gets the "move it aside" hint.
+
+The live `waiters` rows and the `selfcheck` / `selfcheck_override` / `selfcheck_pending` keys are carried across (they describe the processes and the code on disk, not the data), the daemon lease is cleared, `last_backup_error` is dropped (neither the backup's nor the live one is kept: a restore starts a fresh backup cycle, so a copy taken right after a failed attempt does not bring `backup_failed` back), and every exit path removes the marker, releases the locks and calls `ensure`. That fix-up runs on a **private staged copy** of the backup (`harness_state.restoring.<stamp>.db.partial`, 0600, removed on every exit), in one transaction; the finished copy is then written into the live DB in **one** step, the restore's only write to it. A failure staging the backup (a full disk is the likeliest: a restore needs about twice the DB's size free) or of the fix-up is an `INTERNAL` refusal with the live DB untouched, never a "move it aside" hint (a policy refusal while staging, such as a backup directory owned by another user, keeps its own code, `POLICY_REFUSED`, and carries `replaced` too; its own hint, if any, comes first, then "nothing was restored" with the `replaced` path); a failure of that final write is an `INTERNAL` error saying the live DB may hold part of the backup. `replaced` (in the error, as in every error raised after the live DB was kept) points at the pre-restore copy: that is where the pre-restore data is, whatever a retry does. **Everything recorded after the backup is lost; run tokens issued since then are stale (each orchestrator must `run claim` again);** the next ticks re-sync CI and liveness, and an older-schema backup is migrated by the daemon that starts. To restore an **older** backup, move the newer files aside first. While a restore holds the migrate lock, read commands and hooks see `SCHEMA_PENDING`, or fail open. **An accepted limit:** ordinary `cp.py` tool writes do not check the `restoring` marker, so one accepted after the `replaced` copy is written and before the final write lands in neither that copy nor the restored DB; restore is a rare, maintainer-confirmed operation, so this window is not closed.
+
 
 ## The ledger (#375)
 
@@ -377,6 +487,7 @@ Notes:
 - Every built-in tool except `worktree-cleanup` refuses a terminal task with `INVALID_STATE`, recorded `failed`.
 - `merge` also requires the task to be `ready_to_merge`, unless the PR is already merged. Once the PR is merged, `merge_sha` is recorded when known (a missing `mergeCommit` is read once more, after `MERGE_SHA_RETRY_S`; an unknown sha never overwrites a recorded one). A task already `merged` is a noop success (`noop: true`). If the task left `ready_to_merge` for any other state meanwhile, the call still succeeds, with `state_conflict: {"expected": "ready_to_merge", "actual": …}`, for the orchestrator or the maintainer to reconcile; it is also recorded as a `hook_events` `alert` (hook `tool:merge`), so `snapshot` shows it.
 - `merge` is refused by the default merge policy until child 7 installs one (`merge_policy.install`).
+- `merge` checks the **merge gate** first (#406): `BUSY` while the self-check for the code on disk is pending or retrying, `POLICY_REFUSED` once it failed or is stuck; see [The merge gate and the self-check](#the-merge-gate-and-the-self-check). Both release the claim.
 
 ### Work items and integration (#400)
 
@@ -516,13 +627,15 @@ def invoke(name, *, key, task_id, args, token, actor, ctx=None) -> dict
 | hook | wired | input → output | failure |
 |---|---|---|---|
 | `Stop` (orchestrator) | child 9 writes `hooks-settings --role orchestrator` into main's pin; **6a must not ship before** | stdin `session_id` → `{"decision": "block", "reason": …}` when a message waits (pop it), or once when no `wait` runs; a loop guard allows and records a `hook_events` `alert` | fail open |
-| `PreToolUse` (every registered session; matcher `Bash\|Edit\|Write\|SendMessage`) | nodes: `claude --bg --model <m> --settings '<hooks-settings --role node, plus the policy's effortLevel>'` at spawn | `tool_name`, `tool_input` → `hookSpecificOutput.permissionDecision: "deny"` for DB access outside `cp.py` (any session), `gh pr merge` (registered sessions), `SendMessage` from a superseded or stopped session | fail open |
+| `PreToolUse` (every registered session; matcher `Bash\|Edit\|Write\|SendMessage`) | nodes: `claude --bg --model <m> --settings '<hooks-settings --role node, plus the policy's effortLevel>'` at spawn | `tool_name`, `tool_input` → `hookSpecificOutput.permissionDecision: "deny"` for DB access outside `cp.py` (any session), `gh pr merge` (registered sessions), `SendMessage` from a superseded or stopped session; **`"ask"`** for `cp.py halt clear` / `cp.py restore` (#406) | fail open (the `ask` survives a DB failure) |
 | `pre-push` (git) | a common-dir shim installed by `tool worktree-create` (marker `# qs-control-plane pre-push shim v2`) | git's ref lines → exit 1 refuses `QS_<N>_<k>` refs everywhere, and, in a registered worktree, a stopped node, a foreign ref, or a missing or stale `QS_CP_TOKEN`. On a path several tasks registered, it judges a non-terminal task first, newest first | fail closed only for a proven-registered worktree |
 
 **The DB-access rule** (`PreToolUse`, Bash): a segment that names `harness_state.db` is denied unless it starts with a read-only program (`grep`, `rg`, `git`, `ls`, `sed -n`, `cat`, `head`, `tail`, `wc`, `find`, `echo`) or is a `cp.py` call. Even then:
 
 - a redirect onto the DB file itself (`harness_state.db`, `-wal`, `-shm`) is denied, inside a `cp.py` segment too; a sibling such as `> harness_state.db.json`, `.bak`, `-wal.bak` or `-backup.sql` is allowed;
 - `find` stays read-only only without `-delete`, `-exec`, `-execdir`, `-ok`, `-okdir`, `-fprint`, `-fprint0`, `-fprintf` or `-fls`, quoted or not (`'-delete'` is `-delete`).
+
+**The maintainer's approval** (`PreToolUse`, Bash, #406): a segment whose unquoted words contain `cp.py` (or a path ending in `/cp.py`) followed by `halt clear` or `restore` gets `permissionDecision: "ask"`, so the app shows the maintainer an approval prompt and nothing runs until he approves. It holds with no DB and under a newer DB, and a deny elsewhere in the command wins (`… && gh pr merge 5` from a registered session is denied). It answers `ask` only in the permission modes of `hooks.ASK_MODES` — `default`, `acceptEdits`, `auto`, `bypassPermissions`: verified on 2026-10-09 that a hook's `ask` shows a real prompt even in `bypassPermissions` — and `deny` elsewhere (`plan`, `dontAsk`), with the hint "switch this session to default mode in the app, then ask again". A payload with no `permission_mode` at all (or an empty or non-string one) is denied too (the safe default for a maintainer-only command), with the hint to run the command in a terminal instead. It is recorded in `hook_events` as an `allow` of kind `maintainer_ask`. A payload that mentions `cp.py` but cannot be parsed (so its mode is unknown too) is denied the same way, with the hint to run the command in a terminal, and recorded as a `deny` of kind `error`; any other parse failure fails open. Fallback: the maintainer can run the command himself by typing `!` in the app (a pasted `!…` is sent as a message).
 
 Whether `--settings` hooks survive a bare `claude --bg --resume` is unverified, an open point for 6b. So are two model points (QS-405), which 6b answers and records here: whether a resumed node keeps the model and effort it was spawned with (`resume` passes no flag — any flag forks a copy), and whether `effortLevel` through `--settings` takes effect on a `--bg` session at all. `pre-push` is git-level, so it applies regardless.
 
@@ -533,7 +646,8 @@ The shim and the settings commands run `<MAIN>/venv/bin/python`. Without it they
 | variable | default | for |
 |---|---|---|
 | `QS_CP_DB` | `<MAIN>/harness_state.db` | a temporary DB (tests, experiments). Never a live DB from another checkout |
-| `QS_CP_BACKUP_DIR` | `~/.local/state/quiet-solar/cp-backups/` | migration backups. Never inside a checkout |
+| `QS_CP_BACKUP_DIR` | `~/.local/state/quiet-solar/cp-backups/` | every backup, in a per-DB subdirectory. Never inside a checkout or a linked worktree (`POLICY_REFUSED`, naming the variable) |
+| `QS_CP_MESSENGER_DIR` | `~/.local/state/quiet-solar/cp-messenger/` | the watchdog messenger's working directory (0700). Never inside a checkout |
 | `QS_CP_MAX_GATES` | 2 | gate slots |
 | `QS_CP_MAX_NODES` | 4 | node sessions across all runs |
 | `QS_CP_TOKEN` | — | **git only**: injected by the tools into the steps that may push, so `pre-push` accepts them. Every `claude` launch removes it |
@@ -562,6 +676,20 @@ Most are overridable by a function argument. These are module-level only (tests 
 | `GATE_WAIT_S` | 1800 | `locks` |
 | `LOCK_WAIT_S` | 600 | `locks` |
 | `DIGEST_MAX_BYTES` | 16 KiB | `reports` |
+| `HOOK_SUBPROCESS_S` | 20 | `ticks` |
+| `ALERTS_LIMIT` / `ROUNDS_ALERT` | 50 / 5 | `alerts` |
+| `SELFCHECK_RETRY_S` / `SELFCHECK_ESCALATE_AFTER` / `PENDING_ESCALATE_S` | 600 / 3 / 600 | `mergegate` |
+| `DETECT_EVERY_S` / `OVERLAP_EVERY_S` / `OVERLAP_MAX_CALLS` | 30 / 120 / 20 | `detectors` |
+| `STALL_S` / `ORPHAN_GRACE_S` / `GATE_SLOT_HELD_S` | 3600 / 600 / 4500 | `detectors` |
+| `LOCK_HELD_PROCESS_S` (process `main-checkout`, `main-merge`, `integration:*`) / `LOCK_HELD_SESSION_INTEGRATION_S` (session `integration:*`) / `LOCK_HELD_DEFAULT_S` | 1200 / 10800 / 3600 | `detectors` |
+| `CI_FAST_S` / `CI_SLOW_S` | 30 / 300 | `ciwatch` |
+| `CI_BACKOFF_MIN_S` / `CI_BACKOFF_MAX_S` / `CI_BATCH` / `CI_RATE_FLOOR` | 60 / 900 / 25 / 200 | `ciwatch` |
+| `CI_RESET_CAP_S` | 3600 | `ciwatch` |
+| `GIT_LOCK_STALE_S` | 600 | `codever` |
+| `LIVENESS_EVERY_S` / `LIVENESS_CONFIRM` | 30 / 2 | `watchdog` |
+| `WATCHDOG_S` / `WAKE_RETRY_S` / `MESSENGER_TTL_S` | 120 / 300 / 300 | `watchdog` |
+| `BACKUP_EVERY_S` / `BACKUP_KEEP_ALL_S` / `BACKUP_KEEP_DAYS` | 900 / 86400 / 7 | `backups` |
+| `RESTORE_LOCK_WAIT_S` | 60 | `restore` |
 
 ## Seams
 
@@ -577,7 +705,10 @@ Most are overridable by a function argument. These are module-level only (tests 
 | `merge_policy` | refuses | `install(fn)` |
 | `Deps.resolve_model` → `Ctx.resolve_model` (QS-405) | `cli._policy_resolver`: `models.spawn_policy`, imported at call time — the Control Plane's one import outside the standard library (a test pins it) | the same resolver, or a stand-in; child 15 reuses the seam |
 | `export.LEDGER_SECTIONS` | the ledger's three sections (`Rounds`, `Findings`, `Blast radius`), registered by `cli` at import (`ledger.register_export()`); an empty registry renders "No ledger recorded." | the conftest teardown clears it and registers it again |
-| the daemon's `tick_hooks` | none | child 14's active loop. A tick hook must return within `STALE_AFTER_S` or beat the lease itself (`daemon.beat(conn, clock)`); the daemon beats before and after every hook. `ensure` SIGKILLs only a daemon whose heartbeat is at least `STALE_AFTER_S` old, so a hook that keeps this contract is never killed |
+| the daemon's `tick_hooks` | `ticks.hooks()`: the built-in hooks of [The active loop](#the-active-loop-406) | `ticks.hooks` returns `[]` (a hook-less daemon); the `active_loop` fixture restores it. A tick hook must return within `STALE_AFTER_S` or beat the lease itself; `ensure` SIGKILLs only a daemon whose heartbeat is at least `STALE_AFTER_S` old |
+| `activeloop.make_seams` | `Seams(Runner, ProcessProbe, ClaudeCli, paths.main(), ciwatch.GitHub)` | the test `Deps`, the fake main checkout and a `FakeGitHub` |
+| `codever.loaded_version` | the hash at `cli._daemon` entry | the fake main checkout's `code_version`; the `real_loaded_version` fixture restores it |
+| `mergegate.merge_allowed` | the gate | `open`; the `real_gate` fixture restores it |
 
 ## Conventions: what no hook enforces
 
@@ -601,3 +732,7 @@ Most are overridable by a function argument. These are module-level only (tests 
 - **`--settings` hooks after a bare resume:** unverified.
 - **The model and effort of a resumed node, and `effortLevel` through `--settings` on a `--bg` session:** unverified (QS-405; 6b's resume check records the result).
 - **The orchestrator's hooks are unwired until child 9.**
+- **The watchdog messenger** is the one exception to "only a task's node is spawned" (#406). `claude --bg` runs in Claude Code's background service with **the CLI's own login**: with an expired CLI login the launch still exits 0 and the messenger then stops ("Login expired"), so the run ends up `orchestrator_not_listening`. Keep the CLI logged in (run `claude`, then `/login`).
+- **The `ask` guard is matched per Bash segment.** A wrapper (`bash -c '…'`, `env`, a script) is not caught; the guard covers agent mistakes, like the other matchers. In `plan` / `dontAsk` mode the command is denied instead.
+- **The inbox socket is unused.** The messaging socket and its token (`CLAUDE_CODE_MESSAGING_*`) are visible to Bash-tool commands and `SessionStart` hooks; the Control Plane never stores or reads them, and `ensure` strips them (with the session identity) from the daemon's environment, as the watchdog does from the messenger's.
+- **The self-check and a broken version.** A Control Plane version that cannot start the daemon keeps merges closed (`stuck` after `PENDING_ESCALATE_S`); if it also carries a migration, write commands answer `SCHEMA_PENDING`. Revert the code.

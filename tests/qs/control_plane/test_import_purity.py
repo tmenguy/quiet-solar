@@ -1,8 +1,9 @@
 """QS-405 D6: the Control Plane imports only the standard library and itself.
 
-The one exception is the lazy ``import models`` in ``cli._policy_resolver``
-(the model policy a no-model ``tool spawn`` reads). Precedent: the AST scan
-in ``tests/qs/test_mermaid_svg.py``.
+The exceptions are the lazy ``import models`` in ``cli._policy_resolver``
+(the model policy a no-model ``tool spawn`` reads) and in
+``watchdog._messenger_model`` (QS-406: the watchdog messenger's fast-class
+model). Precedent: the AST scan in ``tests/qs/test_mermaid_svg.py``.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import sys
 from pathlib import Path
 
 CP_DIR = Path(__file__).resolve().parents[3] / "scripts" / "qs" / "control_plane"
+LAZY_MODELS = {("cli.py", "_policy_resolver"), ("watchdog.py", "_messenger_model")}
 
 
 def _foreign_imports(path: Path) -> list[str]:
@@ -19,7 +21,7 @@ def _foreign_imports(path: Path) -> list[str]:
     allowed_models = {
         id(node)
         for fn in ast.walk(tree)
-        if isinstance(fn, ast.FunctionDef) and fn.name == "_policy_resolver" and path.name == "cli.py"
+        if isinstance(fn, ast.FunctionDef) and (path.name, fn.name) in LAZY_MODELS
         for node in ast.walk(fn)
         if isinstance(node, ast.Import) and [a.name for a in node.names] == ["models"]
     }
@@ -59,3 +61,6 @@ def test_the_scan_catches_a_foreign_import(tmp_path: Path) -> None:
     other = tmp_path / "tools.py"
     other.write_text("def _policy_resolver():\n    import models\n")
     assert _foreign_imports(other) == ["tools.py:2 models"]
+    wd = tmp_path / "watchdog.py"
+    wd.write_text("import models\n\ndef _messenger_model():\n    import models\n")
+    assert _foreign_imports(wd) == ["watchdog.py:1 models"]

@@ -14,6 +14,7 @@ from . import errors
 
 DB_NAME = "harness_state.db"
 DEFAULT_BACKUP_DIR = Path("~/.local/state/quiet-solar/cp-backups")
+DEFAULT_MESSENGER_DIR = Path("~/.local/state/quiet-solar/cp-messenger")
 
 
 def code_root() -> Path:
@@ -106,12 +107,66 @@ def select_db() -> Path:
 _HINT = "call <MAIN>/scripts/qs/cp.py, or set QS_CP_DB to a temporary DB"
 
 
-def backup_dir() -> Path:
-    """Where migration backups go: never inside a checkout."""
-    raw = os.environ.get("QS_CP_BACKUP_DIR")
-    target = (Path(raw) if raw else DEFAULT_BACKUP_DIR).expanduser().resolve()
+def _linked_worktrees(main_dir: Path) -> list[Path]:
+    """The worktrees registered under ``<main>/.git/worktrees/*/gitdir`` (read without a subprocess)."""
+    found: list[Path] = []
+    registry = main_dir / ".git" / "worktrees"
+    for entry in sorted(registry.glob("*/gitdir")):
+        try:
+            found.append(Path(entry.read_text().strip()).parent)
+        except OSError:
+            continue
+    return found
+
+
+def state_dir(env: str, default: Path) -> Path:
+    """``$env``, else ``default``: a state directory outside every checkout of this repository (QS-406 D13).
+
+    The code root, the main checkout and every linked worktree are refused (``POLICY_REFUSED``, naming
+    ``env``). Other ``.git`` ancestors, such as a dotfiles home, are not.
+    """
+    raw = os.environ.get(env)
+    target = (Path(raw) if raw else default).expanduser().resolve()
     root = code_root()
-    for forbidden in {root, main_checkout(root)}:
-        if target == forbidden or target.is_relative_to(forbidden):
-            raise errors.CpError("POLICY_REFUSED", f"backup dir {target} is inside the checkout {forbidden}")
+    main_dir = main_checkout(root)
+    for forbidden in (root, main_dir, *_linked_worktrees(main_dir)):
+        checkout = forbidden.resolve()
+        if target == checkout or target.is_relative_to(checkout):
+            raise errors.CpError(
+                "POLICY_REFUSED",
+                f"state dir {target} is inside the checkout {checkout}",
+                hint=f"set {env} to a directory outside every checkout",
+            )
     return target
+
+
+def backup_dir() -> Path:
+    """Where backups go: ``QS_CP_BACKUP_DIR``, never inside a checkout."""
+    return state_dir("QS_CP_BACKUP_DIR", DEFAULT_BACKUP_DIR)
+
+
+def messenger_dir() -> Path:
+    """The watchdog messenger's working directory: ``QS_CP_MESSENGER_DIR``, never inside a checkout."""
+    return state_dir("QS_CP_MESSENGER_DIR", DEFAULT_MESSENGER_DIR)
+
+
+def ensure_private_dir(d: Path) -> Path:
+    """``d`` as a 0700 directory owned by this user (QS-406 D13).
+
+    A missing directory is created 0700 (its parents with the default mode); an existing one owned by
+    this user is tightened to 0700 (#399 created ``cp-backups`` with the umask); anything else is
+    ``POLICY_REFUSED``.
+    """
+    d.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        d.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    st = os.stat(d)
+    if not d.is_dir():
+        raise errors.CpError("POLICY_REFUSED", f"{d} is not a directory")
+    if st.st_uid != os.getuid():
+        raise errors.CpError("POLICY_REFUSED", f"{d} is owned by another user (uid {st.st_uid})")
+    if st.st_mode & 0o777 != 0o700:
+        os.chmod(d, 0o700)
+    return d
