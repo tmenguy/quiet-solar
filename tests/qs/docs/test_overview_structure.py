@@ -255,3 +255,124 @@ def test_overview_documents_claude_desktop_limitation() -> None:
         "`.claude/settings.local.json` — alongside the three that really "
         "are missing (URL scheme, argv pass-through, UI gesture)."
     )
+
+
+# --------------------------------------------------------------------------- #
+# QS-417 — the Mermaid diagram of the static-agent pipeline.
+#
+# "The six phases" keeps its one-line text sketch (the default path) and
+# adds, right after it, one Mermaid flowchart with the lane variants, the
+# review/implement fix loop and a hand (maintainer touchpoint) line in each
+# phase node. The test pins the placement, the lead-in, the phase names,
+# the node set, the touchpoints and the edge set. It does NOT detect a
+# phase added to the pipeline later, nor check label wording beyond the
+# phase names and the hand: both stay a review responsibility.
+# --------------------------------------------------------------------------- #
+
+PIPELINE_DIAGRAM_PHASES = (
+    "setup-task",
+    "create-plan",
+    "diagnose-task",
+    "decompose-epic",
+    "implement-task",
+    "implement-setup-task",
+    "review-task",
+    "verify-task",
+    "finish-task",
+    "release",
+)
+
+PIPELINE_DIAGRAM_NODES = {
+    "setup",
+    "plan",
+    "diag",
+    "dec",
+    "impl",
+    "rev",
+    "ver",
+    "fin",
+    "rel",
+}
+
+PIPELINE_DIAGRAM_EDGES = {
+    ("setup", "plan"),
+    ("setup", "diag"),
+    ("setup", "dec"),
+    ("plan", "impl"),
+    ("diag", "impl"),
+    ("impl", "rev"),
+    ("impl", "ver"),
+    ("rev", "impl"),
+    ("ver", "impl"),
+    ("rev", "fin"),
+    ("ver", "fin"),
+    ("diag", "fin"),
+    ("dec", "fin"),
+    ("fin", "rel"),
+}
+
+PIPELINE_DIAGRAM_LEAD_IN = "The sketch above is the default path."
+
+
+def _six_phases_section() -> str:
+    """Return the text of the ``## The six phases`` section of overview.md."""
+    body = OVERVIEW.read_text(encoding="utf-8")
+    heading = "## The six phases"
+    assert heading in body, f"overview.md is missing the {heading!r} section."
+    start = body.index(heading) + len(heading)
+    m = re.search(r"^## ", body[start:], re.M)
+    return body[start : start + m.start()] if m else body[start:]
+
+
+def test_six_phases_section_has_pipeline_diagram() -> None:
+    """QS-417: one Mermaid flowchart after the text sketch, fully pinned."""
+    section = _six_phases_section()
+    blocks = re.findall(r"^```mermaid\n(.*?)^```", section, re.S | re.M)
+    assert len(blocks) == 1, (
+        f"overview.md 'The six phases' must hold exactly one ```mermaid "
+        f"block (QS-417), found {len(blocks)}."
+    )
+    block = blocks[0]
+    assert block.lstrip().startswith("flowchart"), (
+        "The pipeline diagram must be a Mermaid `flowchart` (QS-417)."
+    )
+
+    assert "```text" in section, (
+        "The one-line ```text sketch must stay in 'The six phases' (QS-417)."
+    )
+    text_idx = section.index("```text")
+    mermaid_idx = section.index("```mermaid")
+    assert text_idx < mermaid_idx, (
+        "The Mermaid diagram must come after the ```text sketch (QS-417)."
+    )
+    assert PIPELINE_DIAGRAM_LEAD_IN in section[text_idx:mermaid_idx], (
+        f"The lead-in paragraph ({PIPELINE_DIAGRAM_LEAD_IN!r}) must sit "
+        f"between the text sketch and the Mermaid diagram (QS-417)."
+    )
+
+    for phase in PIPELINE_DIAGRAM_PHASES:
+        assert re.search(rf"(?<![\w-]){re.escape(phase)}(?![\w-])", block), (
+            f"The pipeline diagram does not name the {phase!r} phase (QS-417)."
+        )
+
+    nodes = dict(re.findall(r'^\s*(\w+)\["(.*?)"\]', block, re.M))
+    assert set(nodes) == PIPELINE_DIAGRAM_NODES, (
+        f"Pipeline diagram node ids drifted (QS-417): got {sorted(nodes)}, "
+        f"expected {sorted(PIPELINE_DIAGRAM_NODES)}."
+    )
+    for node_id, label in nodes.items():
+        assert "✋" in label, (
+            f"Pipeline diagram node {node_id!r} has no maintainer "
+            f"touchpoint line (QS-417)."
+        )
+
+    edges = set(
+        re.findall(
+            r'^\s*(\w+)\s*-\.?->(?:\|"[^"]*"\|)?\s*(\w+)\s*$', block, re.M
+        )
+    )
+    assert edges == PIPELINE_DIAGRAM_EDGES, (
+        f"Pipeline diagram edge set drifted (QS-417): missing "
+        f"{sorted(PIPELINE_DIAGRAM_EDGES - edges)}, unexpected "
+        f"{sorted(edges - PIPELINE_DIAGRAM_EDGES)}."
+    )
