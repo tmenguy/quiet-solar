@@ -10,7 +10,9 @@ This is the regression catch for QS-175 review-fix #9 — without it, the
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -255,3 +257,323 @@ def test_overview_documents_claude_desktop_limitation() -> None:
         "`.claude/settings.local.json` — alongside the three that really "
         "are missing (URL scheme, argv pass-through, UI gesture)."
     )
+
+
+# --------------------------------------------------------------------------- #
+# QS-417 -- the Mermaid diagram of the static-agent pipeline.
+#
+# "The six phases" keeps its one-line text sketch (the default path) and
+# adds, right after it, one Mermaid flowchart with the lane variants, the
+# review/implement fix loop and a hand (maintainer touchpoint) line in each
+# phase node. The test pins the placement, the lead-in and the diagram's
+# full structure: every line must parse (_parse_pipeline_diagram), and the
+# node set, the phase names in each node, the hand in each node, the edges
+# with their arrow style and label, and the subgraph membership are all
+# compared with the constants below (review fix #01). A link line inside a
+# subgraph is rejected, the hand must open its own line and every subgraph
+# title is checked (review fix #02). A `~~~` endpoint or a `style` target
+# must be a declared node or subgraph id (review fix #03). It does NOT
+# detect a phase added to the pipeline later, nor check label wording
+# beyond the phase names and the hand: both stay a review responsibility.
+# --------------------------------------------------------------------------- #
+
+# Node id -> the phase names its label must contain.
+PIPELINE_DIAGRAM_NODE_PHASES: dict[str, tuple[str, ...]] = {
+    "setup": ("setup-task",),
+    "plan": ("create-plan",),
+    "diag": ("diagnose-task",),
+    "dec": ("decompose-epic",),
+    "impl": ("implement-task", "implement-setup-task"),
+    "rev": ("review-task",),
+    "ver": ("verify-task",),
+    "fin": ("finish-task",),
+    "rel": ("release",),
+}
+
+PIPELINE_DIAGRAM_NODES = set(PIPELINE_DIAGRAM_NODE_PHASES)
+
+# (src, dst) -> (arrow, label), exactly as in overview.md. "\u00d7" is the
+# multiplication sign of the lane names. It is escaped because ruff's
+# confusable-character rules (RUF001/RUF003) flag a literal one; the only
+# non-ASCII literal this QS-417 block adds is the hand.
+PIPELINE_DIAGRAM_EDGES: dict[tuple[str, str], tuple[str, str | None]] = {
+    ("setup", "plan"): ("-->", None),
+    ("setup", "diag"): ("-->", None),
+    ("setup", "dec"): ("-->", None),
+    ("plan", "impl"): ("-->", "story committed"),
+    ("diag", "impl"): ("-->", "diagnosis committed"),
+    ("impl", "rev"): ("-->", "PR open"),
+    ("impl", "ver"): ("-->", "PR open (bug \u00d7 product)"),
+    ("rev", "impl"): ("-->", "review-fix plan #NN"),
+    ("ver", "impl"): ("-->", "review-fix plan #NN"),
+    ("rev", "fin"): ("-->", "nothing to fix / all skipped"),
+    ("ver", "fin"): ("-->", "nothing to fix / all skipped"),
+    ("diag", "fin"): ("-->", "superseded / no defect"),
+    ("dec", "fin"): ("-->", "epic doc landed"),
+    ("fin", "rel"): ("-.->", "separate decision"),
+}
+
+# Subgraph id -> its member node ids.
+PIPELINE_DIAGRAM_SUBGRAPHS = {
+    "STD": {"plan", "rev"},
+    "BUG": {"diag", "ver"},
+    "EPIC": {"dec"},
+}
+
+# Subgraph id -> ASCII substrings its title must contain.
+PIPELINE_DIAGRAM_SUBGRAPH_TITLE_WORDS = {
+    "STD": ("feature", "bug", "factory"),
+    "BUG": ("bug", "product"),
+    "EPIC": ("epic", "factory"),
+}
+
+PIPELINE_DIAGRAM_LEAD_IN = "The sketch above is the default path."
+
+_DIAGRAM_HEADER_RE = re.compile(r"^flowchart (TB|LR|TD|BT|RL)$")
+_DIAGRAM_NODE_RE = re.compile(r'^(\w+)\["([^"]*)"\]$')
+_DIAGRAM_EDGE_RE = re.compile(r'^(\w+)\s*(-->|-\.->)(?:\|"([^"]*)"\|)?\s*(\w+)$')
+_DIAGRAM_SUBGRAPH_RE = re.compile(r'^subgraph (\w+)\["([^"]*)"\]$')
+# `~~~` is an invisible layout link: it changes placement only, so it is
+# allowed at top level and not pinned as an edge. Like any link line, it is
+# rejected inside a subgraph (it would pull its endpoints into that box).
+_DIAGRAM_INVISIBLE_LINK_RE = re.compile(r"^(\w+)\s*~~~\s*(\w+)$")
+# `style` creates a vertex when its target does not exist, so its target is
+# captured and checked like a `~~~` endpoint (review fix #03).
+_DIAGRAM_STYLE_RE = re.compile(r"^style (\w+) .+$")
+# Lines that are recognised but carry nothing the test pins: classDef,
+# class (it creates no node) and a comment.
+_DIAGRAM_IGNORED_RES = (
+    re.compile(r"^classDef \w+ .+$"),
+    re.compile(r"^class [\w,]+ \w+$"),
+    re.compile(r"^%%"),
+)
+
+
+class PipelineDiagram(NamedTuple):
+    """The parsed structure of the pipeline diagram."""
+
+    nodes: dict[str, str]
+    edges: dict[tuple[str, str], tuple[str, str | None]]
+    subgraphs: dict[str, tuple[str, set[str]]]
+
+
+def _parse_pipeline_diagram(block: str) -> PipelineDiagram:
+    """Classify every non-blank line of the Mermaid block.
+
+    Raises ``AssertionError`` on a line of no known kind, a missing
+    header, a duplicate node or edge, a nested, unopened or unclosed
+    subgraph, or a link line (edge or ``~~~``) inside a subgraph: Mermaid
+    makes both endpoints of such a line members of that subgraph. Also
+    raises when a ``~~~`` endpoint or a ``style`` target is not a declared
+    node or subgraph id: Mermaid would draw it as a ghost node.
+    """
+    lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+    assert lines and _DIAGRAM_HEADER_RE.match(lines[0]), (
+        f"The pipeline diagram must open with a Mermaid `flowchart` header "
+        f"(QS-417), got {lines[:1]!r}."
+    )
+    nodes: dict[str, str] = {}
+    edges: dict[tuple[str, str], tuple[str, str | None]] = {}
+    subgraphs: dict[str, tuple[str, set[str]]] = {}
+    current: str | None = None
+    # ``~~~`` endpoints and ``style`` targets, checked once all ids are known.
+    references: list[tuple[str, str]] = []
+    for line in lines[1:]:
+        if m := _DIAGRAM_SUBGRAPH_RE.match(line):
+            assert current is None, f"nested subgraph: {line!r}"
+            assert m[1] not in subgraphs, f"duplicate subgraph: {line!r}"
+            current = m[1]
+            subgraphs[current] = (m[2], set())
+        elif line == "end":
+            assert current is not None, "`end` with no open subgraph"
+            current = None
+        elif m := _DIAGRAM_NODE_RE.match(line):
+            assert m[1] not in nodes, f"duplicate node declaration: {line!r}"
+            nodes[m[1]] = m[2]
+            if current is not None:
+                subgraphs[current][1].add(m[1])
+        elif m := _DIAGRAM_EDGE_RE.match(line):
+            assert current is None, (
+                f"links must be declared outside subgraphs: {line!r}"
+            )
+            key = (m[1], m[4])
+            assert key not in edges, f"duplicate edge: {line!r}"
+            edges[key] = (m[2], m[3])
+        elif m := _DIAGRAM_INVISIBLE_LINK_RE.match(line):
+            assert current is None, (
+                f"links must be declared outside subgraphs: {line!r}"
+            )
+            references += [(m[1], line), (m[2], line)]
+        elif m := _DIAGRAM_STYLE_RE.match(line):
+            references.append((m[1], line))
+        elif not any(rx.match(line) for rx in _DIAGRAM_IGNORED_RES):
+            raise AssertionError(f"unrecognised diagram line: {line!r}")
+    assert current is None, f"subgraph {current!r} is never closed"
+    for ref, line in references:
+        assert ref in nodes or ref in subgraphs, (
+            f"link to an undeclared id: {ref!r} in {line!r}"
+        )
+    return PipelineDiagram(nodes, edges, subgraphs)
+
+
+def _assert_pipeline_diagram(block: str) -> None:
+    """Parse the block and compare it with the pinned structure."""
+    parsed = _parse_pipeline_diagram(block)
+
+    assert set(parsed.nodes) == PIPELINE_DIAGRAM_NODES, (
+        f"Pipeline diagram node ids drifted (QS-417): got "
+        f"{sorted(parsed.nodes)}, expected {sorted(PIPELINE_DIAGRAM_NODES)}."
+    )
+    for node_id, label in parsed.nodes.items():
+        assert "<br/>✋" in label, (
+            f"Pipeline diagram node {node_id!r} has no maintainer "
+            f"touchpoint on its own line (QS-417)."
+        )
+        for phase in PIPELINE_DIAGRAM_NODE_PHASES[node_id]:
+            assert re.search(rf"(?<![\w-]){re.escape(phase)}(?![\w-])", label), (
+                f"Pipeline diagram node {node_id!r} does not name the "
+                f"{phase!r} phase (QS-417)."
+            )
+
+    assert parsed.edges == PIPELINE_DIAGRAM_EDGES, (
+        f"Pipeline diagram edges drifted (QS-417): got {parsed.edges}, "
+        f"expected {PIPELINE_DIAGRAM_EDGES}."
+    )
+
+    membership = {sg: members for sg, (_, members) in parsed.subgraphs.items()}
+    assert membership == PIPELINE_DIAGRAM_SUBGRAPHS, (
+        f"Pipeline diagram subgraph membership drifted (QS-417): got "
+        f"{membership}, expected {PIPELINE_DIAGRAM_SUBGRAPHS}."
+    )
+    for sg, words in PIPELINE_DIAGRAM_SUBGRAPH_TITLE_WORDS.items():
+        title = parsed.subgraphs[sg][0].lower()
+        for word in words:
+            assert word in title, (
+                f"Pipeline diagram subgraph {sg!r} title {title!r} does not "
+                f"name {word!r} (QS-417)."
+            )
+
+
+def _six_phases_section() -> str:
+    """Return the text of the ``## The six phases`` section of overview.md."""
+    body = OVERVIEW.read_text(encoding="utf-8")
+    heading = "## The six phases"
+    assert heading in body, f"overview.md is missing the {heading!r} section."
+    start = body.index(heading) + len(heading)
+    m = re.search(r"^## ", body[start:], re.M)
+    return body[start : start + m.start()] if m else body[start:]
+
+
+def _mermaid_blocks(section: str) -> list[str]:
+    """Return the bodies of the ```mermaid blocks in *section*."""
+    return re.findall(r"^```mermaid\n(.*?)^```", section, re.S | re.M)
+
+
+def test_six_phases_section_has_pipeline_diagram() -> None:
+    """QS-417: one Mermaid flowchart after the text sketch, fully pinned."""
+    section = _six_phases_section()
+    blocks = _mermaid_blocks(section)
+    assert len(blocks) == 1, (
+        f"overview.md 'The six phases' must hold exactly one ```mermaid "
+        f"block (QS-417), found {len(blocks)}."
+    )
+
+    assert "```text" in section, (
+        "The one-line ```text sketch must stay in 'The six phases' (QS-417)."
+    )
+    text_idx = section.index("```text")
+    mermaid_idx = section.index("```mermaid")
+    assert text_idx < mermaid_idx, (
+        "The Mermaid diagram must come after the ```text sketch (QS-417)."
+    )
+    assert PIPELINE_DIAGRAM_LEAD_IN in section[text_idx:mermaid_idx], (
+        f"The lead-in paragraph ({PIPELINE_DIAGRAM_LEAD_IN!r}) must sit "
+        f"between the text sketch and the Mermaid diagram (QS-417)."
+    )
+
+    _assert_pipeline_diagram(blocks[0])
+
+
+def _move_ver_out_of_bug(block: str) -> str:
+    """Remove the ``ver`` node line and re-add it after the last ``end``."""
+    line = next(ln for ln in block.splitlines(keepends=True) if "ver[" in ln)
+    head, sep, tail = block.replace(line, "").rpartition("    end\n")
+    return head + sep + line + tail
+
+
+def _move_setup_edge_into_std(block: str) -> str:
+    """Move the ``setup --> plan`` line to just before the first ``end``."""
+    line = "    setup --> plan\n"
+    return block.replace(line, "").replace("    end\n", line + "    end\n", 1)
+
+
+# Each case mutates the real block once; the strengthened checks must
+# reject every one of them (review fix #01). The first nine are the fix
+# plan's required cases, the rest cover the parser's other rejections.
+PIPELINE_DIAGRAM_MUTATIONS: dict[str, Callable[[str], str]] = {
+    "solid-separate-decision": lambda b: b.replace("fin -.->", "fin -->"),
+    "dashed-decompose-edge": lambda b: b.replace("dec -->", "dec -.->"),
+    "dropped-fix-plan-label": lambda b: b.replace(
+        'rev -->|"review-fix plan #NN"| impl', "rev --> impl"
+    ),
+    "thick-arrow-edge": lambda b: b + "    rel ==> setup\n",
+    "chained-edge": lambda b: b + "    rel --> setup --> plan\n",
+    "round-node-shape": lambda b: b + '    x("stray")\n',
+    "ver-moved-out-of-bug-lane": _move_ver_out_of_bug,
+    "phase-name-only-in-comment": lambda b: (
+        b.replace('rel["release ', 'rel["') + "    %% release\n"
+    ),
+    # Declared first, so a last-wins dict would keep the real label.
+    "duplicate-node-declaration": lambda b: b.replace(
+        "flowchart TB\n", 'flowchart TB\n    setup["setup-task"]\n'
+    ),
+    "ampersand-edge": lambda b: b + "    rev & ver --> rel\n",
+    "dash-text-label": lambda b: b + "    rel -- again --> setup\n",
+    "semicolon-edge": lambda b: b.replace(
+        "setup --> plan\n", "setup --> plan;\n"
+    ),
+    "diamond-node-shape": lambda b: b + "    x{stray}\n",
+    "duplicate-edge": lambda b: b + "    setup --> plan\n",
+    "missing-header": lambda b: b.replace("flowchart TB\n", ""),
+    "nested-subgraph": lambda b: b.replace(
+        '    subgraph BUG["', '    subgraph X["x"]\n    subgraph BUG["'
+    ),
+    "duplicate-subgraph": lambda b: b + '    subgraph BUG["bug"]\n    end\n',
+    "stray-end": lambda b: b + "    end\n",
+    "unclosed-subgraph": lambda b: b + '    subgraph X["x"]\n',
+    # Review fix #02: a link line inside a subgraph makes both endpoints
+    # members of that subgraph, so the parser rejects it.
+    "edge-inside-subgraph": _move_setup_edge_into_std,
+    "invisible-link-inside-subgraph": lambda b: b.replace(
+        "    end\n", "    impl ~~~ rev\n    end\n", 1
+    ),
+    "hand-not-on-own-line": lambda b: b.replace(
+        "<br/>✋ merge authorization", " ✋ merge authorization"
+    ),
+    "std-title-drift": lambda b: re.sub(
+        r'subgraph STD\["[^"]*"\]', 'subgraph STD["default lanes"]', b
+    ),
+    # Review fix #03: Mermaid draws a ghost node for an undeclared id
+    # named by a `~~~` link or a `style` statement.
+    "invisible-link-unknown-endpoint": lambda b: b + "    plan ~~~ ghost\n",
+    "style-unknown-id": lambda b: b.replace("style EPIC ", "style EPCI "),
+}
+
+
+@pytest.mark.parametrize("case", sorted(PIPELINE_DIAGRAM_MUTATIONS))
+def test_pipeline_diagram_rejects_mutation(case: str) -> None:
+    """QS-417 review fix #01: each structural drift fails the pin."""
+    (block,) = _mermaid_blocks(_six_phases_section())
+    mutated = PIPELINE_DIAGRAM_MUTATIONS[case](block)
+    assert mutated != block, f"Mutation {case!r} no longer applies (stale case)."
+    with pytest.raises(AssertionError):
+        _assert_pipeline_diagram(mutated)
+
+
+def test_pipeline_diagram_accepts_top_level_invisible_link() -> None:
+    """QS-417 review fix #02: a top-level ``~~~`` stays allowed, not an edge."""
+    (block,) = _mermaid_blocks(_six_phases_section())
+    with_link = block + "    plan ~~~ diag\n"
+    _assert_pipeline_diagram(with_link)
+    parsed = _parse_pipeline_diagram(with_link)
+    assert parsed.edges == _parse_pipeline_diagram(block).edges

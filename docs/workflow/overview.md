@@ -12,6 +12,58 @@ isolated in `scripts/qs/launchers/`.
                                                                             (independent)
 ```
 
+The sketch above is the default path. The diagram below is the full
+picture: the lane variants, the review ⇄ implement fix loop, and, marked
+✋, where the maintainer decides in each phase. Red-outlined boxes
+(review-task, verify-task) are the review phases that can send a fix plan
+back to implement; the dashed arrow is a separate decision.
+
+```mermaid
+flowchart TB
+    setup["setup-task · main checkout<br/>issue · lane · branch · worktree<br/>✋ lane question (if undeclared)"]
+
+    subgraph STD["feature × product/factory · bug × factory"]
+        plan["create-plan<br/>story file · adversarial plan review<br/>✋ scope · triage · finalize"]
+        rev["review-task<br/>parallel code reviewers<br/>✋ triage: fix all / skip all / one by one"]
+    end
+
+    subgraph BUG["bug × product"]
+        diag["diagnose-task<br/>root cause · red-test spec<br/>✋ evidence · triage · finalize"]
+        ver["verify-task<br/>fix-verification review<br/>✋ triage"]
+    end
+
+    subgraph EPIC["epic × factory · no implement, no PR"]
+        dec["decompose-epic<br/>epic doc · children filed · landed on main<br/>✋ decomposition · finalize"]
+    end
+
+    impl["implement-task / implement-setup-task<br/>TDD · --impacted gate · PR<br/>✋ ready to run the gate?"]
+    fin["finish-task<br/>CI checks · merge (if a PR is open) · worktree cleanup<br/>✋ merge authorization"]
+    rel["release · main checkout<br/>✋ confirm the dry run"]
+
+    setup --> plan
+    setup --> diag
+    setup --> dec
+    plan -->|"story committed"| impl
+    diag -->|"diagnosis committed"| impl
+    impl -->|"PR open"| rev
+    impl -->|"PR open (bug × product)"| ver
+    rev -->|"review-fix plan #NN"| impl
+    ver -->|"review-fix plan #NN"| impl
+    rev -->|"nothing to fix / all skipped"| fin
+    ver -->|"nothing to fix / all skipped"| fin
+    diag -->|"superseded / no defect"| fin
+    dec -->|"epic doc landed"| fin
+    fin -.->|"separate decision"| rel
+
+    classDef phase fill:#EDF2FF,stroke:#3B5BDB,color:#212529
+    classDef loop fill:#FFF5F5,stroke:#C92A2A,color:#212529
+    class setup,plan,diag,dec,impl,fin,rel phase
+    class rev,ver loop
+    style STD fill:#F8F9FA,stroke:#868E96,color:#212529
+    style BUG fill:#F8F9FA,stroke:#868E96,color:#212529
+    style EPIC fill:#F8F9FA,stroke:#868E96,color:#212529
+```
+
 The **bug × product** lane (QS-335) diverges into a diagnose-first flow:
 `create-plan` is replaced by `diagnose-task` and `review-task` by
 `verify-task` for that lane only
