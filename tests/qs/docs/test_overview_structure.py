@@ -271,9 +271,10 @@ def test_overview_documents_claude_desktop_limitation() -> None:
 # with their arrow style and label, and the subgraph membership are all
 # compared with the constants below (review fix #01). A link line inside a
 # subgraph is rejected, the hand must open its own line and every subgraph
-# title is checked (review fix #02). It does NOT detect a phase added to the
-# pipeline later, nor check label wording beyond the phase names and the
-# hand: both stay a review responsibility.
+# title is checked (review fix #02). A `~~~` endpoint or a `style` target
+# must be a declared node or subgraph id (review fix #03). It does NOT
+# detect a phase added to the pipeline later, nor check label wording
+# beyond the phase names and the hand: both stay a review responsibility.
 # --------------------------------------------------------------------------- #
 
 # Node id -> the phase names its label must contain.
@@ -294,7 +295,7 @@ PIPELINE_DIAGRAM_NODES = set(PIPELINE_DIAGRAM_NODE_PHASES)
 # (src, dst) -> (arrow, label), exactly as in overview.md. "\u00d7" is the
 # multiplication sign of the lane names. It is escaped because ruff's
 # confusable-character rules (RUF001/RUF003) flag a literal one; the only
-# non-ASCII literal kept in this file is the hand.
+# non-ASCII literal this QS-417 block adds is the hand.
 PIPELINE_DIAGRAM_EDGES: dict[tuple[str, str], tuple[str, str | None]] = {
     ("setup", "plan"): ("-->", None),
     ("setup", "diag"): ("-->", None),
@@ -336,12 +337,14 @@ _DIAGRAM_SUBGRAPH_RE = re.compile(r'^subgraph (\w+)\["([^"]*)"\]$')
 # allowed at top level and not pinned as an edge. Like any link line, it is
 # rejected inside a subgraph (it would pull its endpoints into that box).
 _DIAGRAM_INVISIBLE_LINK_RE = re.compile(r"^(\w+)\s*~~~\s*(\w+)$")
+# `style` creates a vertex when its target does not exist, so its target is
+# captured and checked like a `~~~` endpoint (review fix #03).
+_DIAGRAM_STYLE_RE = re.compile(r"^style (\w+) .+$")
 # Lines that are recognised but carry nothing the test pins: classDef,
-# class, style and a comment.
+# class (it creates no node) and a comment.
 _DIAGRAM_IGNORED_RES = (
     re.compile(r"^classDef \w+ .+$"),
     re.compile(r"^class [\w,]+ \w+$"),
-    re.compile(r"^style \w+ .+$"),
     re.compile(r"^%%"),
 )
 
@@ -360,7 +363,9 @@ def _parse_pipeline_diagram(block: str) -> PipelineDiagram:
     Raises ``AssertionError`` on a line of no known kind, a missing
     header, a duplicate node or edge, a nested, unopened or unclosed
     subgraph, or a link line (edge or ``~~~``) inside a subgraph: Mermaid
-    makes both endpoints of such a line members of that subgraph.
+    makes both endpoints of such a line members of that subgraph. Also
+    raises when a ``~~~`` endpoint or a ``style`` target is not a declared
+    node or subgraph id: Mermaid would draw it as a ghost node.
     """
     lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
     assert lines and _DIAGRAM_HEADER_RE.match(lines[0]), (
@@ -371,6 +376,8 @@ def _parse_pipeline_diagram(block: str) -> PipelineDiagram:
     edges: dict[tuple[str, str], tuple[str, str | None]] = {}
     subgraphs: dict[str, tuple[str, set[str]]] = {}
     current: str | None = None
+    # ``~~~`` endpoints and ``style`` targets, checked once all ids are known.
+    references: list[tuple[str, str]] = []
     for line in lines[1:]:
         if m := _DIAGRAM_SUBGRAPH_RE.match(line):
             assert current is None, f"nested subgraph: {line!r}"
@@ -392,13 +399,20 @@ def _parse_pipeline_diagram(block: str) -> PipelineDiagram:
             key = (m[1], m[4])
             assert key not in edges, f"duplicate edge: {line!r}"
             edges[key] = (m[2], m[3])
-        elif _DIAGRAM_INVISIBLE_LINK_RE.match(line):
+        elif m := _DIAGRAM_INVISIBLE_LINK_RE.match(line):
             assert current is None, (
                 f"links must be declared outside subgraphs: {line!r}"
             )
+            references += [(m[1], line), (m[2], line)]
+        elif m := _DIAGRAM_STYLE_RE.match(line):
+            references.append((m[1], line))
         elif not any(rx.match(line) for rx in _DIAGRAM_IGNORED_RES):
             raise AssertionError(f"unrecognised diagram line: {line!r}")
     assert current is None, f"subgraph {current!r} is never closed"
+    for ref, line in references:
+        assert ref in nodes or ref in subgraphs, (
+            f"link to an undeclared id: {ref!r} in {line!r}"
+        )
     return PipelineDiagram(nodes, edges, subgraphs)
 
 
@@ -539,6 +553,10 @@ PIPELINE_DIAGRAM_MUTATIONS: dict[str, Callable[[str], str]] = {
     "std-title-drift": lambda b: re.sub(
         r'subgraph STD\["[^"]*"\]', 'subgraph STD["default lanes"]', b
     ),
+    # Review fix #03: Mermaid draws a ghost node for an undeclared id
+    # named by a `~~~` link or a `style` statement.
+    "invisible-link-unknown-endpoint": lambda b: b + "    plan ~~~ ghost\n",
+    "style-unknown-id": lambda b: b.replace("style EPIC ", "style EPCI "),
 }
 
 
