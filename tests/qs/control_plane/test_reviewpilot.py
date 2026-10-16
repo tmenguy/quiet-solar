@@ -394,7 +394,9 @@ class TestRetry:
         assert review_states(pw) == {"V1": "requested"} and len(pw["popen"].calls) == 1
 
     def test_a_queued_pilot_row_with_a_bad_trigger_stops_nothing(self, pw) -> None:
-        for n, trigger in enumerate(("[]", "x", '{"tasks": 5}', '{"source": "alert", "tasks": [], "alert_ids": [[1]]}')):
+        for n, trigger in enumerate(
+            ("[]", "x", '{"tasks": 5}', '{"source": "alert", "tasks": [], "alert_ids": [[1]]}')
+        ):
             sql(
                 pw["db"],
                 "INSERT INTO review_triggers (actor, \"trigger\", tool_key, outcome, at) VALUES (?, ?, ?, 'queued', 'x')",
@@ -410,7 +412,7 @@ class TestRetry:
         tick(pw)
         sql(pw["db"], "UPDATE reviews SET state = 'failed'")
         for trigger in ("[]", "x", '{"tasks": 5}'):
-            sql(pw["db"], "UPDATE review_triggers SET \"trigger\" = ?", [trigger])
+            sql(pw["db"], 'UPDATE review_triggers SET "trigger" = ?', [trigger])
             reviewpilot.retry_failed(pw["conn"], pw["clock"])  # direct: discovery would re-raise the event
             assert len(triggers(pw)) == 1
 
