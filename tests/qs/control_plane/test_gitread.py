@@ -12,7 +12,7 @@ from control_plane.runner import RunResult
 from .conftest import run_cli
 
 A, B = "a" * 40, "b" * 7
-PREFIX = ["-c", "core.pager=cat", "-c", "diff.external="]
+PREFIX = ["-c", "core.pager=cat", "-c", "diff.external=", "-c", "core.quotePath=false"]
 
 
 def _git(main: Path) -> list[str]:
@@ -40,6 +40,11 @@ class TestArgv:
                 {"base": A, "head": B},
                 ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--name-status", A, B],
             ),
+            (  # a truncated `files` answer is narrowed by a pathspec
+                "files",
+                {"base": A, "head": B, "path": "d"},
+                ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--name-status", A, B, "--", "d"],
+            ),
         ],
     )
     def test_each_op_is_one_fixed_argv(self, fake_main: Path, op: str, given: dict[str, str], tail: list[str]) -> None:
@@ -63,7 +68,7 @@ class TestArgv:
             ("ls-tree", {"rev": "A" * 40}),  # upper case
             ("ls-tree", {"rev": "a" * 65}),
             ("files", {"base": A}),  # missing --head
-            ("files", {"base": A, "head": B, "path": "x"}),  # not taken
+            ("files", {"base": A, "head": B, "rev": A}),  # not taken
             ("files", {"base": "HEAD", "head": B}),
             ("ls-tree", {"rev": f"{A}\n"}),
             ("show", {"rev": A, "path": "../secret"}),
@@ -88,8 +93,8 @@ class TestRead:
         [call] = fake_runner.calls
         assert call.cwd == str(fake_main) and call.timeout == gitread.READ_TIMEOUT_S
         assert call.env_extra == {"GIT_CONFIG_NOSYSTEM": "1", "GIT_PAGER": "cat"}
-        assert call.env_remove == gitread.ENV_REMOVED and call.decode_errors == "surrogateescape"
-        assert set(call.env_remove) == {
+        assert set(gitread.ENV_REMOVED) <= set(call.env_remove) and call.decode_errors == "surrogateescape"
+        assert set(gitread.ENV_REMOVED) == {
             "GIT_EXTERNAL_DIFF",
             "GIT_DIR",
             "GIT_WORK_TREE",
@@ -99,6 +104,17 @@ class TestRead:
             "GIT_NAMESPACE",
             "GIT_COMMON_DIR",
         }
+
+    def test_every_inherited_git_variable_is_removed(self, fake_runner, fake_main: Path, monkeypatch) -> None:
+        monkeypatch.setenv("GIT_ICASE_PATHSPECS", "1")
+        monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "'core.quotepath=true'")
+        monkeypatch.setenv("GIT_PAGER", "less")  # set by ENV: never removed
+        fake_runner.on(["ls-tree"], RunResult(0, "", ""))
+        gitread.read(fake_runner, fake_main, "ls-tree", {"rev": A})
+        [call] = fake_runner.calls
+        assert {"GIT_ICASE_PATHSPECS", "GIT_CONFIG_PARAMETERS"} <= set(call.env_remove)
+        assert not set(gitread.ENV) & set(call.env_remove)
+        assert gitread.env_removed({"GIT_X": "1", "GIT_PAGER": "x", "PATH": "/"}) == (*gitread.ENV_REMOVED, "GIT_X")
 
     def test_truncation_cuts_on_bytes(self, fake_runner, fake_main: Path, monkeypatch) -> None:
         monkeypatch.setattr(gitread, "READ_MAX_BYTES", 4)
@@ -179,6 +195,8 @@ class TestCommand:
         base = g("rev-parse", "HEAD")
         (repo / "a.py").write_text("x = 2\n")
         (repo / "bin.dat").write_bytes(b"\xff\xfe\x00z")
+        (repo / "d").mkdir()
+        (repo / "d" / "é.py").write_text("y = 1\n")
         g("add", ".")
         g("-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "-m", "two")
         head = g("rev-parse", "HEAD")
@@ -186,8 +204,11 @@ class TestCommand:
         assert "+x = 2" in gitread.read(real, repo, "diff", {"base": base, "head": head, "path": "a.py"})["output"]
         assert gitread.read(real, repo, "show", {"rev": head[:7], "path": "a.py"})["output"] == "x = 2\n"
         assert gitread.read(real, repo, "grep", {"rev": head, "pattern": "x ="})["output"] == f"{head}:a.py:1:x = 2\n"
-        assert gitread.read(real, repo, "ls-tree", {"rev": head})["output"] == "a.py\nbin.dat\n"
-        assert gitread.read(real, repo, "files", {"base": base, "head": head})["output"] == "M\ta.py\nA\tbin.dat\n"
+        assert gitread.read(real, repo, "ls-tree", {"rev": head})["output"] == "a.py\nbin.dat\nd/é.py\n"
+        files = gitread.read(real, repo, "files", {"base": base, "head": head})["output"]
+        assert files == "M\ta.py\nA\tbin.dat\nA\td/é.py\n"  # unquoted: the name round-trips to --path
+        assert "+y = 1" in gitread.read(real, repo, "diff", {"base": base, "head": head, "path": "d/é.py"})["output"]
+        assert gitread.read(real, repo, "files", {"base": base, "head": head, "path": "d"})["output"] == "A\td/é.py\n"
         binary = gitread.read(real, repo, "show", {"rev": head, "path": "bin.dat"})
         assert binary["lossy"] is True and binary["output"].endswith("z")
         with pytest.raises(errors.CpError) as exc:

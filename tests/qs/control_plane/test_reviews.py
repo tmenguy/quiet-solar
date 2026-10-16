@@ -537,6 +537,9 @@ class TestLaunch:
             (Path("/m,x"), "/p", d),  # `,` separates the --allowedTools rules
             (Path("/m"), "/p", Path("/x/a,b")),
             (Path("/m\u00a0x"), "/p", d),  # a non-ASCII whitespace
+            (Path("/m\x1bx"), "/p", d),  # a control character
+            (Path("/m"), "/p\x00", d),
+            (Path("/m"), "/p", Path("/x/\x7f")),
         ):
             with pytest.raises(errors.CpError) as exc:
                 reviews.allowed_tools(main, python, directory)
@@ -623,6 +626,27 @@ class TestHeads:
         token = grant_request(rw, tasks=["T1", "T6"])
         assert tool_review(rw, "pilot:alert:ev:1", token, review="V1")[0] == 0
         assert heads(rw["db"])["T6"] == (P6, MS, "merged")
+
+    def test_whitespace_around_the_merge_sha_is_stripped(self, rw) -> None:
+        sql(rw["db"], "UPDATE tasks SET merge_sha = ? WHERE id = 'T6'", [f" {MS}\n"])
+        token = grant_request(rw, tasks=["T1", "T6"])
+        assert tool_review(rw, "pilot:alert:ev:1", token, review="V1")[0] == 0
+        assert heads(rw["db"])["T6"] == (P6, MS, "merged")
+
+    def test_an_abbreviated_merge_sha_is_stored_in_full(self, rw) -> None:
+        sql(rw["db"], "UPDATE tasks SET merge_sha = ? WHERE id = 'T6'", [MS[:7]])
+        rw["git"].objects.add(MS[:7])
+        rw["git"].refs[MS[:7]] = MS
+        token = grant_request(rw, tasks=["T1", "T6"])
+        assert tool_review(rw, "pilot:alert:ev:1", token, review="V1")[0] == 0
+        assert heads(rw["db"])["T6"] == (P6, MS, "merged")
+
+    def test_the_capture_removes_every_inherited_git_variable(self, rw, monkeypatch) -> None:
+        monkeypatch.setenv("GIT_ICASE_PATHSPECS", "1")
+        monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "'core.quotepath=true'")
+        assert global_r1(rw)[0] == 0
+        captures = rw["runner"].matching("git", "-C")
+        assert captures and all({"GIT_ICASE_PATHSPECS", "GIT_CONFIG_PARAMETERS"} <= set(c.env_remove) for c in captures)
 
     def test_the_capture_runs_git_without_an_inherited_repository(self, rw) -> None:
         from control_plane import gitread
@@ -779,6 +803,79 @@ class TestIdentifyAndFailures:
         sql(rw["db"], "UPDATE runs SET state = 'closed' WHERE id = 'R2'")
         assert tool_review(rw, "pilot:alert:ev:1", token, review="V1")[0] == 1
         assert review_alerts(rw["db"]) == [("R1", "review:V1:failed")]
+
+    def _unknown_listing(self, rw) -> str:
+        """Every identify poll's listing fails: the call fails, but the review stays launching (R1)."""
+        rw["launch"]["list"] = False
+        rw["claude"].listing = None
+        token = grant_request(rw)
+        code, out = tool_review(rw, "pilot:alert:ev:1", token, review="V1")
+        assert code == 1 and "the session listing was unknown" in out["detail"], out
+        row = review_row(rw["db"], "V1")
+        assert (row["state"], row["finished_at"], row["error"]) == ("launching", None, None) and row["launch_at"]
+        assert review_alerts(rw["db"]) == []
+        assert sql(rw["db"], "SELECT state FROM tool_calls WHERE tool = 'review'")[0][0] == "failed"
+        return str(row["name"])
+
+    def _close_dead(self, rw) -> list[str]:
+        from control_plane import activeloop, reviewpilot
+
+        conn = db.connect(rw["db"])
+        try:
+            return reviewpilot.close_dead(conn, rw["clock"], activeloop.seams())
+        finally:
+            conn.close()
+
+    def test_an_unknown_listing_fails_the_call_but_not_the_review(self, rw) -> None:
+        self._unknown_listing(rw)
+
+    def test_a_later_pilot_tick_adopts_the_session_by_name(self, rw) -> None:
+        from .conftest import agent
+
+        name = self._unknown_listing(rw)
+        rw["claude"].listing = [agent(f"S-{name}", name, id="short-9")]
+        assert self._close_dead(rw) == []
+        row = review_row(rw["db"], "V1")
+        assert (row["state"], row["session_id"], row["short_id"]) == ("running", f"S-{name}", "short-9")
+
+    def test_a_still_unknown_listing_fails_it_only_at_the_request_ttl(self, rw) -> None:
+        self._unknown_listing(rw)
+        assert self._close_dead(rw) == [] and review_row(rw["db"], "V1")["state"] == "launching"
+        rw["clock"].advance(schema_reviews.REQUEST_TTL_S)
+        assert self._close_dead(rw) == ["V1"]
+        row = review_row(rw["db"], "V1")
+        assert (row["state"], row["error"]) == ("failed", "the launch timed out")
+
+    def test_a_timed_out_launch_is_identified_by_name(self, rw) -> None:
+        from .conftest import agent
+
+        def forked(call: Any) -> None:  # the session forked before `claude --bg` timed out
+            name = call.argv[call.argv.index("-n") + 1]
+            rw["claude"].listing = [agent(f"S-{name}", name, id="short-t")]
+
+        rw["launch"]["exit"] = 124
+        rw["launch"]["on_launch"] = forked
+        code, out = global_r1(rw)
+        assert code == 0, out
+        assert out["result"]["state"] == "running" and review_row(rw["db"], "V1")["short_id"] == "short-t"
+        outputs = __import__("json").loads(sql(rw["db"], "SELECT outputs FROM tool_calls WHERE tool = 'review'")[0][0])
+        assert outputs["launch"] == {"launched": True, "timeout": True}
+
+    def test_a_timed_out_launch_never_listed_fails(self, rw) -> None:
+        rw["launch"]["exit"] = 124
+        code, out = global_r1(rw)
+        assert code == 1 and "was never listed" in out["detail"]
+        assert review_row(rw["db"], "V1")["state"] == "failed"
+
+    def test_identify_on_a_review_the_pilot_adopted(self, rw) -> None:
+        rw["launch"]["list"] = False
+        rw["claude"].listing = None  # the launcher's listing fails; the pilot's did not
+        adopt = "UPDATE reviews SET state = 'running', session_id = 'S-a', short_id = 'short-a'"
+        rw["launch"]["on_launch"] = lambda call: setattr(rw["claude"], "before_list", lambda: sql(rw["db"], adopt))
+        code, out = global_r1(rw)
+        assert code == 0, out
+        assert (out["result"]["state"], out["result"]["session_id"]) == ("running", "S-a")
+        assert review_row(rw["db"], "V1")["short_id"] == "short-a"
 
     def test_identify_after_an_early_finish(self, rw) -> None:
         rw["launch"]["on_launch"] = lambda call: sql(rw["db"], "UPDATE reviews SET state = 'finished'")
@@ -1284,6 +1381,7 @@ class TestOutcome:
             "finished_at": "2026-10-03T11:00:00.000000Z",
         }
         assert self._conn_outcome(rw, "T1", kind="cross_run", head_sha=f" {H1} ")["review_id"] == "V11"
+        assert self._conn_outcome(rw, "T1", kind="cross_run", head_sha=H1.upper())["review_id"] == "V11"
         assert self._conn_outcome(rw, "T1", kind="global", head_sha="other") is None
         assert self._conn_outcome(rw, "T2", kind="global", head_sha=H1) is None
 

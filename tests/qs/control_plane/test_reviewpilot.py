@@ -366,7 +366,8 @@ class TestRetry:
         ]
 
     def test_a_bad_alert_payload_stops_nothing(self, pw) -> None:
-        for n, payload in enumerate(("[]", "x", "null")):
+        bad = ("[]", "x", "null", '{"tasks": null}', '{"tasks": 5}', '{"tasks": "T12"}')
+        for n, payload in enumerate(bad):
             sql(
                 pw["db"],
                 "INSERT INTO alerts (run_id, kind, subject, fingerprint, payload, first_seen, last_seen)"
@@ -376,7 +377,21 @@ class TestRetry:
         cross(pw)
         tick(pw)
         assert review_states(pw) == {"V1": "requested"} and len(pw["popen"].calls) == 1
-        assert [t[1] for t in triggers(pw)].count("skipped") == 3  # the bad groups: no task, nothing to review
+        assert [t[1] for t in triggers(pw)].count("skipped") == len(bad)  # the bad groups: no task to review
+        rows = sql(pw["db"], "SELECT \"trigger\" FROM review_triggers WHERE outcome = 'skipped'")
+        assert all(json.loads(r[0])["tasks"] == [] for r in rows)  # never a string's characters
+
+    def test_a_pilot_row_with_a_non_object_trigger_stops_nothing(self, pw) -> None:
+        ids = cross(pw)
+        family = event_key(alerts.OVERLAP_CROSS_RUN, ("T1", "T5"), ids[0]).rpartition(":")[0]
+        for n, trigger in enumerate(("[]", '{"alert_ids": 5}')):
+            sql(
+                pw["db"],
+                "INSERT INTO review_triggers (actor, \"trigger\", tool_key, outcome, at) VALUES (?, ?, ?, 'skipped', 'x')",
+                [reviewpilot.ACTOR, trigger, f"pilot:{family}:{900 + n}:1"],
+            )
+        tick(pw)
+        assert review_states(pw) == {"V1": "requested"} and len(pw["popen"].calls) == 1
 
     def test_payload_decoding(self) -> None:
         assert reviewpilot._payload(None) == {} and reviewpilot._payload("[1]") == {}
@@ -537,6 +552,24 @@ class TestCloseDead:
     def test_a_failed_call(self, pw, state: str) -> None:
         review(pw, state)
         call(pw, "failed")
+        assert close(pw) == ["V1"]
+        assert sql(pw["db"], "SELECT error FROM reviews")[0][0] == "the launcher's call failed"
+
+    def test_a_launched_review_whose_call_failed_under_an_unknown_listing_waits_for_the_ttl(self, pw) -> None:
+        review(pw, "launching", age=10, launch_age=10)
+        call(pw, "failed")
+        pw["claude"].listing = None
+        assert close(pw) == [] and review_states(pw) == {"V1": "launching"} and failed_alerts(pw) == []
+        pw["clock"].advance(schema_reviews.REQUEST_TTL_S - 11)
+        assert close(pw) == []
+        pw["clock"].advance(1)
+        assert close(pw) == ["V1"]
+        assert sql(pw["db"], "SELECT error FROM reviews")[0][0] == "the launch timed out"
+
+    def test_a_launched_review_whose_call_failed_under_a_known_listing_fails(self, pw) -> None:
+        review(pw, "launching", age=10, launch_age=10)
+        call(pw, "failed")
+        pw["claude"].listing = [agent("S-other", "other")]
         assert close(pw) == ["V1"]
         assert sql(pw["db"], "SELECT error FROM reviews")[0][0] == "the launcher's call failed"
 

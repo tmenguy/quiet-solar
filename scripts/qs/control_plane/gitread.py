@@ -10,10 +10,11 @@ op          arguments                                   runs
 ``show``    ``--rev SHA --path P``                      ``git cat-file blob <rev>:<P>``
 ``grep``    ``--rev SHA --pattern X [--path P]``        ``git grep -n --no-color -e <X> <rev> [-- P]``
 ``ls-tree`` ``--rev SHA [--path P]``                    ``git ls-tree -r --name-only <rev> [-- P]``
-``files``   ``--base SHA --head SHA``                   ``git diff … --name-status <base> <head>``
+``files``   ``--base SHA --head SHA [--path P]``        ``git diff … --name-status <base> <head> [-- P]``
 ==========  ==========================================  =====================================================
 
-No other git option can be passed. Exempt: no DB, no token. The output is decoded with
+Paths are printed unquoted (``core.quotePath=false``), so a name from ``files`` / ``ls-tree`` / ``grep`` is a
+valid ``--path``. No other git option can be passed. Exempt: no DB, no token. The output is decoded with
 ``surrogateescape``, cut at ``READ_MAX_BYTES`` (backing off to a UTF-8 boundary), then printed with
 ``errors="replace"``; ``lossy`` when a kept byte was not UTF-8.
 """
@@ -21,13 +22,16 @@ No other git option can be passed. Exempt: no DB, no token. The output is decode
 from __future__ import annotations
 
 import codecs
+import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from . import errors, ledger, runner
 
 OPS = ("diff", "show", "grep", "ls-tree", "files")
+_SUBCOMMAND = {"diff": "diff", "show": "cat-file", "grep": "grep", "ls-tree": "ls-tree", "files": "diff"}
 READ_MAX_BYTES = 262144  # 256 KiB
 READ_TIMEOUT_S = 60.0
 SHA_RE = re.compile(r"[0-9a-f]{7,64}")  # the one sha check (``reviews`` uses it too): SHA-1 or SHA-256
@@ -36,7 +40,7 @@ _NEEDS: dict[str, tuple[frozenset[str], frozenset[str]]] = {  # op → (required
     "show": (frozenset({"rev", "path"}), frozenset()),
     "grep": (frozenset({"rev", "pattern"}), frozenset({"path"})),
     "ls-tree": (frozenset({"rev"}), frozenset({"path"})),
-    "files": (frozenset({"base", "head"}), frozenset()),
+    "files": (frozenset({"base", "head"}), frozenset({"path"})),
 }
 ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_PAGER": "cat"}
 ENV_REMOVED = (  # an inherited repository location would override `-C <main>`
@@ -49,6 +53,12 @@ ENV_REMOVED = (  # an inherited repository location would override `-C <main>`
     "GIT_NAMESPACE",
     "GIT_COMMON_DIR",
 )
+
+
+def env_removed(environ: Mapping[str, str] | None = None) -> tuple[str, ...]:
+    """``ENV_REMOVED`` plus every other inherited ``GIT_*`` variable, except those ``ENV`` sets (both git paths)."""
+    names = os.environ if environ is None else environ
+    return (*ENV_REMOVED, *sorted(n for n in names if n.startswith("GIT_") and n not in ENV and n not in ENV_REMOVED))
 
 
 def _sha(value: str, flag: str) -> str:
@@ -71,7 +81,7 @@ def argv(main: Path, op: str, given: dict[str, str]) -> list[str]:
     if "path" in required and path is None:
         raise errors.CpError("USAGE", f"review read {op}: --path must name a file")
     tail = [] if path is None else ["--", path]
-    git = ["git", "-C", str(main), "-c", "core.pager=cat", "-c", "diff.external="]
+    git = ["git", "-C", str(main), "-c", "core.pager=cat", "-c", "diff.external=", "-c", "core.quotePath=false"]
     if op in ("diff", "files"):
         base, head = _sha(given["base"], "base"), _sha(given["head"], "head")
         names = ["--name-status"] if op == "files" else []
@@ -109,14 +119,14 @@ def read(run: runner.Runner, main: Path, op: str, given: dict[str, str]) -> dict
         command,
         cwd=main,
         env_extra=ENV,
-        env_remove=ENV_REMOVED,
+        env_remove=env_removed(),
         timeout=READ_TIMEOUT_S,
         decode_errors="surrogateescape",
     )
     if res.returncode != 0 and not (op == "grep" and res.returncode == 1):  # grep: 1 is "no match"
         detail = res.stderr.encode("utf-8", "surrogateescape").decode("utf-8", "replace").strip()[-300:]
         code = "NOT_FOUND" if res.returncode == 128 else "INTERNAL"
-        raise errors.CpError(code, f"git {command[7]} exited {res.returncode}: {detail}")
+        raise errors.CpError(code, f"git {_SUBCOMMAND[op]} exited {res.returncode}: {detail}")
     raw = res.stdout.encode("utf-8", "surrogateescape")
     kept = _cut(raw)
     return {

@@ -82,6 +82,8 @@ STATEMENTS: tuple[str, ...] = (
         outcome TEXT NOT NULL CHECK (outcome IN {_in(TRIGGER_OUTCOMES)}),
         at TEXT NOT NULL
     )""",
+    # `LIKE` ignores case, so a `PILOT:…` key is unique here too: harmless, since `_authorize` refuses a run
+    # token any key starting with `pilot:` in any case (M1); the pilot's own scans use an exact prefix.
     f"CREATE UNIQUE INDEX review_triggers_pilot ON review_triggers (tool_key) WHERE tool_key LIKE '{PILOT_PREFIX}%'",
     # Seeded past the existing history, so the review pilot never replays an old merge (v3's precedent).
     f"INSERT OR REPLACE INTO meta (key, value) SELECT '{CURSOR_KEY}', CAST(COALESCE(max(id), 0) AS TEXT)"

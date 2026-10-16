@@ -1157,6 +1157,7 @@ def test_review_agents_pin_the_contract(tmp_path: Path, stem: str, source: str) 
     assert "A task whose `base_sha` is `-` has no merge\n   base: read it with `ls-tree` / `show` at `head_sha`." in text
     assert "If an answer has\n   `truncated: true`, list the changed files with\n   `review read files --base" in text
     assert "`review read diff\\|show\\|grep\\|ls-tree\\|files …`" in text
+    assert "A truncated `files` answer: narrow it with\n   `--path <dir>`." in text
     assert "A task whose run is `-`\n   has no run: skip `snapshot --run` for it." in text
     assert "denied without a prompt" not in text
     assert "--family --state open,rejected,settled,deferred" in text

@@ -235,7 +235,8 @@ outside `in/`.
    `review read ls-tree --rev <head_sha>`. If an answer has
    `truncated: true`, list the changed files with
    `review read files --base <base_sha> --head <head_sha>` and read them
-   one by one with `--path`. A task whose `base_sha` is `-` has no merge
+   one by one with `--path`. A truncated `files` answer: narrow it with
+   `--path <dir>`. A task whose `base_sha` is `-` has no merge
    base: read it with `ls-tree` / `show` at `head_sha`. Never assume a
    working tree: you have none. A task with no head (`head_state` `plan` or
    `unresolved`) is reviewed from its plan (digest, criteria).

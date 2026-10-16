@@ -310,9 +310,9 @@ def close_locked(
 
 # --------------------------------------------------------------------------- the launch: permissions, settings, prompt (D6)
 
-# No whitespace, no `,` (it separates the --allowedTools rules) and no shell metacharacter (C2-11); any other
-# character, non-ASCII included, is kept verbatim.
-_SAFE_PATH = re.compile(r"[^\s,'\"\\$`;&|<>(){}\[\]*?!#~]+")
+# No whitespace, no control character, no `,` (it separates the --allowedTools rules) and no shell metacharacter
+# (C2-11); any other character, non-ASCII included, is kept verbatim.
+_SAFE_PATH = re.compile(r"[^\s\x00-\x1f\x7f,'\"\\$`;&|<>(){}\[\]*?!#~]+")
 CP_COMMANDS = ("snapshot", "task show", "ledger show", "review read", "finding open", "review finish")
 
 
@@ -329,7 +329,7 @@ def cp_prefix(main: Path, python: str) -> str:
 def allowed_tools(main: Path, python: str, directory: Path) -> list[str]:
     """The pinned ``dontAsk`` allowlist: ``in/`` read and write, and exactly the six ``cp.py`` commands.
 
-    A path holding whitespace, a ``,`` or a shell metacharacter is ``POLICY_REFUSED``: the unquoted pinned form
+    A path holding whitespace, a control character, a ``,`` or a shell metacharacter is ``POLICY_REFUSED``: the unquoted pinned form
     would stop matching (a ``,`` would split one rule in two).
     """
     in_dir = directory / "in"
@@ -389,7 +389,8 @@ def prompt(row: sqlite3.Row, scope: Sequence[Mapping[str, Any]], *, prefix: str,
 # --------------------------------------------------------------------------- base and head per task (D3)
 
 GIT_TIMEOUT_S = 60.0
-ABORT_CODES = frozenset({124, 127})  # the runner's timeout / exec failure: git is unusable, the step fails
+TIMEOUT_EXIT = 124  # the runner's timeout
+ABORT_CODES = frozenset({TIMEOUT_EXIT, 127})  # the runner's timeout / exec failure: git is unusable, the step fails
 SHA_RE = gitread.SHA_RE  # one sha check for the capture and `review read`
 
 
@@ -402,7 +403,7 @@ class _Git:
         res = self.ctx.runner.run(
             ["git", "-C", str(self.ctx.main), *args],
             cwd=self.ctx.main,
-            env_remove=gitread.ENV_REMOVED,
+            env_remove=gitread.env_removed(),
             timeout=GIT_TIMEOUT_S,
         )
         if res.returncode in ABORT_CODES:
@@ -435,8 +436,9 @@ class _Git:
 
 def _heads(git: _Git, task: sqlite3.Row) -> tuple[str | None, str | None, str]:
     """``(base_sha, head_sha, head_state)`` of one task: the first row of D3's table that applies."""
-    merge = (task["merge_sha"] or "").lower()
+    merge = (task["merge_sha"] or "").strip().lower()
     if merge and SHA_RE.fullmatch(merge) and git.run("cat-file", "-e", f"{merge}^{{commit}}")[0] == 0:
+        merge = git.ref(merge) or merge  # an abbreviated sha is stored in full (the reader matches it exactly)
         return git.sha("rev-parse", "--verify", "--quiet", f"{merge}^1"), merge, "merged"
     if not task["branch"]:
         return None, None, "plan"
@@ -539,8 +541,17 @@ def _reserve(ctx: tools.StepCtx) -> None:
         ctx.record_output({"review_id": row["id"]})
 
 
+class Unidentified(tools.StepFailed):
+    """``identify`` never saw a known listing: the call fails, the launched review stays ``launching`` (R1).
+
+    Only a known listing that does not show a launched review fails it early; under an unknown listing only
+    ``REQUEST_TTL_S`` does (the review pilot's ``close_dead``), and a later known listing may still adopt it.
+    """
+
+
 def _guarded(fn: Callable[[tools.StepCtx, str], dict[str, Any]]) -> Callable[[tools.StepCtx], dict[str, Any]]:
-    """A noop after a skip or a join; any ``StepFailed`` first moves the review to ``failed`` (guarded, S2)."""
+    """A noop after a skip or a join; any ``StepFailed`` but ``Unidentified`` first moves the review to ``failed``
+    (guarded, S2)."""
 
     def run(ctx: tools.StepCtx) -> dict[str, Any]:
         rid = _review_id(ctx)
@@ -548,6 +559,8 @@ def _guarded(fn: Callable[[tools.StepCtx, str], dict[str, Any]]) -> Callable[[to
             return {"noop": True}
         try:
             return fn(ctx, rid)
+        except Unidentified:
+            raise
         except tools.StepFailed as exc:
             with ctx.write() as conn:
                 close_locked(
@@ -626,28 +639,40 @@ def _launch(ctx: tools.StepCtx, rid: str) -> dict[str, Any]:
     argv = ["--agent", row["agent"], "-n", row["name"], "--model", str(row["model"]), *permission]
     argv += ["--settings", options, text]
     res = ctx.claude.spawn_bg(argv, cwd=directory, env_remove=daemon.stripped_names(os.environ))
+    if res.returncode == TIMEOUT_EXIT:  # the session may have forked: `identify` decides, by name (R1)
+        return {"launched": True, "timeout": True}
     if not res.ok:
         raise tools.StepFailed(f"claude --bg exited {res.returncode}", {"exit_code": res.returncode}, res.returncode)
     return {"launched": True}
 
 
 def _identify(ctx: tools.StepCtx, rid: str) -> dict[str, Any]:
-    """The listing by name until the settle deadline; the row's state is re-read on every poll."""
+    """The listing by name until the settle deadline; the row's state is re-read on every poll.
+
+    ``finished``, or ``running`` once the pilot adopted it, ends the step; ``failed`` / ``abandoned`` fail it. Never
+    listed by the deadline fails the review only when a listing was known (R1): else ``Unidentified``.
+    """
     deadline: float | None = None
+    known = False
     while True:
-        with ctx.write() as conn:
+        with db.read(ctx._call.conn) as conn:
             row = _row(conn, rid)
         if row["state"] in ("failed", "abandoned"):
             raise tools.StepFailed(f"review {rid} is {row['state']}")
+        if row["state"] == "running" and row["session_id"]:  # the review pilot adopted it meanwhile
+            return {"session_id": row["session_id"], "short_id": row["short_id"]}
         if deadline is None:
             deadline = clock_mod.parse(row["launch_at"]).timestamp() + nodes.LAUNCH_SETTLE_S
         listing = ctx.claude.try_agents()
+        known = known or listing is not None
         found = None if listing is None else liveness.find(listing, name=row["name"])
         if found is not None:
             return {"session_id": found.session_id, "short_id": found.id}
         if row["state"] == "finished":  # a quick session finished and exited before it was ever listed
             return {"session_id": row["session_id"], "short_id": row["short_id"]}
         if ctx.clock.now().timestamp() >= deadline:
+            if not known:
+                raise Unidentified(f"review session {row['name']} was never listed: the session listing was unknown")
             raise tools.StepFailed(f"review session {row['name']} was never listed")
         ctx.clock.sleep(tools.IDENTIFY_POLL_S)
 
@@ -882,7 +907,8 @@ def finish(conn: sqlite3.Connection, clock: clock_mod.Clock, *, token: str, data
 def outcome(conn: sqlite3.Connection, task_id: str, *, kind: str, head_sha: str | None) -> dict[str, Any] | None:
     """Child 7's reader: the latest **finished** review outcome of ``task_id`` for ``kind`` at ``head_sha``.
 
-    ``None`` when there is none, and for a ``None`` or blank ``head_sha``: an outcome on no head is advisory.
+    ``None`` when there is none, and for a ``None`` or blank ``head_sha``: an outcome on no head is advisory. The
+    sha is matched stripped and lower-cased (the capture stores full, lower-case shas).
     """
     if head_sha is None or not head_sha.strip():
         return None
@@ -891,6 +917,6 @@ def outcome(conn: sqlite3.Connection, task_id: str, *, kind: str, head_sha: str 
         " JOIN reviews r ON r.id = rt.review_id WHERE rt.task_id = ? AND r.kind = ? AND rt.head_sha = ?"
         " AND r.state = 'finished' AND rt.outcome IS NOT NULL"
         " ORDER BY r.finished_at DESC, CAST(substr(r.id, 2) AS INTEGER) DESC LIMIT 1",
-        (task_id, kind, head_sha.strip()),
+        (task_id, kind, head_sha.strip().lower()),
     ).fetchone()
     return db.as_dict(row)

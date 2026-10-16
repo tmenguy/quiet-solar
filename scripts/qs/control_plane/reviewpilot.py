@@ -7,7 +7,8 @@ Every ``PILOT_EVERY_S`` (a ``ticks.Throttle``), after ``detectors`` and before `
    guarded ``UPDATE`` that re-evaluates its condition in SQL, and posts ``review_failed`` only when one row
    changed. ``requested`` / ``launching``: a launcher that never started, whose call failed, whose holder is
    dead, or that is older than ``REQUEST_TTL_S`` → ``failed`` — except a ``launching`` review whose session is
-   listed by name, which is adopted (``running``). ``running``: unlisted on ``LIVENESS_CONFIRM`` successful
+   listed by name, which is adopted (``running``). A launched review fails early only when a known listing does
+   not show it; under an unknown listing only ``REQUEST_TTL_S`` fails it. ``running``: unlisted on ``LIVENESS_CONFIRM`` successful
    listings in a row, or past ``REVIEW_TTL_S`` → ``abandoned``.
 3. **The queue and the rules** (D11): every new event (an open ``overlap_cross_run`` /
    ``duplicate_task_cross_run`` occurrence, or a merge that touches another run) is written at first sight as
@@ -117,13 +118,16 @@ def _launched(row: sqlite3.Row) -> bool:
     return bool(row["state"] == "launching" and row["launch_at"] is not None)
 
 
-def _launch_move(row: sqlite3.Row, clock: clock_mod.Clock, dead_holder: bool) -> _Move | None:
-    """A ``requested`` / ``launching`` review whose launch is over without it: ``failed``."""
-    if row["call_state"] == "failed":
+def _launch_move(row: sqlite3.Row, clock: clock_mod.Clock, dead_holder: bool, unknown: bool) -> _Move | None:
+    """A ``requested`` / ``launching`` review whose launch is over without it: ``failed``.
+
+    ``unknown``: a launched review under an unknown listing — its session may run, so only the TTL applies.
+    """
+    if row["call_state"] == "failed" and not unknown:
         where = f"state = ? AND EXISTS ({_CALL} AND t.state = 'failed')"
         return _Move(row["id"], "failed", "the launcher's call failed", where, (row["state"],))
     settle = clock_mod.stamp(clock, plus=-nodes.LAUNCH_SETTLE_S)
-    if row["call_state"] == "started" and dead_holder and row["since"] <= settle:
+    if row["call_state"] == "started" and dead_holder and not unknown and row["since"] <= settle:
         return _Move(
             row["id"],
             "failed",
@@ -196,9 +200,7 @@ def close_dead(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) -
         if row["state"] == "running":
             move = _session_move(row, clock, listing)
         else:  # a launch that is over without its review: failed (so the event is retried once)
-            # A launched review under an unknown listing is not failed early for a dead launcher: only the TTL.
-            dead_holder = dead.get(row["id"], False) and not (_launched(row) and listing is None)
-            move = _launch_move(row, clock, dead_holder)
+            move = _launch_move(row, clock, dead.get(row["id"], False), _launched(row) and listing is None)
             if move is not None and _launched(row) and listing is not None:  # the session may run without it
                 found = liveness.find(listing, name=row["name"])
                 if found is not None:
@@ -278,18 +280,20 @@ def _alert_events(conn: sqlite3.Connection, clock: clock_mod.Clock) -> None:
     ).fetchall():
         group = groups.setdefault((r["kind"], r["subject"]), {"ids": [], "tasks": set()})
         group["ids"].append(r["id"])
-        payload = _payload(r["payload"])
-        group["tasks"].update(str(t) for t in payload.get("tasks", ()) if isinstance(t, str))
+        tasks = _payload(r["payload"]).get("tasks")
+        if isinstance(tasks, list):  # never a string's characters, never a non-iterable
+            group["tasks"].update(t for t in tasks if isinstance(t, str))
     for (kind, subject), group in groups.items():
         family = f"alert:{kind}:{hashlib.sha256(subject.encode()).hexdigest()[:16]}:"
         ids = set(group["ids"])
         same = None
         for row in _event_rows(conn, family):
-            if ids & set(json.loads(row["trigger"]).get("alert_ids", ())):
+            known = _payload(row["trigger"]).get("alert_ids")
+            if isinstance(known, list) and ids & set(known):
                 same = row  # the latest row of the same occurrence wins (rows are ordered by id)
         if same is not None:  # one occurrence, one event: newly raised rows join its identity
-            trigger = json.loads(same["trigger"])
-            merged = sorted(ids | set(trigger.get("alert_ids", ())))
+            trigger = _payload(same["trigger"])
+            merged = sorted(ids | set(trigger["alert_ids"]))
             if merged != trigger.get("alert_ids"):
                 conn.execute(
                     'UPDATE review_triggers SET "trigger" = ? WHERE id = ?',
