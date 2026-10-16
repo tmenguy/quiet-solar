@@ -66,6 +66,7 @@ MODULES = (
     "alerts",
     "gitread",
     "reviews",
+    "reviewpilot",
     "snapshot",
     "ticks",
     "activeloop",
@@ -298,15 +299,31 @@ class FakeClaude(liveness.ClaudeCli):
 
 
 @dataclass
+class FakeProc:
+    """What ``FakePopen`` returns: a scriptable ``poll()`` / ``returncode`` and a ``pid`` (#407)."""
+
+    pid: int
+    returncode: int | None = None
+    polls: int = 0
+
+    def poll(self) -> int | None:
+        self.polls += 1
+        return self.returncode
+
+
+@dataclass
 class FakePopen:
     calls: list[tuple[list[str], dict[str, Any]]] = field(default_factory=list)
     on_call: Callable[[list[str], dict[str, Any]], None] | None = None
+    procs: list[FakeProc] = field(default_factory=list)
 
-    def __call__(self, argv: list[str], **kwargs: Any) -> object:
+    def __call__(self, argv: list[str], **kwargs: Any) -> FakeProc:
         self.calls.append((list(argv), kwargs))
         if self.on_call is not None:
             self.on_call(list(argv), kwargs)
-        return object()
+        proc = FakeProc(pid=70_000 + len(self.procs))
+        self.procs.append(proc)
+        return proc
 
 
 @dataclass
@@ -424,7 +441,12 @@ def _cp_isolation(
         activeloop,
         "make_seams",
         lambda: activeloop.Seams(
-            runner=deps.runner, probe=deps.probe, claude=deps.claude, main=fake_main, github=fake_github
+            runner=deps.runner,
+            probe=deps.probe,
+            claude=deps.claude,
+            main=fake_main,
+            github=fake_github,
+            popen=deps.popen,  # #407: the review pilot's launcher, a FakePopen (no real subprocess)
         ),
     )
     faults.reset()

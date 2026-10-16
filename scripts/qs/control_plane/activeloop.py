@@ -10,9 +10,11 @@ A hook takes its seams from ``seams()``: ``make_seams()``, built once per daemon
 
 from __future__ import annotations
 
+import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from . import liveness, paths, runner, ticks
 
@@ -29,6 +31,7 @@ class Seams:
     claude: liveness.ClaudeCli
     main: Path
     github: GitHub
+    popen: Callable[..., Any] | None = None  # #407: the review pilot's detached launcher (None: it launches nothing)
 
 
 def make_seams() -> Seams:
@@ -42,6 +45,7 @@ def make_seams() -> Seams:
         claude=liveness.ClaudeCli(run),
         main=main,
         github=ciwatch.GitHub(run, main),
+        popen=subprocess.Popen,
     )
 
 
@@ -58,12 +62,13 @@ def seams() -> Seams:
 
 def _builtin() -> list[tuple[str, ticks.Hook]]:
     """The built-in hooks, in tick order (each task adds its own, and its name to ``BUILTIN_NAMES``)."""
-    from . import ciwatch, detectors, hookroute, restore, selfcheck, watchdog
+    from . import ciwatch, detectors, hookroute, restore, reviewpilot, selfcheck, watchdog
 
     return [
         (selfcheck.CODE_VERSION, selfcheck.code_version_hook),
         (selfcheck.SELFCHECK, selfcheck.selfcheck_hook),
         (detectors.DETECTORS, detectors.detectors_hook),
+        (reviewpilot.REVIEW_PILOT, reviewpilot.review_pilot_hook),  # #407: after the detectors raised their alerts
         (hookroute.HOOK_ROUTE, hookroute.hook_route_hook),
         (ciwatch.CI_WATCH, ciwatch.ci_watch_hook),
         (watchdog.LIVENESS_WATCHDOG, watchdog.liveness_watchdog_hook),
@@ -75,7 +80,16 @@ def _builtin() -> list[tuple[str, ticks.Hook]]:
 # this independent list (a hook lost from the registry is caught), and deriving it would import every hook
 # module when this module loads — the import cycle `_builtin()`'s lazy imports avoid. A test pins the two equal.
 BUILTIN_NAMES: frozenset[str] = frozenset(
-    {"code_version", "selfcheck", "detectors", "hook_route", "ci_watch", "liveness_watchdog", "backup"}
+    {
+        "code_version",
+        "selfcheck",
+        "detectors",
+        "review_pilot",
+        "hook_route",
+        "ci_watch",
+        "liveness_watchdog",
+        "backup",
+    }
 )
 
 
@@ -91,9 +105,10 @@ def _reset_for_tests() -> None:
     """Drop the cached seams and every hook module's in-memory state (a new daemon)."""
     global _seams
     _seams = None
-    from . import backups, ciwatch, detectors, restore, watchdog
+    from . import backups, ciwatch, detectors, restore, reviewpilot, watchdog
 
     backups._reset_for_tests()
+    reviewpilot._reset_for_tests()
     restore._reset_for_tests()
     detectors._reset_for_tests()
     ciwatch._reset_for_tests()

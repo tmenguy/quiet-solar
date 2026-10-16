@@ -72,6 +72,26 @@ class TestBuiltins:
         assert {n for n, _ in activeloop._builtin()} == activeloop.BUILTIN_NAMES
         assert {n for n, _ in ticks.registered()} >= activeloop.BUILTIN_NAMES
 
+    def test_the_review_pilot_runs_after_the_detectors_and_before_the_router(self) -> None:
+        """#407 D12: in both lists, in tick order."""
+        from control_plane import reviewpilot
+
+        names = [n for n, _ in activeloop._builtin()]
+        assert "review_pilot" in activeloop.BUILTIN_NAMES and reviewpilot.REVIEW_PILOT == "review_pilot"
+        assert names.index("detectors") + 1 == names.index("review_pilot") == names.index("hook_route") - 1
+        assert dict(activeloop._builtin())["review_pilot"] is reviewpilot.review_pilot_hook
+
+    def test_the_self_check_sees_a_missing_pilot_or_review_tool(self) -> None:
+        from control_plane import selfcheck
+
+        hooks = sorted(activeloop.BUILTIN_NAMES)
+        tool_names = sorted(selfcheck._expected_tools())
+        selfcheck._require_registries(tool_names, hooks)
+        with pytest.raises(selfcheck.CheckFailed, match="review_pilot"):
+            selfcheck._require_registries(tool_names, [h for h in hooks if h != "review_pilot"])
+        with pytest.raises(selfcheck.CheckFailed, match="'review'"):
+            selfcheck._require_registries([t for t in tool_names if t != "review"], hooks)
+
 
 class TestUnderTheDaemon:
     def test_a_hook_registered_from_cli_runs_under_cp_daemon(self, invoke, monkeypatch, active_loop) -> None:
@@ -132,6 +152,11 @@ class TestSeams:
         from control_plane import ciwatch
 
         assert type(s.github) is ciwatch.GitHub
+        assert s.popen is subprocess.Popen  # #407: the review pilot's launcher
+
+    def test_popen_defaults_to_none(self, fake_main: Path) -> None:
+        s = activeloop.Seams(runner=None, probe=None, claude=None, main=fake_main, github=None)  # type: ignore[arg-type]
+        assert s.popen is None
 
 
 def test_version_lists_tools_and_tick_hooks(invoke, monkeypatch) -> None:
