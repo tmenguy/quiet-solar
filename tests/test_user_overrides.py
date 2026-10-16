@@ -101,7 +101,7 @@ class TestUserOriginatedPersistence:
         dev = MinimalTestLoad(name="TestLoad")
         dev.set_user_originated("key", "value")
         data = {}
-        dev.update_to_be_saved_extra_device_info(data)
+        dev.update_to_be_saved_extra_device_info(data, datetime.datetime.now(tz=pytz.UTC))
         assert data["_user_originated"] == {"key": "value"}
 
         dev2 = MinimalTestLoad(name="TestLoad")

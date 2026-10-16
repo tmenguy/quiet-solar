@@ -2538,7 +2538,7 @@ async def test_charger_saved_info_and_user_updates(
     charger_device.do_run_check_load_activity_and_constraints = AsyncMock(return_value=True)
 
     data = {}
-    charger_device.update_to_be_saved_extra_device_info(data)
+    charger_device.update_to_be_saved_extra_device_info(data, datetime.now(tz=pytz.UTC))
     assert "_user_originated" in data
 
     charger_device.use_saved_extra_device_info({"_user_originated": {"car_name": "SomeCar"}})

@@ -1704,7 +1704,7 @@ async def test_the_episode_latch_is_never_persisted():
     assert load.has_unacknowledged_lost_control is True
 
     saved: dict = {}
-    load.update_to_be_saved_extra_device_info(saved)
+    load.update_to_be_saved_extra_device_info(saved, datetime.now(tz=pytz.UTC))
 
     assert saved, "the AbstractLoad override must still write the fields it owns"
     assert [key for key in saved if "unresponsive" in key or "lost_control" in key] == []

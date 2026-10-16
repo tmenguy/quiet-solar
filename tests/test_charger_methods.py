@@ -882,7 +882,7 @@ class TestQSChargerGenericSavedInfo(unittest.TestCase):
         self.charger.set_user_originated(USER_ORIGINATED_CAR_NAME, "TestCar")
 
         data = {}
-        self.charger.update_to_be_saved_extra_device_info(data)
+        self.charger.update_to_be_saved_extra_device_info(data, datetime.now(tz=pytz.UTC))
 
         self.assertEqual(data["_user_originated"]["car_name"], "TestCar")
 

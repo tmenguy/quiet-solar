@@ -79,7 +79,7 @@ class TestExternalControlDetection(TestCase):
 
         # Save
         data = {}
-        self.load.update_to_be_saved_extra_device_info(data)
+        self.load.update_to_be_saved_extra_device_info(data, datetime.now(tz=pytz.UTC))
         assert data["external_user_initiated_state"] == "ON"
         assert data["external_user_initiated_state_time"] is not None
 
@@ -94,7 +94,7 @@ class TestExternalControlDetection(TestCase):
     def test_persistence_save_none_state(self):
         """When no external state, saved data contains None values."""
         data = {}
-        self.load.update_to_be_saved_extra_device_info(data)
+        self.load.update_to_be_saved_extra_device_info(data, datetime.now(tz=pytz.UTC))
         assert data["external_user_initiated_state"] is None
         assert data["external_user_initiated_state_time"] is None
 

@@ -954,6 +954,10 @@ class TestCarDouble:
     def clear_all_user_originated(self) -> None:
         self._user_originated.clear()
 
+    def set_qs_bump_solar_charge_priority(self, value: bool, for_init: bool = False) -> None:
+        """Mirror QSCar.set_qs_bump_solar_charge_priority (QS-416: the charger proxy calls it)."""
+        self.qs_bump_solar_charge_priority = value
+
     def clear_system_person_hold(self) -> None:
         """Mirror QSCar.clear_system_person_hold (QS-353): drop the system hold."""
         self._system_person_hold_name = None

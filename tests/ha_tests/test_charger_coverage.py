@@ -709,7 +709,7 @@ async def test_charger_update_to_be_saved_extra_device_info(
     charger_device = hass.data[DOMAIN].get(charger_entry.entry_id)
 
     data = {}
-    charger_device.update_to_be_saved_extra_device_info(data)
+    charger_device.update_to_be_saved_extra_device_info(data, datetime.now(tz=pytz.UTC))
     assert isinstance(data, dict)
 
 

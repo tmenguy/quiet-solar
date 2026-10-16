@@ -1260,7 +1260,7 @@ class TestQSChargerExtendedCoverage:
     def test_update_to_be_saved_extra_device_info(self, charger_generic):
         """Test update_to_be_saved_extra_device_info (lines 4145-4190)."""
         data = {}
-        charger_generic.update_to_be_saved_extra_device_info(data)
+        charger_generic.update_to_be_saved_extra_device_info(data, datetime.datetime.now(tz=pytz.UTC))
 
         assert isinstance(data, dict)
 

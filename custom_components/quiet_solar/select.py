@@ -79,7 +79,10 @@ def create_ha_select_for_QSCar(device: QSCar):
         translation_key="selected_next_charge_limit_for_car",
         get_available_options_fn=lambda device, key: device.get_car_next_charge_values_options(),
         get_current_option_fn=lambda device, key: device.get_car_target_charge_option(),
-        async_set_current_option_fn=lambda device, key, option, for_init: device.user_set_next_charge_target(option),
+        # QS-416: `for_init` (restore replay) must not pin the car <-> charger pair
+        async_set_current_option_fn=lambda device, key, option, for_init: device.user_set_next_charge_target(
+            option, for_init=for_init
+        ),
     )
     entities.append(
         QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=selected_car_description)

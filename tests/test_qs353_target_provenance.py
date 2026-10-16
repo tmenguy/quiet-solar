@@ -150,7 +150,7 @@ def test_ac6_persistence_round_trip():
     car.hold_forecasted_person_until(until)
 
     data: dict = {}
-    car.update_to_be_saved_extra_device_info(data)
+    car.update_to_be_saved_extra_device_info(data, datetime.now(tz=pytz.UTC))
     assert data["system_person_hold_name"] == "Forecast"
     assert data["system_person_hold_until"] == until.isoformat()
 

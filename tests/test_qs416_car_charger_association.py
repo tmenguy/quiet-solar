@@ -288,7 +288,8 @@ def test_wrong_car_displaced_whatever_attach_age(attach_age):
     assert fx.w1.get_car_score(buzz, T0, {}) == 1_100_980_000
 
 
-def test_attached_car_keeps_best_score_when_sensor_drops(caplog):
+@pytest.mark.parametrize("dropped", ["unknown", "off"])
+def test_attached_car_keeps_best_score_when_sensor_drops(caplog, dropped):
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
     fx = _fx(car_names=("A", "B"))
     a, b = fx.cars["A"], fx.cars["B"]
@@ -297,8 +298,9 @@ def test_attached_car_keeps_best_score_when_sensor_drops(caplog):
     fx.w1.attach_car(a, T0 - timedelta(minutes=30))
     assert fx.w1.get_car_score(a, T0 - timedelta(seconds=7), {}) == F_NIGHT
 
-    # night: A's API falls asleep, B (plugged for hours) is "on" at 2.25 m
-    _set_car(a, sensor="unknown", dist=6.75)
+    # night: A's API falls asleep (or reports a false "off"), B (plugged for hours)
+    # is "on" at 2.25 m
+    _set_car(a, sensor=dropped, dist=6.75)
     _set_car(b, sensor="on", dist=2.25, plug_duration=NO_SYNC)
     assert fx.w1.get_car_score(a, T0, {}) == F_NIGHT
     assert fx.w1.get_car_score(b, T0, {}) == 1_500_960_000
@@ -399,10 +401,11 @@ def _first_life(shutdown_s=600.0):
     fx.w1.attach_car(a, T0 - timedelta(hours=1))
     assert fx.w1.get_car_score(a, T0 - timedelta(minutes=20), {}) == F_NIGHT
     data: dict = {}
-    fx.w1.update_to_be_saved_extra_device_info(data)
+    saved_at = T0 - timedelta(seconds=shutdown_s)
+    fx.w1.update_to_be_saved_extra_device_info(data, saved_at)
     assert data[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_CAR_NAME] == "A"
     assert data[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE] == F_NIGHT
-    data[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT] = (T0 - timedelta(seconds=shutdown_s)).isoformat()
+    assert data[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT] == saved_at.isoformat()
     return copy.deepcopy(data)
 
 
@@ -481,6 +484,19 @@ def test_floor_persist_restore(scenario, restored):
         assert fx.w1._attached_car_best_score is None
 
 
+def test_floor_not_restored_when_saved_at_in_the_future(caplog):
+    # host clock behind saved_at (no RTC before NTP sync): no "off" since saved_at
+    # can ever be seen, so refuse and consume the pending value
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    data = _first_life()
+    data[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT] = (T0 + timedelta(hours=1)).isoformat()
+    fx = _reboot(data)
+    fx.w1.attach_car(fx.cars["A"], T0)
+    assert fx.w1._attached_car_best_score is None
+    assert fx.w1._boot_attached_car_best_score is None
+    assert any("in the future" in r.getMessage() for r in caplog.records)
+
+
 def test_floor_restore_ignores_car_without_plug_sensor():
     data = _first_life()
     fx = _reboot(data)
@@ -509,6 +525,7 @@ def _bad(mutation):
         lambda d: d.__setitem__(STORAGE_KEY_ATTACHED_CAR_BEST_SCORE, 0),
         lambda d: d.__setitem__(STORAGE_KEY_ATTACHED_CAR_BEST_SCORE, -5.0),
         lambda d: d.__setitem__(STORAGE_KEY_ATTACHED_CAR_BEST_SCORE, CAR_SCORE_MAX),
+        lambda d: d.__setitem__(STORAGE_KEY_ATTACHED_CAR_BEST_SCORE, 10**400),
         lambda d: d.__setitem__(STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT, "not a date"),
         lambda d: d.__setitem__(STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT, 12),
         lambda d: d.__setitem__(STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT, "2026-10-11T13:00:00"),
@@ -524,6 +541,7 @@ def _bad(mutation):
         "score_zero",
         "score_negative",
         "score_max",
+        "score_huge_int",
         "date_unparsable",
         "date_not_str",
         "date_naive",
@@ -544,28 +562,32 @@ def test_floor_persist_int_score_accepted():
     assert fx.w1._saved_attached_car_best_score[1] == 1_000_000.0
 
 
-def test_floor_pending_value_rewritten_and_survives_second_reboot():
+def _assert_saved_none(d: dict) -> None:
+    assert d[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_CAR_NAME] is None
+    assert d[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE] is None
+    assert d[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT] is None
+
+
+@pytest.mark.parametrize("stage", ["never_transferred", "boot_window_pending"])
+def test_floor_save_while_not_attached_writes_none(stage):
+    # only the LIVE floor is ever written: a restored value waiting in `_saved_*`
+    # (never transferred, e.g. a charger rebuilt after the home init) or in the boot
+    # slot is never re-written
     data = _first_life()
-    saved_at = data[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT]
+    fx = _reboot(data, post_init=stage == "boot_window_pending")
+    if stage == "never_transferred":
+        assert fx.w1._saved_attached_car_best_score is not None
+    else:
+        assert fx.w1._boot_attached_car_best_score is not None
 
-    # save between use_saved_extra_device_info and device_post_home_init
-    fx = _reboot(data, post_init=False)
-    d1: dict = {}
-    fx.w1.update_to_be_saved_extra_device_info(d1)
-    assert d1[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_CAR_NAME] == "A"
-    assert d1[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE] == F_NIGHT
-    assert d1[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT] == saved_at
+    d: dict = {}
+    fx.w1.update_to_be_saved_extra_device_info(d, T0 - timedelta(seconds=30))
+    _assert_saved_none(d)
 
-    # save in the boot window, before any attach
-    fx.w1.device_post_home_init(T0 - timedelta(seconds=60))
-    d2: dict = {}
-    fx.w1.update_to_be_saved_extra_device_info(d2)
-    assert d2[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT] == saved_at
-
-    # 2nd restart inside the boot window: still restorable
-    fx2 = _reboot(copy.deepcopy(d2))
-    fx2.w1.attach_car(fx2.cars["A"], T0)
-    assert fx2.w1._attached_car_best_score == F_NIGHT
+    if stage == "boot_window_pending":
+        # the pending value lives in memory: a save before the attach does not lose it
+        fx.w1.attach_car(fx.cars["A"], T0)
+        assert fx.w1._attached_car_best_score == F_NIGHT
 
 
 def test_floor_saved_as_none_after_unplug():
@@ -575,28 +597,26 @@ def test_floor_saved_as_none_after_unplug():
     assert fx.w1._attached_car_best_score == F_NIGHT
     fx.w1.reset(keep_commands=True)
     d: dict = {}
-    fx.w1.update_to_be_saved_extra_device_info(d)
-    assert d[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_CAR_NAME] is None
-    assert d[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE] is None
-    assert d[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT] is None
+    fx.w1.update_to_be_saved_extra_device_info(d, T0)
+    _assert_saved_none(d)
 
 
-def test_floor_saved_with_current_clock_while_attached():
+def test_floor_saved_with_injected_time_while_attached():
     fx = _fx(car_names=("A",))
     a = fx.cars["A"]
     _set_car(a, sensor="on", dist=6.75, plug_duration=SYNC_228)
     fx.w1.attach_car(a, T0 - timedelta(hours=1))
     d: dict = {}
     # attached but never scored: no floor yet → nothing to save
-    fx.w1.update_to_be_saved_extra_device_info(d)
-    assert d[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE] is None
+    fx.w1.update_to_be_saved_extra_device_info(d, T0)
+    _assert_saved_none(d)
 
     fx.w1.get_car_score(a, T0, {})
-    before = datetime.now(tz=pytz.UTC)
-    fx.w1.update_to_be_saved_extra_device_info(d)
-    saved_at = datetime.fromisoformat(d[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT])
-    assert saved_at.tzinfo is not None
-    assert saved_at >= before
+    save_time = T0 + timedelta(seconds=5)
+    fx.w1.update_to_be_saved_extra_device_info(d, save_time)
+    assert d[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_CAR_NAME] == "A"
+    assert d[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE] == F_NIGHT
+    assert datetime.fromisoformat(d[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT]) == save_time
 
 
 # =============================================================================
@@ -728,6 +748,11 @@ def _drive_real_cycle_path(chargers, cars) -> None:
 async def test_pin_lifted(lift):
     fx = _attached_fx()
     a = fx.cars["A"]
+    # give A a real floor first (before the pin: a pinned car never feeds it), so the
+    # unplug provably resets it
+    _set_car(a, sensor="on", dist=5.0, plug_duration=SYNC_228)
+    fx.w1.get_car_score(a, T0 - timedelta(seconds=10), {})
+    assert fx.w1._attached_car_best_score > 0
     await a.user_set_next_charge_target(70)
     assert fx.w1.get_user_originated(USER_ORIGINATED_CAR_NAME) == "A"
 
@@ -737,6 +762,7 @@ async def test_pin_lifted(lift):
         fx.w1.is_plugged = MagicMock(return_value=False)
         await fx.w1.check_load_activity_and_constraints(T0)
         assert fx.w1.car is None
+        assert fx.w1._attached_car_best_score is None
     elif lift == "car_clean_and_reset":
         await a.user_clean_and_reset()
     else:
@@ -857,3 +883,114 @@ async def test_user_action_on_generic_car_pins_it():
     assert fx.w1.get_car_score(a, T0, {}) == 0
     assert fx.w1.get_best_car(T0) is generic
     assert fx.w2.get_best_car(T0) is a
+
+
+# ---- pin lifetime (review fix #01 S1) ------------------------------------------
+
+
+async def test_unplug_clears_pin_even_when_pinned_car_left():
+    # S1a: the pinned car was taken by another charger, so the pinned charger has no
+    # car any more — its physical unplug must still drop the pin
+    fx = _attached_fx(car_names=("A",), with_w2=True)
+    a = fx.cars["A"]
+    await a.user_set_next_charge_target(70)
+    assert fx.w1.get_user_originated(USER_ORIGINATED_CAR_NAME) == "A"
+    fx.w1.detach_car()
+    fx.w2.attach_car(a, T0 - timedelta(minutes=1))
+    assert fx.w1.car is None
+    assert fx.w1.get_user_originated(USER_ORIGINATED_CAR_NAME) == "A"
+
+    _drive_real_cycle_path([fx.w1], [a])
+    fx.w1.is_not_plugged = MagicMock(return_value=True)
+    fx.w1.is_plugged = MagicMock(return_value=False)
+    await fx.w1.check_load_activity_and_constraints(T0)
+
+    assert fx.w1.get_user_originated(USER_ORIGINATED_CAR_NAME) is None
+
+
+@pytest.mark.parametrize("w1_state", ["unavailable", "disabled"])
+async def test_car_pinned_on_inactive_charger_not_won_elsewhere(w1_state):
+    # S1b: W1 out of W2's active chargers (unavailable > 15 s) must not lose its
+    # pinned car to W2; a DISABLED charger's pin protects nothing
+    fx = _attached_fx(car_names=("A",), with_w2=True)
+    a = fx.cars["A"]
+    _set_car(a, sensor="on", dist=1.25, plug_duration=SYNC_228)
+    a.qs_bump_solar_charge_priority = True
+    assert fx.w1.get_user_originated(USER_ORIGINATED_CAR_NAME) == "A"
+
+    if w1_state == "unavailable":
+        fx.w1.is_plugged = MagicMock(return_value=False)
+    else:
+        fx.w1._enabled = False
+    assert fx.w2.get_car_score(a, T0, {}) > 0
+
+    best = fx.w2.get_best_car(T0)
+
+    if w1_state == "unavailable":
+        assert best is not a
+        assert fx.w1.car is a
+        assert fx.w1.get_user_originated(USER_ORIGINATED_CAR_NAME) == "A"
+    else:
+        assert best is a
+
+
+@pytest.mark.parametrize("choice", ["wallbox_2", FORCE_CAR_NO_CHARGER_CONNECTED])
+async def test_car_card_charger_choice_clears_stale_pin_of_unattached_car(choice):
+    # S1c: the car is attached nowhere, yet W1 still pins it: choosing another
+    # charger (or "no charger") from the car card must drop that stale pin
+    fx = _fx(car_names=("A", "B"), with_w2=True)
+    a = fx.cars["A"]
+    _set_car(a, sensor="on", dist=1.25, plug_duration=SYNC_228)
+    _set_car(fx.cars["B"], sensor="off", dist=40.0)
+    fx.w1.set_user_originated(USER_ORIGINATED_CAR_NAME, "A")
+    assert a.charger is None
+
+    await a.user_set_selected_charger_by_name(choice)
+
+    assert fx.w1.get_user_originated(USER_ORIGINATED_CAR_NAME) is None
+    if choice == "wallbox_2":
+        assert fx.w2.get_user_originated(USER_ORIGINATED_CAR_NAME) == "A"
+
+
+async def test_car_card_charger_choice_keeps_other_cars_pins():
+    # guard: only the pins naming THIS car are dropped
+    fx = _fx(car_names=("A", "B"), with_w2=True)
+    fx.w1.set_user_originated(USER_ORIGINATED_CAR_NAME, "B")
+    await fx.cars["A"].user_set_selected_charger_by_name(FORCE_CAR_NO_CHARGER_CONNECTED)
+    assert fx.w1.get_user_originated(USER_ORIGINATED_CAR_NAME) == "B"
+
+
+# ---- entity restore replay (review fix #01 S2) ---------------------------------
+
+
+def _description(entities, key):
+    return next(e.entity_description for e in entities if e.entity_description.key == key)
+
+
+@pytest.mark.parametrize("for_init", [True, False], ids=["restore_replay", "user_action"])
+@pytest.mark.parametrize("entity", ["car_target_select", "car_bump_switch", "charger_bump_switch"])
+async def test_entity_restore_replay_does_not_pin(entity, for_init):
+    from custom_components.quiet_solar.const import SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY
+    from custom_components.quiet_solar.select import create_ha_select_for_QSCar
+    from custom_components.quiet_solar.switch import create_ha_switch_for_QSCar, create_ha_switch_for_QSCharger
+
+    fx = _attached_fx()
+    a = fx.cars["A"]
+
+    if entity == "car_target_select":
+        desc = _description(create_ha_select_for_QSCar(a), "selected_next_charge_limit_for_car")
+        await desc.async_set_current_option_fn(a, desc.key, 70, for_init)
+        assert a.get_user_originated("charge_target_percent") == 70
+    elif entity == "car_bump_switch":
+        desc = _description(create_ha_switch_for_QSCar(a), SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY)
+        await desc.async_switch(a, True, for_init)
+        assert a.qs_bump_solar_charge_priority is True
+    else:
+        desc = _description(create_ha_switch_for_QSCharger(fx.w1), SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY)
+        await desc.async_switch(fx.w1, True, for_init)
+        assert a.qs_bump_solar_charge_priority is True
+
+    # the car's own user-originated replay is untouched; only the charger pin is skipped
+    assert a.get_user_originated("bump_solar") is (entity != "car_target_select")
+    expected = None if for_init else "A"
+    assert fx.w1.get_user_originated(USER_ORIGINATED_CAR_NAME) == expected

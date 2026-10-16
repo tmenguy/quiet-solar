@@ -1345,6 +1345,7 @@ async def test_car_bootstrap_efficiency_from_history(
 async def test_car_user_charge_actions(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
+    charger_factory,
 ) -> None:
     """Test user charge actions and options."""
     from .const import MOCK_CAR_CONFIG
@@ -1364,14 +1365,23 @@ async def test_car_user_charge_actions(
     await hass.async_block_till_done()
 
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
-    # QS-416: a user action on an attached car pins the association on its charger
-    car_device.charger = SimpleNamespace(update_charger_for_user_change=AsyncMock(), set_user_originated=MagicMock())
+    # QS-416 review fix #01 M1: a REAL charger, with the car attached. Its
+    # `update_charger_for_user_change` is an AsyncMock on the real instance only: the
+    # real call runs a full `check_load_activity_and_constraints` cycle which, with no
+    # plugged charger state here, would take the unplug path and detach the car.
+    charger_entry = MockConfigEntry(domain=DOMAIN, data={}, entry_id="charger_user_actions_test")
+    charger_entry.add_to_hass(hass)
+    charger = await charger_factory(config_entry=charger_entry, home=car_device.home, name="Charger user actions")
+    charger.update_charger_for_user_change = AsyncMock()
+    charger.attach_car(car_device, datetime.now(tz=pytz.UTC))
     car_device.default_charge_time = datetime(2026, 1, 15, 7, 30, tzinfo=pytz.UTC).time()
     car_device.get_next_time_from_hours = MagicMock(return_value=datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC))
 
     await car_device.user_add_default_charge()
     assert car_device.do_force_next_charge is False
     car_device.charger.update_charger_for_user_change.assert_awaited()
+    # QS-416 D3: a user action on an attached car pins the association on its charger
+    assert charger.get_user_originated(USER_ORIGINATED_CAR_NAME) == car_device.name
 
     car_device.current_forecasted_person = SimpleNamespace(name="Person A")
     await car_device.user_force_charge_now()

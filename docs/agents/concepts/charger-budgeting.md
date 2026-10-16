@@ -149,8 +149,12 @@ car name, floor, `saved_at`), moved to the boot slot by
 **same** car inside the boot window (120 s, like `_boot_car`) — unless a
 valid `off` of the car plug sensor was recorded since `saved_at` (positive
 proof of an unplug during the shutdown; `unavailable` / `unknown` holes
-do not block). While pending, every save re-writes it with its original
-`saved_at`, so it survives saves before the attach and a 2nd restart.
+do not block; a `saved_at` in the future of the attach — clock behind —
+refuses too). Only the **live** floor of the attached car is ever saved,
+stamped with the save `time` (`update_to_be_saved_extra_device_info(data,
+time)`); a pending restored value is never re-written — it lives in memory
+until the matching attach, so saves before that attach do not lose it, but
+a 2nd restart inside the boot window does (accepted risk).
 
 **Known limitations:**
 

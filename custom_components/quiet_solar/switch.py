@@ -27,12 +27,19 @@ from .ha_model.pool import QSPool
 from .home_model.load import AbstractDevice, AbstractLoad
 
 
+async def _async_set_bump_solar_priority(device: AbstractDevice, value: bool, for_init: bool) -> None:
+    """Solar-bump switch setter; threads `for_init` so a restore replay never pins (QS-416)."""
+    assert isinstance(device, QSChargerGeneric | QSCar)
+    device.set_qs_bump_solar_charge_priority(value, for_init=for_init)
+
+
 def create_ha_switch_for_QSCharger(device: QSChargerGeneric):
     entities = []
 
     qs_bump_solar_priority = QSSwitchEntityDescription(
         key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
         translation_key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
+        async_switch=_async_set_bump_solar_priority,
     )
 
     entities.append(
@@ -48,6 +55,7 @@ def create_ha_switch_for_QSCar(device: QSCar):
     qs_bump_solar_priority = QSSwitchEntityDescription(
         key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
         translation_key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
+        async_switch=_async_set_bump_solar_priority,
     )
 
     entities.append(

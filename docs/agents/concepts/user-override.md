@@ -192,13 +192,18 @@ command state.
   the *new* charger), `QSChargerGeneric.user_clean_constraints` (direct
   attribute writes), an action on a non-attached car (nothing is replayed
   at attach), system actions and storage restore. The pin is lifted by the
-  physical unplug, the car's or the charger's clean-and-reset, and by
+  physical unplug (always — even when the pinned car was already taken by
+  another charger), the car's or the charger's clean-and-reset, and by
   choosing another charger (or "no charger") from the car card, which
-  clears the old charger's pin. The generic car is pinned like any other.
-  **Boot-replay invariant:** restored entities (bump switch, charge-target
-  select) replay their user setters before the first boot `attach_car`
-  (≥ 30 s after boot), while `car.charger is None`, so they pin nothing —
-  if that order ever changed, the replays would pin the association.
+  clears the pin of **every** charger pinned to that car except the new
+  choice (attached there or not). A car pinned on another enabled charger
+  that is not active (e.g. unavailable for more than the 15 s window) is
+  skipped by `_compute_best_car`, so no other charger wins it meanwhile.
+  The generic car is pinned like any other. **Entity restore replay:** the
+  charge-target select and the bump switches (car and charger) thread
+  `for_init` down to the hook (`_user_replay_for_init`), and a replay never
+  pins the charger — only the pin is skipped, the car's own user-originated
+  snapshot still runs.
 - Storing `None` under a target key (`charge_target_percent` /
   `charge_target_energy`). The freeze stamps only the key matching the
   car's percent capability and never a `None` value (QS-353 B); a

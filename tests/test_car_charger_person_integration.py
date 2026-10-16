@@ -1120,7 +1120,7 @@ class TestCarResetInit:
         car.current_forecasted_person = person
 
         data = {}
-        car.update_to_be_saved_extra_device_info(data)
+        car.update_to_be_saved_extra_device_info(data, datetime.now(tz=pytz.UTC))
 
         assert "_user_originated" in data
         assert data["_user_originated"]["person_name"] == "Person_1"
