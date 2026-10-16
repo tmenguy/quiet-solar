@@ -10,6 +10,7 @@ See ``docs/workflow/control-plane.md`` "Review sessions".
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -31,6 +32,7 @@ GLOBAL = "global"
 CROSS_RUN = "cross_run"
 TOOL_NAME = "review"
 REVIEW_PERMISSION_MODE = "dontAsk"  # D6: "auto" is the fallback (`launch_args` builds both)
+ERROR_MAX = 500  # a recorded `reviews.error` keeps at most this many characters (its tail)
 
 
 # --------------------------------------------------------------------------- where a review runs (D5)
@@ -286,7 +288,7 @@ def close_locked(
     run), with the findings it opened before it closed (C17). → whether the row moved.
     """
     now = db.now(clock)
-    error = tools.redact(error)[-500:]
+    error = tools.redact(error)[-ERROR_MAX:]
     cur = conn.execute(
         f"UPDATE reviews SET state = ?, error = ?, finished_at = ?, updated_at = ? WHERE id = ? AND ({where})",
         (to, error, now, now, review_id, *params),
@@ -327,7 +329,8 @@ def cp_prefix(main: Path, python: str) -> str:
 
 
 def allowed_tools(main: Path, python: str, directory: Path) -> list[str]:
-    """The pinned ``dontAsk`` allowlist: ``in/`` read and write, and exactly the six ``cp.py`` commands.
+    """The pinned ``dontAsk`` allowlist: ``in/`` read and write (an ``Edit`` rule also covers the Write tool: Claude
+    Code matches only ``Edit(path)`` rules for file writes, #421), and exactly the six ``cp.py`` commands.
 
     A path holding whitespace, a control character, a ``,`` or a shell metacharacter is ``POLICY_REFUSED``: the unquoted pinned form
     would stop matching (a ``,`` would split one rule in two).
@@ -339,7 +342,7 @@ def allowed_tools(main: Path, python: str, directory: Path) -> list[str]:
                 "POLICY_REFUSED", f"{what} path {value!r} holds whitespace, a comma or a shell metacharacter"
             )
     prefix = cp_prefix(main, python)
-    return [f"Read(/{in_dir}/**)", f"Write(/{in_dir}/**)", *(f"Bash({prefix} {cmd}:*)" for cmd in CP_COMMANDS)]
+    return [f"Read(/{in_dir}/**)", f"Edit(/{in_dir}/**)", *(f"Bash({prefix} {cmd}:*)" for cmd in CP_COMMANDS)]
 
 
 def launch_args(mode: str, main: Path, python: str, directory: Path) -> list[str]:
@@ -642,8 +645,11 @@ def _launch(ctx: tools.StepCtx, rid: str) -> dict[str, Any]:
     res = ctx.claude.spawn_bg(argv, cwd=directory, env_remove=daemon.stripped_names(os.environ))
     if res.returncode == TIMEOUT_EXIT:  # the session may have forked: `identify` decides, by name (R1)
         return {"launched": True, "timeout": True}
-    if not res.ok:
-        raise tools.StepFailed(f"claude --bg exited {res.returncode}", {"exit_code": res.returncode}, res.returncode)
+    if not res.ok:  # redact before the cut: a cut token would no longer match `tools.redact` (#421)
+        clean = dataclasses.replace(res, stdout=tools.redact(res.stdout), stderr=tools.redact(res.stderr))
+        raise tools.StepFailed(
+            liveness.bg_failure(clean, directory.parents[1], ERROR_MAX), {"exit_code": res.returncode}, res.returncode
+        )
     return {"launched": True}
 
 

@@ -23,6 +23,32 @@ from typing import Any
 from . import errors, runner
 
 TOKEN_ENV = "QS_CP_TOKEN"
+UNTRUSTED = "Workspace not trusted"  # Claude Code's refusal of `--bg` in an untrusted folder (2.1.299, #421)
+
+
+def untrusted(res: runner.RunResult) -> bool:
+    """A ``claude --bg`` refused because its folder is not trusted (the phrase in stderr or stdout)."""
+    return UNTRUSTED in res.stderr or UNTRUSTED in res.stdout
+
+
+def trust_hint(trust_dir: Path) -> str:
+    return (
+        f"the folder is not trusted: run `claude` once in `{trust_dir}` or a parent folder and accept the trust prompt"
+    )
+
+
+def bg_failure(res: runner.RunResult, trust_dir: Path, limit: int) -> str:
+    """``claude --bg exited N: <tail>`` (+ ``; <trust hint>`` when refused for trust).
+
+    The tail is stderr's, else stdout's. At most ``limit`` characters, unless the prefix and the hint alone exceed
+    it (an unusually long ``trust_dir``): then exactly prefix + hint, with no tail.
+    """
+    head = f"claude --bg exited {res.returncode}"
+    output = res.stderr.strip() or res.stdout.strip()
+    hint = "; " + trust_hint(trust_dir) if untrusted(res) else ""
+    budget = limit - len(head) - len(": ") - len(hint)
+    tail = output[-budget:] if budget > 0 else ""  # the guard matters: `output[-0:]` is the whole output
+    return head + (f": {tail}" if tail else "") + hint
 
 
 @dataclass(frozen=True)

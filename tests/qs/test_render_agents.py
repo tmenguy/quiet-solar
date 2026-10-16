@@ -1159,6 +1159,17 @@ def test_review_agents_pin_the_contract(tmp_path: Path, stem: str, source: str) 
     assert "`review read diff\\|show\\|grep\\|ls-tree\\|files …`" in text
     assert "A truncated `files` answer: narrow it with\n   `--path <dir>`." in text
     assert "A task whose run is `-`\n   has no run: skip `snapshot --run` for it." in text
+    bre = "\n   ".join(
+        (
+            "\n\n   `--pattern` is a basic regular expression (git's BRE): never escape",
+            "`(`, `)`, `|`, `+`, `?`, `{` or `}` (`\\(`, `\\{`, `\\|`, `\\+`, `\\?` are",
+            "operators); `.`, `*`, `[`, `^`, `$` and `\\` are special — escape one",
+            "with `\\` to match it. A pattern git cannot compile comes back",
+            "`NOT_FOUND` with git's message: fix the pattern and retry once (the one",
+            "exception to the `NOT_FOUND` rule below).\n\n4. The lens:",
+        )
+    )
+    assert "(digest, criteria)." + bre in text  # #421: the whole block, indent included
     assert "denied without a prompt" not in text
     assert "--family --state open,rejected,settled,deferred" in text
     if source == "global_review":

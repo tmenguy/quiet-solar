@@ -667,6 +667,47 @@ class TestCloseDead:
         assert close(pw) == ["V1"] and review_states(pw) == {"V1": "abandoned"}
         assert sql(pw["db"], "SELECT error FROM reviews")[0][0] == "the review session is gone"
 
+    def _error(self, pw) -> str:
+        return str(sql(pw["db"], "SELECT error FROM reviews")[0][0])
+
+    @pytest.mark.parametrize("field", ["state", "status"])
+    def test_a_done_session_is_abandoned(self, pw, field: str) -> None:
+        """#421: a finished session stays listed (``idle`` / ``done``); it no longer keeps the review an hour."""
+        review(pw, "running", launch_age=10, session="S-v1")
+        call(pw, "succeeded")
+        pw["claude"].listing = [agent("S-v1", **{field: "done"})]  # `state` done, `status` idle: the T13 listing
+        assert close(pw) == []
+        assert close(pw) == ["V1"] and review_states(pw) == {"V1": "abandoned"}
+        assert self._error(pw) == "the review session ended without finishing"
+
+    def test_an_absent_then_done_session_ended_without_finishing(self, pw) -> None:
+        review(pw, "running", launch_age=10, session="S-v1")
+        call(pw, "succeeded")
+        pw["claude"].listing = []
+        assert close(pw) == []
+        pw["claude"].listing = [agent("S-v1", state="done")]
+        assert close(pw) == ["V1"] and self._error(pw) == "the review session ended without finishing"
+
+    def test_a_done_then_gone_session_is_gone(self, pw) -> None:
+        review(pw, "running", launch_age=10, session="S-v1")
+        call(pw, "succeeded")
+        pw["claude"].listing = [agent("S-v1", state="done")]
+        assert close(pw) == []
+        pw["claude"].listing = []
+        assert close(pw) == ["V1"] and self._error(pw) == "the review session is gone"
+
+    def test_a_done_then_live_session_resets(self, pw) -> None:
+        review(pw, "running", launch_age=10, session="S-v1")
+        call(pw, "succeeded")
+        pw["claude"].listing = [agent("S-v1", state="done")]
+        assert close(pw) == []
+        pw["claude"].listing = None  # a failed listing neither counts nor resets
+        assert close(pw) == []
+        pw["claude"].listing = [agent("S-v1")]
+        assert close(pw) == []
+        pw["claude"].listing = [agent("S-v1", state="done")]
+        assert close(pw) == [] and review_states(pw) == {"V1": "running"}
+
     def test_the_listing_is_taken_only_while_a_review_runs(self, pw) -> None:
         review(pw, "launching")
         call(pw, "started")

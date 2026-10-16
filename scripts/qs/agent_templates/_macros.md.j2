@@ -240,6 +240,14 @@ outside `in/`.
    base: read it with `ls-tree` / `show` at `head_sha`. Never assume a
    working tree: you have none. A task with no head (`head_state` `plan` or
    `unresolved`) is reviewed from its plan (digest, criteria).
+
+   `--pattern` is a basic regular expression (git's BRE): never escape
+   `(`, `)`, `|`, `+`, `?`, `{` or `}` (`\(`, `\{`, `\|`, `\+`, `\?` are
+   operators); `.`, `*`, `[`, `^`, `$` and `\` are special — escape one
+   with `\` to match it. A pattern git cannot compile comes back
+   `NOT_FOUND` with git's message: fix the pattern and retry once (the one
+   exception to the `NOT_FOUND` rule below).
+
 4. The lens:
 [% if kind == "global" %]
    - does each task fit the run's global plan;

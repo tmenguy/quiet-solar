@@ -296,6 +296,8 @@ def _launch(
         result: dict[str, Any] = {"error": f"{type(exc).__name__}: {exc}"[-300:]}
     else:
         result = {"stdout_tail": res.stdout.strip().splitlines()[-5:], "stderr_tail": res.stderr.strip()[-300:]}
+        if not res.ok and liveness.untrusted(res):  # a fixed message per directory: logged once per daemon run
+            _log_once(f"messenger launch refused: {liveness.trust_hint(directory)}")
     try:  # after every spawn attempt (I5); a spawn that ran is a launch: a failed beat never turns it into a failed one
         daemon.beat(conn, clock)
     except Exception as exc:  # noqa: BLE001

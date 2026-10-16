@@ -94,6 +94,57 @@ def _fake_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> 
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
 
 
+class TestBgFailure:
+    """``bg_failure``: a failed ``claude --bg`` keeps its output tail and says when the folder is untrusted (#421)."""
+
+    D = Path("/state/cp-reviews")
+    REFUSAL = "Workspace not trusted. Run claude in /state once and accept the trust prompt"
+
+    def _res(self, out: str = "", err: str = "") -> runner.RunResult:
+        return runner.RunResult(1, out, err)
+
+    def test_prefers_stderr(self) -> None:
+        assert liveness.bg_failure(self._res("out", " err \n"), self.D, 500) == "claude --bg exited 1: err"
+
+    def test_falls_back_to_stdout(self) -> None:
+        assert liveness.bg_failure(self._res("out\n", "  \n"), self.D, 500) == "claude --bg exited 1: out"
+
+    def test_with_no_output(self) -> None:
+        assert liveness.bg_failure(self._res(), self.D, 500) == "claude --bg exited 1"
+
+    @pytest.mark.parametrize("where", ["stderr", "stdout"])
+    def test_trust_hint_in_stderr_or_stdout(self, where: str) -> None:
+        res = self._res(err=self.REFUSAL) if where == "stderr" else self._res(out=self.REFUSAL, err="boom")
+        assert liveness.untrusted(res)
+        tail = self.REFUSAL if where == "stderr" else "boom"
+        hint = liveness.trust_hint(self.D)
+        assert liveness.bg_failure(res, self.D, 500) == f"claude --bg exited 1: {tail}; {hint}"
+        assert hint == (
+            "the folder is not trusted: run `claude` once in `/state/cp-reviews` or a parent folder"
+            " and accept the trust prompt"
+        )
+
+    def test_no_hint_for_other_stdout(self) -> None:
+        res = self._res(out="something else", err="boom")
+        assert not liveness.untrusted(res)
+        assert liveness.bg_failure(res, self.D, 500) == "claude --bg exited 1: boom"
+
+    def test_keeps_head_and_hint_within_the_limit(self) -> None:
+        res = self._res(err=self.REFUSAL + "y" * 2000 + "END")
+        text = liveness.bg_failure(res, self.D, 300)
+        assert len(text) == 300
+        assert text.startswith("claude --bg exited 1: y") and text.endswith("END; " + liveness.trust_hint(self.D))
+
+    def test_head_and_hint_over_the_limit(self) -> None:
+        d = Path("/" + "d" * 400)
+        text = liveness.bg_failure(self._res(err=self.REFUSAL), d, 300)
+        assert text == "claude --bg exited 1; " + liveness.trust_hint(d)
+        exact = len("claude --bg exited 1: ; ") + len(liveness.trust_hint(self.D))  # no room: `[-0:]` is not used
+        assert liveness.bg_failure(self._res(err=self.REFUSAL), self.D, exact) == (
+            "claude --bg exited 1; " + liveness.trust_hint(self.D)
+        )
+
+
 class TestClaudeCli:
     def test_agents_from_a_fake_executable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         fixture = tmp_path / "agents.json"

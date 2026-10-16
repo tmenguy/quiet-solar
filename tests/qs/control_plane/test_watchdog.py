@@ -222,7 +222,9 @@ class TestLadder:
         _tick(conn, fake_clock)
         assert sorted(r["run_id"] for r in _messenger_rows(migrated)) == sorted([r1, r2])
 
-    def test_a_failed_row_does_not_take_the_cap(self, conn, migrated, fake_claude, fake_runner, fake_clock) -> None:
+    def test_a_failed_row_does_not_take_the_cap(
+        self, conn, migrated, fake_claude, fake_runner, fake_clock, capsys
+    ) -> None:
         r1, _ = open_run("r1", "S-1")
         r2, _ = open_run("r2", "S-2")
         _stall(migrated, r1, fake_clock)
@@ -231,6 +233,29 @@ class TestLadder:
         fake_runner.on(("claude", "--bg"), RunResult(1, "", "boom"))
         _tick(conn, fake_clock)
         assert len(_launches(fake_runner)) == 2  # the failed first launch left the cap free
+        assert "messenger launch refused" not in capsys.readouterr().err  # not a trust refusal: no hint
+
+    def test_an_untrusted_messenger_dir_logs_the_hint_once(
+        self, conn, migrated, fake_claude, fake_runner, fake_clock, capsys
+    ) -> None:
+        """#421: ``claude --bg`` refuses an untrusted folder; the daemon log says which folder to trust, once."""
+        r1, _ = open_run("r1", "S-1")
+        r2, _ = open_run("r2", "S-2")
+        _stall(migrated, r1, fake_clock)
+        _stall(migrated, r2, fake_clock)
+        fake_claude.listing = [agent("S-1", "r1", status="idle"), agent("S-2", "r2", status="idle")]
+        fake_runner.on(("claude", "--bg"), RunResult(1, "", "Workspace not trusted. Run claude in X once"))
+        _tick(conn, fake_clock)
+        assert len(_launches(fake_runner)) == 2
+        err = capsys.readouterr().err
+        assert err.count("messenger launch refused") == 1
+        assert (
+            f"messenger launch refused: the folder is not trusted: run `claude` once in `{paths.messenger_dir()}`"
+            in err
+        )
+        rows = _messenger_rows(migrated)
+        assert len(rows) == 2
+        assert all(json.loads(r["result"]).keys() == {"stdout_tail", "stderr_tail"} for r in rows)
 
     def test_an_unbound_run_name_is_not_listening(self, conn, migrated, stalled, fake_runner, fake_clock) -> None:
         sql(migrated, "UPDATE run_leases SET name_bound_session_id = 'S-other'")

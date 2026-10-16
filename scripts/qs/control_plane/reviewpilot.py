@@ -8,8 +8,8 @@ Every ``PILOT_EVERY_S`` (a ``ticks.Throttle``), after ``detectors`` and before `
    changed. ``requested`` / ``launching``: a launcher that never started, whose call failed, whose holder is
    dead, or that is older than ``REQUEST_TTL_S`` → ``failed`` — except a ``launching`` review whose session is
    listed by name, which is adopted (``running``). A launched review fails early only when a known listing does
-   not show it; under an unknown listing only ``REQUEST_TTL_S`` fails it. ``running``: unlisted on ``LIVENESS_CONFIRM`` successful
-   listings in a row, or past ``REVIEW_TTL_S`` → ``abandoned``.
+   not show it; under an unknown listing only ``REQUEST_TTL_S`` fails it. ``running``: unlisted or listed ``done``
+   on ``LIVENESS_CONFIRM`` successful listings in a row, or past ``REVIEW_TTL_S`` → ``abandoned``.
 3. **The queue and the rules** (D11): every new event (an open ``overlap_cross_run`` /
    ``duplicate_task_cross_run`` occurrence, or a merge that touches another run) is written at first sight as
    a ``review_triggers`` row ``pilot:<event>:1`` (``queued``); each tick re-requests the queued rows through
@@ -62,7 +62,8 @@ def _log_once(message: str) -> None:
 @dataclass
 class _State:
     children: list[Any] = field(default_factory=list)  # the launcher processes not reaped yet
-    unlisted: dict[str, int] = field(default_factory=dict)  # running review → listings in a row without it
+    # running review → listings in a row without it live (absent or `done`)
+    unlisted: dict[str, int] = field(default_factory=dict)
 
 
 _state = _State()
@@ -158,25 +159,25 @@ def _launch_move(row: sqlite3.Row, clock: clock_mod.Clock, dead_holder: bool, un
 
 
 def _session_move(row: sqlite3.Row, clock: clock_mod.Clock, listing: list[liveness.Agent] | None) -> _Move | None:
-    """A ``running`` review past ``REVIEW_TTL_S``, or whose session is gone: ``abandoned`` (never retried)."""
+    """A ``running`` review past ``REVIEW_TTL_S``, or whose session is gone or ``done``: ``abandoned`` (never retried).
+
+    A review session is single-turn, so a listed ``done`` (``status`` or ``state``) means it ended (#421); the error
+    text comes from the latest listing.
+    """
     ttl = clock_mod.stamp(clock, plus=-REVIEW_TTL_S)
     if row["launch_at"] is not None and row["launch_at"] <= ttl:
         return _Move(row["id"], "abandoned", "the review expired", "state = ? AND launch_at <= ?", (row["state"], ttl))
     if listing is None:
         return None  # a failed listing changes nothing
-    if liveness.find(listing, session_id=row["session_id"]) is not None:
+    found = liveness.find(listing, session_id=row["session_id"])
+    if found is not None and "done" not in (found.status, found.state):
         _state.unlisted.pop(row["id"], None)
         return None
     seen = _state.unlisted[row["id"]] = _state.unlisted.get(row["id"], 0) + 1
     if seen < LIVENESS_CONFIRM:
         return None
-    return _Move(
-        row["id"],
-        "abandoned",
-        "the review session is gone",
-        "state = 'running' AND session_id IS ?",
-        (row["session_id"],),
-    )
+    error = "the review session ended without finishing" if found is not None else "the review session is gone"
+    return _Move(row["id"], "abandoned", error, "state = 'running' AND session_id IS ?", (row["session_id"],))
 
 
 def close_dead(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) -> list[str]:
