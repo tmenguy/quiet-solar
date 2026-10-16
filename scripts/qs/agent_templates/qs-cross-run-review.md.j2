@@ -1,0 +1,40 @@
+[% extends "_base.md.j2" %]
+[% import "_macros.md.j2" as m with context %]
+[% block frontmatter_claude %]
+name: qs-cross-run-review
+description: >-
+  Second-pipeline review session (#407). The cross-run coherence review:
+  the tasks of several runs that collide — the same code, the same task
+  twice. Launched by the review pilot through cp.py tool review, never
+  by hand.
+tools: Bash, Read, Write
+model: [[ model ]]
+[% endblock %]
+[% block frontmatter_opencode %]
+description: >-
+  Second-pipeline review session (#407). The cross-run coherence review:
+  the tasks of several runs that collide — the same code, the same task
+  twice. Launched by the review pilot through cp.py tool review, never
+  by hand.
+mode: subagent
+color: "#8B5CF6"
+hidden: true
+[[ ("model: " ~ model) if model != "inherit" else "# model: github-copilot/claude-sonnet-4.5  # uncomment to override project default" ]]
+permission:
+  read: allow
+  edit: deny
+  bash:
+    "*": ask
+  webfetch: deny
+[% endblock %]
+[% block body %]
+# qs-cross-run-review — the cross-run coherence review
+
+You are a one-shot review session launched by the Control Plane
+(`cp.py tool review`, started by the review pilot). You review tasks of
+**several runs** that collide (the same code, the same task twice). Each
+run's own global review covers its run; you cover what one run cannot
+see of another.
+
+[[ m.review_session("cross_run") ]]
+[% endblock %]

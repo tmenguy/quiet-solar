@@ -1093,3 +1093,56 @@ def test_second_pipeline_model_override_reaches_the_set(tmp_path: Path) -> None:
     text = (out / ".claude" / "agents" / "qs-node.md").read_text()
     assert f"model: {models.model_for('claude', 'light')}\n" in text
     assert "lane=none issue=none" in text
+
+
+# ---------------------------------------------------------------------------
+# #407 — the two review-session agents (D14)
+# ---------------------------------------------------------------------------
+
+_REVIEW_STEMS = {"qs-global-review": "global_review", "qs-cross-run-review": "cross_run_review"}
+_SIX_COMMANDS = ("snapshot", "task show", "ledger show", "review read", "finding open", "review finish")
+
+
+@pytest.mark.parametrize("stem", sorted(_REVIEW_STEMS))
+def test_review_agents_render_both_harnesses_bound_and_unbound(tmp_path: Path, stem: str) -> None:
+    """Both templates render on both harnesses; bound and unbound renders are byte-identical."""
+    bound, unbound = _render_real(tmp_path, bound=True), _render_real(tmp_path, bound=False)
+    for hdir, harness in ((".claude", "claude"), (".opencode", "opencode")):
+        b = (bound / hdir / "agents" / f"{stem}.md").read_bytes()
+        assert b == (unbound / hdir / "agents" / f"{stem}.md").read_bytes(), hdir
+        text = b.decode("utf-8")
+        data = yaml.safe_load(_frontmatter(text))
+        cls = models.resolve(None, stem)
+        assert data["model"] == models.model_for(harness, cls)
+        assert "## Task facts" not in text and "## Reference map" not in text
+        if harness == "claude":
+            assert data["name"] == stem and data["tools"] == "Bash, Read, Write"
+            assert data.get("effort") == models.effort_for(cls)
+        else:
+            assert data["mode"] == "subagent" and data["hidden"] is True
+            assert data["permission"]["edit"] == "deny" and data["permission"]["webfetch"] == "deny"
+
+
+@pytest.mark.parametrize(("stem", "source"), sorted(_REVIEW_STEMS.items()))
+def test_review_agents_pin_the_contract(tmp_path: Path, stem: str, source: str) -> None:
+    text = (_render_real(tmp_path, bound=False) / ".claude" / "agents" / f"{stem}.md").read_text()
+    for cmd in _SIX_COMMANDS:
+        assert f"`{cmd}" in text, cmd
+    assert "One command per Bash call: no pipe, no `&&`, no `;`, no redirect, no" in text
+    assert "`$(…)` or backticks, no environment prefix, no heredoc." in text
+    assert "with `--token` (only on\n  `finding open` and `review finish`) after the command words." in text
+    assert "`snapshot`, `task show`, `ledger show` and `review read` take no\n  `--token`." in text
+    assert f"--source {source} --input <file> --token <token>" in text
+    assert f"Your source is always `{source}`." in text
+    other = ({"global_review", "cross_run_review"} - {source}).pop()
+    assert other not in text
+    assert "Read the code only with `review read`, at the shas of your prompt" in text
+    assert "`review read diff --base <base_sha> --head <head_sha>`" in text
+    assert "Never edit, commit, push, post messages, or call another command or\n  tool" in text
+    assert "`STALE_TOKEN`: stop at once" in text
+    assert "--family --state open,rejected,settled,deferred" in text
+    if source == "global_review":
+        assert "`blast_radius` is required for every deliverable with a `head_sha`" in text
+    else:
+        assert "A cross-run review writes no `blast_radius`" in text
+        assert "a cross-run finding is opened on each task it\n   touches" in text

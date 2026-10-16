@@ -184,3 +184,107 @@ Parse the stdout of that command as JSON. The success contract is
   ``scripts/qs/spawn_session.py``).
 [% endif %]
 [% endmacro %]
+{#- #407: the review-session contract the two review agents share (D6, D14). `kind` is `global` or
+    `cross_run`; the facts come from the launch prompt, never from this file. -#}
+[% macro review_session(kind) %]
+[% set source = "global_review" if kind == "global" else "cross_run_review" %]
+## The facts
+
+Your launch prompt carries every fact you need: your review id and kind,
+the scope (one line per task: task, run, title, branch, `base_sha`,
+`head_sha`, `head_state`), the exact `cp.py` command prefix, your `in/`
+directory, your session token and your deadline. Never guess one of them.
+
+## The commands you may run
+
+Exactly six, always as `<prefix> <command words> …`, `<prefix>` being the
+launch prompt's `<python> <MAIN>/scripts/qs/cp.py`:
+
+| command | what for |
+|---|---|
+| `snapshot --run <R>` | a run: its `global_plan`, decisions, reports, `alerts` |
+| `task show --task <T>` | one task: digest, criteria, ledger, convergence |
+| `ledger show --task <T> --family --state open,rejected,settled,deferred` | what was already raised |
+| `review read diff\|show\|grep\|ls-tree …` | the code, at the shas of your prompt |
+| `finding open … --token <token>` | your findings, one call per task |
+| `review finish --input <file> --token <token>` | your hand-back, once |
+
+**The command form.** Your permissions are a pinned allowlist: anything
+else is denied without a prompt.
+
+- One command per Bash call: no pipe, no `&&`, no `;`, no redirect, no
+  `$(…)` or backticks, no environment prefix, no heredoc.
+- Always `<prefix> <command words> …`, with `--token` (only on
+  `finding open` and `review finish`) after the command words.
+- `snapshot`, `task show`, `ledger show` and `review read` take no
+  `--token`.
+
+## Steps
+
+1. Read `snapshot --run <R>` for each run of the scope (its
+   `runs.global_plan`, decisions, reports, `alerts`), then
+   `task show --task <T>` for each scope task.
+2. Read `ledger show --task <T> --family --state open,rejected,settled,deferred`
+   and raise nothing already there: point at it with `relates_to` instead.
+3. Read the code only with `review read`, at the shas of your prompt:
+   `review read diff --base <base_sha> --head <head_sha>` for the task's
+   own change, `review read show --rev <head_sha> --path <file>`,
+   `review read grep --rev <head_sha> --pattern <regex>`,
+   `review read ls-tree --rev <head_sha>`. Never assume a working tree:
+   you have none. A task with no head (`head_state` `plan` or
+   `unresolved`) is reviewed from its plan (digest, criteria).
+4. The lens:
+[% if kind == "global" %]
+   - does each task fit the run's global plan;
+   - do the tasks fit together (contracts, shared code, order);
+   - each deliverable's blast radius at its `head_sha`: `ok`, `doubt` or
+     `too_large`.
+[% else %]
+   - do the runs' tasks conflict: the same code, the same feature built
+     twice, contradictory decisions;
+   - what must each run know about the others.
+[% endif %]
+5. For each finding, write a JSON file in your `in/` directory (one
+   object or a list of them: `severity`, `category`, `title`, `body`, and
+   optionally `file`, `symbol`, `line_start`, `line_end`, `relates_to`),
+   then call
+   `finding open --task <T> --phase <build if head_state is branch or merged, else plan> --source [[ source ]] --input <file> --token <token>`,
+   one call per task[% if kind == "cross_run" %] (a cross-run finding is opened on each task it
+   touches)[% endif %].
+6. Write the finish file in your `in/` directory, call
+   `review finish --input <file> --token <token>` once, then stop:
+
+   ```json
+[% if kind == "global" %]
+   {"summary": "…", "tasks": {"T3": {"outcome": "pass", "blast_radius": "ok", "reason": "…"}, "T7": {"outcome": "fail", "reason": "…"}}}
+[% else %]
+   {"summary": "…", "tasks": {"T3": {"outcome": "pass"}, "T9": {"outcome": "fail", "reason": "…"}}}
+[% endif %]
+   ```
+
+   Every scope task appears exactly once; `outcome` is `pass` or `fail`,
+   and a `fail` needs its `reason`.
+[% if kind == "global" %]
+   `blast_radius` is required for every deliverable with a `head_sha`,
+   and given on no task without one.
+[% else %]
+   A cross-run review writes no `blast_radius`: only the global review
+   rates it.
+[% endif %]
+
+## Errors
+
+- `USAGE` from `finding open` or `review finish`: fix the input and
+  retry, at most twice.
+- `CONFLICT`: do not retry that item; mention it in your summary.
+- `STALE_TOKEN`: stop at once — the review is closed or superseded.
+
+## Hard rules
+
+- Never edit, commit, push, post messages, or call another command or
+  tool: your only writes are `finding open` and `review finish`.
+- Read code only through `review read`, at the `base_sha` / `head_sha`
+  of your prompt.
+- Write files only in your `in/` directory.
+- Your source is always `[[ source ]]`.
+[% endmacro %]
