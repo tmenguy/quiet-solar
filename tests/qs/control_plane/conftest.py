@@ -43,6 +43,7 @@ MODULES = (
     "schema_v1",
     "schema_ledger",
     "schema_v3",
+    "schema_reviews",
     "migrations",
     "db",
     "daemon",
@@ -145,6 +146,7 @@ class Call:
     env_remove: tuple[str, ...]
     detach: bool
     timeout: float | None
+    decode_errors: str = "strict"
 
 
 def argv_matches(argv: Sequence[str], pattern: Sequence[str]) -> bool:
@@ -181,9 +183,16 @@ class FakeRunner:
         env_remove: Sequence[str] = (),
         timeout: float | None = None,
         detach: bool = False,
+        decode_errors: str = "strict",
     ) -> RunResult:
         call = Call(
-            list(argv), None if cwd is None else str(cwd), dict(env_extra or {}), tuple(env_remove), detach, timeout
+            list(argv),
+            None if cwd is None else str(cwd),
+            dict(env_extra or {}),
+            tuple(env_remove),
+            detach,
+            timeout,
+            decode_errors,
         )
         with self._lock:
             self.calls.append(call)

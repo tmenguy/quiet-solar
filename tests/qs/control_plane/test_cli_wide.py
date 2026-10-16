@@ -122,8 +122,9 @@ def samples(f: dict[str, str]) -> dict[str, list[str]]:
             "R",
         ],
     }
-    for name in tools.REGISTRY:
-        out[f"tool {name}"] = ["tool", name, "--task", "T1", "--key", "k", "--args-file", f[f"tool:{name}"]]
+    for name, spec in tools.REGISTRY.items():
+        task = ["--task", "T1"] if spec.task_bound else []  # #407: a task-less tool takes no --task
+        out[f"tool {name}"] = ["tool", name, *task, "--key", "k", "--args-file", f[f"tool:{name}"]]
     return out
 
 

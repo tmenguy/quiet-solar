@@ -14,6 +14,12 @@ argument: the same key with an edited file is a ``CONFLICT``. Every
 only when it runs, so a takeover whose effect is already recorded never needs
 the file again. Keys are ``[A-Za-z0-9._:/-]{1,200}``.
 
+A tool is bound to a task unless its spec says ``task_bound=False`` (#407):
+an unbound tool runs with no ``--task`` (its ``StepCtx.task`` is ``None``),
+and an ``authorize`` hook may refuse a call (``CONFLICT``) right after the
+token check, before any claim. A recorded error never holds a review token's
+nonce.
+
 The frozen API for #400 and later children: ``StepCtx``, ``Step``,
 ``ToolSpec``, ``register`` and ``invoke``. ``argv_step`` is a helper and may
 evolve.
@@ -32,7 +38,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from . import clock as clock_mod
 from . import (
@@ -60,6 +66,7 @@ MERGE_SHA_RETRY_S = 2.0
 PHASES = ("/create-plan", "/diagnose-task", "/decompose-epic")
 RELEASED_BEFORE_EFFECT = frozenset({"BUSY", "POLICY_REFUSED", "STALE_TOKEN", "STOPPED", "USAGE"})
 KEY_RE = re.compile(r"[A-Za-z0-9._:/-]{1,200}")
+_REVIEW_TOKEN_RE = re.compile(r"review:(V\d+)\.([01])\.[0-9a-f]+")  # #407: redacted from recorded errors
 GH_LIST_LIMIT = "100"
 _RELAUNCH_RE = re.compile(r"(?P<base>.*?)(?:-r(?P<n>\d+))?")  # spawn names end in -g<generation>
 NON_TERMINAL_STATES = frozenset(set(tasks.TRANSITIONS) - tasks.TERMINAL)
@@ -110,6 +117,7 @@ class _StepRunner(runner.Runner):
         env_remove: Sequence[str] = (),
         timeout: float | None = None,
         detach: bool = False,
+        decode_errors: str = "strict",
     ) -> runner.RunResult:
         extra = dict(env_extra or {})
         remove = list(env_remove)
@@ -118,7 +126,13 @@ class _StepRunner(runner.Runner):
         else:
             remove.append(TOKEN_ENV)
         return self.base.run(
-            argv, cwd=cwd, env_extra=extra, env_remove=tuple(remove), timeout=timeout, detach=detach or self.detach
+            argv,
+            cwd=cwd,
+            env_extra=extra,
+            env_remove=tuple(remove),
+            timeout=timeout,
+            detach=detach or self.detach,
+            decode_errors=decode_errors,
         )
 
 
@@ -202,6 +216,9 @@ class ToolSpec:
     on_success: Callable[[sqlite3.Connection, StepCtx], dict[str, Any]] | None = None
     refuse_when_stopped: bool = True
     token_kinds: frozenset[str] = frozenset({"run"})
+    task_bound: bool = True  # #407: False → a task-less tool (no --task; StepCtx.task is None)
+    # #407: (conn, principal, args, key) → None or a CpError, right after the token check, before any claim.
+    authorize: Callable[[sqlite3.Connection, tokens.Principal, Mapping[str, Any], str], None] | None = None
 
 
 REGISTRY: dict[str, ToolSpec] = {}
@@ -273,6 +290,11 @@ def _files_digest(args: Mapping[str, Any], cache: Mapping[str, bytes]) -> str | 
     return hashlib.sha256(_canonical(digests).encode()).hexdigest()
 
 
+def redact(text: str) -> str:
+    """Every review token in ``text`` with its nonce replaced: ``review:V<n>.<e>.<redacted>`` (#407 D2)."""
+    return _REVIEW_TOKEN_RE.sub(r"review:\1.\2.<redacted>", text)
+
+
 def _owned(cur: sqlite3.Cursor) -> None:
     """A compare-and-set on this call's claim matched nothing: another process took the key over.
 
@@ -284,7 +306,15 @@ def _owned(cur: sqlite3.Cursor) -> None:
 
 class _Call:
     def __init__(
-        self, spec: ToolSpec, ctx: Ctx, *, key: str, task_id: str, args: Mapping[str, Any], token: str, actor: str
+        self,
+        spec: ToolSpec,
+        ctx: Ctx,
+        *,
+        key: str,
+        task_id: str | None,
+        args: Mapping[str, Any],
+        token: str,
+        actor: str,
     ) -> None:
         self.spec = spec
         self.ctx = ctx
@@ -304,6 +334,9 @@ class _Call:
 
     # -- helpers
     def task(self) -> TaskRow:
+        if not self.spec.task_bound:
+            return cast(TaskRow, None)  # a task-less tool: its steps never read the task
+        assert self.task_id is not None  # run_recorded refuses a bound tool with no task
         return tasks.get(self.conn, self.task_id)
 
     def step_ctx(self, task: TaskRow, step: Step | None = None) -> StepCtx:
@@ -436,7 +469,7 @@ class _Call:
                             self.spec.name,
                             self.key,
                             args_hash,
-                            who.run_id,
+                            who.run_id or None,  # a cross-run review has no run (#407)
                             self.task_id,
                             self.actor or who.actor,
                             _canonical(self.args),
@@ -497,6 +530,7 @@ class _Call:
             allow_stopped=not self.spec.refuse_when_stopped,
             timeout=locks.LOCK_WAIT_S,
             cap_timeout=locks.GATE_WAIT_S,
+            kinds=self.spec.token_kinds,
         ) as held:
             for step in steps:
                 if step.name in self.outputs:
@@ -530,7 +564,8 @@ class _Call:
         return self.response(result, replayed=False)
 
     def fail(self, error: str, detail: str, output: Any, exit_code: int) -> errors.CpError:
-        result = {"error": error, "detail": detail, "output": output}
+        detail = redact(detail)
+        result = json.loads(redact(_canonical({"error": error, "detail": detail, "output": output})))
         where, params = self._where()
         with db.write(self.conn):
             _owned(
@@ -557,19 +592,25 @@ def run_recorded(
     spec: ToolSpec,
     *,
     key: str,
-    task: str,
+    task: str | None,
     args: Mapping[str, Any],
     token: str,
     actor: str,
     ctx: Ctx,
 ) -> dict[str, Any]:
-    """Run ``spec`` for ``task`` under the idempotency ``key`` (§9.2)."""
+    """Run ``spec`` for ``task`` (``None`` for a task-less tool) under the idempotency ``key`` (§9.2)."""
     if not KEY_RE.fullmatch(key):
         raise errors.CpError("USAGE", "--key must be 1 to 200 characters out of [A-Za-z0-9._:/-]")
+    if spec.task_bound and not task:
+        raise errors.CpError("USAGE", f"tool {spec.name} needs --task")
+    if not spec.task_bound and task is not None:
+        raise errors.CpError("USAGE", f"tool {spec.name} takes no --task")
     call = _Call(spec, ctx, key=key, task_id=task, args=args, token=token, actor=actor)
     try:
         with db.write(call.conn):
-            call.require()
+            who = call.require()
+            if spec.authorize is not None:  # a refusal here is a clean CONFLICT: nothing claimed, nothing spent
+                spec.authorize(call.conn, who, call.args, key)
             task_row = call.task()
             replay = call.replay()  # before the steps: a replay needs neither the files nor the task columns
         if replay is not None:
@@ -616,7 +657,7 @@ def invoke(
     name: str,
     *,
     key: str,
-    task_id: str,
+    task_id: str | None,
     args: Mapping[str, Any],
     token: str,
     actor: str,

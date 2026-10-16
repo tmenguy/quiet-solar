@@ -534,3 +534,44 @@ class TestReviewFix02:
         with hold(world, ["integration:QS_5"], world["n1"], H(11)):
             row = lock_row(world)
             assert (row["holder_pid"], row["holder_pid_start"]) == (201, "start-201")  # kept, never a NULL start
+
+
+class TestHeldKinds:
+    """#407: ``Held.kinds`` — the token kinds a hold checks at every take and recheck."""
+
+    def _grant(self, w: dict) -> str:
+        nonce = "7" * 32
+        sql(
+            w["db"],
+            "INSERT INTO reviews (id, kind, coalesce_key, state, agent, grant_nonce, name, requested_by, created_at,"
+            " updated_at) VALUES ('V1', 'cross_run', 'k', 'requested', 'a', ?, 'n', 'x', 'x', 'x')",
+            [nonce],
+        )
+        return f"review:V1.0.{nonce}"
+
+    def test_default_kinds(self, world) -> None:
+        with hold(world, [], world["tok"], H(1)) as held:
+            assert held.kinds == frozenset({"run", "node"})
+
+    def test_a_grant_holds_a_slot_and_rechecks_under_its_own_kinds(self, world) -> None:
+        grant = self._grant(world)
+        with hold(world, ["main-merge"], grant, H(1), cap="gates", kinds={"review_grant"}) as held:
+            assert held.kinds == frozenset({"review_grant"}) and held.slots and held.locks == ["main-merge"]
+            conn = db.connect(world["db"])
+            try:
+                locks.recheck(conn, held)
+                sql(world["db"], "UPDATE reviews SET state = 'failed'")
+                with pytest.raises(errors.CpError) as exc:
+                    locks.recheck(conn, held)
+                assert exc.value.code == "STALE_TOKEN"
+            finally:
+                conn.close()
+
+    def test_a_grant_is_refused_under_the_default_kinds(self, world) -> None:
+        grant = self._grant(world)
+        for names, cap in ((["main-merge"], None), ([], "gates")):
+            with pytest.raises(errors.CpError) as exc, hold(world, names, grant, H(1), cap=cap):
+                pass
+            assert exc.value.code == "CONFLICT"
+        assert sql(world["db"], "SELECT count(*) FROM locks")[0][0] == 0
+        assert sql(world["db"], "SELECT count(*) FROM cap_slots")[0][0] == 0

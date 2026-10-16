@@ -1028,7 +1028,7 @@ COMMANDS: dict[str, Command] = {
 
 
 def _conf_tool(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--task", required=True)
+    p.add_argument("--task", help="the task (required by a task-bound tool, refused by a task-less one)")
     p.add_argument("--key", required=True)
     p.add_argument("--args-file")
     _token(p)
