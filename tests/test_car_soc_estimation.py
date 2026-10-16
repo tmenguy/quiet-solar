@@ -276,7 +276,7 @@ def test_persistence_round_trip(est_car, fake_hass, mock_data_handler, current_t
     est_car._user_base_soc_entry_sensor_value = 33.0
 
     data: dict = {}
-    est_car.update_to_be_saved_extra_device_info(data)
+    est_car.update_to_be_saved_extra_device_info(data, datetime.now(tz=pytz.UTC))
     assert data["user_base_soc_value"] == 40.0
     assert data["last_valid_base_soc_value"] == 35.0
     assert data["computed_added_delta_soc_percent"] == 4.5
@@ -295,7 +295,7 @@ def test_persistence_entry_api_stale_round_trip(est_car, fake_hass, mock_data_ha
     est_car._user_base_soc_value = 40.0
     est_car._user_base_soc_entry_api_stale = True
     data: dict = {}
-    est_car.update_to_be_saved_extra_device_info(data)
+    est_car.update_to_be_saved_extra_device_info(data, datetime.now(tz=pytz.UTC))
     assert data["user_base_soc_entry_api_stale"] is True
     other = _make_car(fake_hass, mock_data_handler)
     other.use_saved_extra_device_info(data)

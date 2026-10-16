@@ -1,6 +1,9 @@
 import bisect
 import logging
 import math
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from datetime import time as dt_time
 from operator import itemgetter
@@ -64,6 +67,33 @@ if TYPE_CHECKING:
 
 
 _LOGGER = logging.getLogger(__name__)
+
+# QS-416: True while an entity restore replays a user setter (`for_init`): the replay
+# must not pin the car <-> charger association. A ContextVar (per asyncio task, reset
+# with its token) and NOT a car attribute: the replay awaits, and an attribute held
+# across those awaits would hide a concurrent genuine user action on the same car, or
+# be left stuck at True by two interleaved calls restoring in the wrong order.
+_USER_REPLAY_FOR_INIT: ContextVar[bool] = ContextVar("qs_user_replay_for_init", default=False)
+
+
+@contextmanager
+def user_replay_context(for_init: bool) -> Iterator[None]:
+    """QS-416: mark the enclosed user setter call as an entity restore replay.
+
+    Set once at the shared restore dispatch of every entity platform (select,
+    switch, number, time — review fix #03 R3-3), so no restored entity, whatever
+    its setter, pins the car <-> charger pair. `for_init=False` is a no-op: it
+    never ends an outer replay.
+    """
+    if not for_init:
+        yield
+        return
+    token = _USER_REPLAY_FOR_INIT.set(True)
+    try:
+        yield
+    finally:
+        _USER_REPLAY_FOR_INIT.reset(token)
+
 
 MIN_CHARGE_POWER_W = 70
 
@@ -353,9 +383,17 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     # freeze has just converted the (held) forecasted person into a
                     # user pin, so drop the hold in the same step.
                     self.clear_system_person_hold()
+        # QS-416: a USER action on the attached car also pins the car <-> charger
+        # association until unplug (a system action never reaches this hook — QS-353
+        # user != system). The charger-choice key is excluded: picking a charger from
+        # the car card already pins the NEW charger via `user_set_selected_car_by_name`.
+        # An entity restore replay (`for_init`, `_USER_REPLAY_FOR_INIT`) is no user
+        # action: it skips this pin (only — the car's own snapshot above still runs).
+        if self.charger is not None and key != USER_ORIGINATED_CHARGER_NAME and not _USER_REPLAY_FOR_INIT.get():
+            self.charger.set_user_originated(USER_ORIGINATED_CAR_NAME, self.name)
 
-    def update_to_be_saved_extra_device_info(self, data_to_update: dict):
-        super().update_to_be_saved_extra_device_info(data_to_update)
+    def update_to_be_saved_extra_device_info(self, data_to_update: dict, time: datetime):
+        super().update_to_be_saved_extra_device_info(data_to_update, time)
 
         forecasted_name = None
         if self.current_forecasted_person is not None:
@@ -2724,7 +2762,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
         else:
             return self.get_car_next_charge_values_options_energy()
 
-    async def user_set_next_charge_target(self, value: int | float | str):
+    async def user_set_next_charge_target(self, value: int | float | str, for_init: bool = False):
+        with user_replay_context(for_init):
+            await self._user_set_next_charge_target(value)
+
+    async def _user_set_next_charge_target(self, value: int | float | str):
 
         do_update = await self.convert_auto_constraint_to_manual_if_needed()
 
@@ -2915,6 +2957,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     @qs_bump_solar_charge_priority.setter
     def qs_bump_solar_charge_priority(self, value: bool):
+        self.set_qs_bump_solar_charge_priority(value)
+
+    def set_qs_bump_solar_charge_priority(self, value: bool, for_init: bool = False) -> None:
+        """Set the solar bump; `for_init` = entity restore replay (QS-416: never pins)."""
         if value is False:
             self._qs_bump_solar_priority = False
         else:
@@ -2922,7 +2968,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
             for c in self.home._cars:
                 c._qs_bump_solar_priority = False
             self._qs_bump_solar_priority = True
-        self.set_user_originated("bump_solar", self._qs_bump_solar_priority)
+        with user_replay_context(for_init):
+            self.set_user_originated("bump_solar", self._qs_bump_solar_priority)
 
     def get_charger_options(self) -> list[str]:
 
@@ -2955,6 +3002,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         if self.charger is not None and self.charger.name != charger_name:
             self.detach_charger()
+
+        # QS-416: every charger still pinned to this car (a user action froze the pair)
+        # other than the new choice drops that pin, or it would take the car back
+        # against the user's choice — attached there or not (the car may have been
+        # taken elsewhere meanwhile). Re-choosing the same charger keeps it.
+        for charger in self.home._chargers if self.home is not None else []:
+            if charger.name != charger_name and charger.get_user_originated(USER_ORIGINATED_CAR_NAME) == self.name:
+                charger.clear_user_originated(USER_ORIGINATED_CAR_NAME)
 
         if charger_name == FORCE_CAR_NO_CHARGER_CONNECTED:
             self.set_user_originated(USER_ORIGINATED_CHARGER_NAME, FORCE_CAR_NO_CHARGER_CONNECTED)

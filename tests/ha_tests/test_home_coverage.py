@@ -303,7 +303,7 @@ async def test_home_update_to_be_saved_extra_device_info(
     home = data_handler.home
 
     data = {}
-    home.update_to_be_saved_extra_device_info(data)
+    home.update_to_be_saved_extra_device_info(data, datetime.now(tz=pytz.UTC))
     assert isinstance(data, dict)
 
 

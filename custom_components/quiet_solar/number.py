@@ -16,7 +16,7 @@ from .const import (
     NUMBER_CAR_MANUAL_SOC_PERCENT,
 )
 from .ha_model.bistate_duration import QSBiStateDuration
-from .ha_model.car import QSCar
+from .ha_model.car import QSCar, user_replay_context
 from .home_model.load import AbstractDevice
 
 _LOGGER = logging.getLogger(__name__)
@@ -165,15 +165,21 @@ class QSBaseNumber(QSDeviceEntity, NumberEntity, RestoreEntity):
             f"QSBaseNumber:async_set_native_value: {value} {self.entity_description.key} on {self.device.name}"
         )
         self._attr_native_value = value
-        if self.entity_description.async_set_fn:
-            await self.entity_description.async_set_fn(self.device, value, for_init)
-        else:
-            try:
-                setattr(self.device, self.entity_description.key, value)
-            except Exception as e:
-                _LOGGER.info(
-                    "can't set number %s on %s for %s: %s", value, self.device.name, self.entity_description.key, e
-                )
+        # QS-416 R3-3: a restore replay never pins the car <-> charger pair
+        with user_replay_context(for_init):
+            if self.entity_description.async_set_fn:
+                await self.entity_description.async_set_fn(self.device, value, for_init)
+            else:
+                try:
+                    setattr(self.device, self.entity_description.key, value)
+                except Exception as e:
+                    _LOGGER.info(
+                        "can't set number %s on %s for %s: %s",
+                        value,
+                        self.device.name,
+                        self.entity_description.key,
+                        e,
+                    )
         self._set_availabiltiy()
         self.async_write_ha_state()
 

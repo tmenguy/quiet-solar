@@ -17,7 +17,7 @@ from .const import (
     SWITCH_ENABLE_DEVICE,
 )
 from .entity import QSDeviceEntity
-from .ha_model.car import QSCar
+from .ha_model.car import QSCar, user_replay_context
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.device import HADeviceMixin
 
@@ -27,12 +27,21 @@ from .ha_model.pool import QSPool
 from .home_model.load import AbstractDevice, AbstractLoad
 
 
+async def _async_set_bump_solar_priority(device: AbstractDevice, value: bool, for_init: bool) -> None:
+    """Solar-bump switch setter; threads `for_init` so a restore replay never pins (QS-416)."""
+    # explicit check, not an `assert` (stripped under `python -O`)
+    if not isinstance(device, QSChargerGeneric | QSCar):
+        raise TypeError(f"solar bump switch on a {type(device).__name__}, expected a charger or a car")
+    device.set_qs_bump_solar_charge_priority(value, for_init=for_init)
+
+
 def create_ha_switch_for_QSCharger(device: QSChargerGeneric):
     entities = []
 
     qs_bump_solar_priority = QSSwitchEntityDescription(
         key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
         translation_key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
+        async_switch=_async_set_bump_solar_priority,
     )
 
     entities.append(
@@ -48,6 +57,7 @@ def create_ha_switch_for_QSCar(device: QSCar):
     qs_bump_solar_priority = QSSwitchEntityDescription(
         key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
         translation_key=SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY,
+        async_switch=_async_set_bump_solar_priority,
     )
 
     entities.append(
@@ -209,10 +219,12 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
 
         for_init = kwargs.pop("for_init", False)
 
-        if self.entity_description.async_switch is not None:
-            await self.entity_description.async_switch(self.device, True, for_init)
-        else:
-            setattr(self.device, self.entity_description.key, True)
+        # QS-416 R3-3: a restore replay never pins the car <-> charger pair
+        with user_replay_context(for_init):
+            if self.entity_description.async_switch is not None:
+                await self.entity_description.async_switch(self.device, True, for_init)
+            else:
+                setattr(self.device, self.entity_description.key, True)
 
         self._attr_is_on = True
         self._set_availabiltiy()
@@ -235,10 +247,12 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
 
         for_init = kwargs.pop("for_init", False)
 
-        if self.entity_description.async_switch is not None:
-            await self.entity_description.async_switch(self.device, False, for_init)
-        else:
-            setattr(self.device, self.entity_description.key, False)
+        # QS-416 R3-3: a restore replay never pins the car <-> charger pair
+        with user_replay_context(for_init):
+            if self.entity_description.async_switch is not None:
+                await self.entity_description.async_switch(self.device, False, for_init)
+            else:
+                setattr(self.device, self.entity_description.key, False)
 
         self._attr_is_on = False
         self._set_availabiltiy()

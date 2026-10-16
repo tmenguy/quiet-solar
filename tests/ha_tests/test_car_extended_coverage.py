@@ -31,6 +31,7 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
+    USER_ORIGINATED_CAR_NAME,
     USER_ORIGINATED_CHARGER_NAME,
     CAR_CHARGE_TYPE_PERSON_AUTOMATED,
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
@@ -79,6 +80,23 @@ async def _create_car(hass, home_config_entry, extra_config=None, entry_id_suffi
     return hass.data[DOMAIN].get(car_entry.entry_id), car_entry
 
 
+async def _attach_real_charger(hass, car, charger_factory, suffix):
+    """Attach a REAL `QSChargerGeneric` (same home) to `car` — QS-416 review fix #01 M1.
+
+    `update_charger_for_user_change` is replaced by an `AsyncMock` on the real
+    instance only: the real call runs a full `check_load_activity_and_constraints`
+    cycle which, with no plugged charger state in this fixture, would take the unplug
+    path and detach the car under test.
+    """
+    charger_entry = MockConfigEntry(domain=DOMAIN, data={}, entry_id=f"charger_{suffix}")
+    charger_entry.add_to_hass(hass)
+    charger = await charger_factory(config_entry=charger_entry, home=car.home, name=f"Charger {suffix}")
+    charger.update_charger_for_user_change = AsyncMock()
+    charger.attach_car(car, datetime.now(tz=pytz.UTC))
+    assert car.charger is charger
+    return charger
+
+
 # ===========================================================================
 # set_next_charge_target_percent – string value variants
 # ===========================================================================
@@ -87,10 +105,11 @@ async def _create_car(hass, home_config_entry, extra_config=None, entry_id_suffi
 async def test_set_next_charge_target_percent_str_default(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
+    charger_factory,
 ) -> None:
     """String containing 'default' should resolve to car_default_charge."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="pct_default")
-    car.charger = SimpleNamespace(update_charger_for_user_change=AsyncMock())
+    await _attach_real_charger(hass, car, charger_factory, "pct_default")
 
     result = await car.set_next_charge_target_percent("80% - Test Car default")
     assert car._next_charge_target == int(car.car_default_charge)
@@ -99,10 +118,11 @@ async def test_set_next_charge_target_percent_str_default(
 async def test_set_next_charge_target_percent_str_full(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
+    charger_factory,
 ) -> None:
     """String containing 'full' should resolve to 100."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="pct_full")
-    car.charger = SimpleNamespace(update_charger_for_user_change=AsyncMock())
+    await _attach_real_charger(hass, car, charger_factory, "pct_full")
 
     result = await car.set_next_charge_target_percent("100% - full")
     assert car._next_charge_target == 100
@@ -111,10 +131,11 @@ async def test_set_next_charge_target_percent_str_full(
 async def test_set_next_charge_target_percent_str_plain_percent(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
+    charger_factory,
 ) -> None:
     """Plain '75%' string should strip the % and parse to 75."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="pct_plain")
-    car.charger = SimpleNamespace(update_charger_for_user_change=AsyncMock())
+    await _attach_real_charger(hass, car, charger_factory, "pct_plain")
 
     result = await car.set_next_charge_target_percent("75%")
     assert car._next_charge_target == 75
@@ -123,10 +144,11 @@ async def test_set_next_charge_target_percent_str_plain_percent(
 async def test_set_next_charge_target_percent_str_numeric(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
+    charger_factory,
 ) -> None:
     """A plain numeric string like '90' should parse correctly."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="pct_num")
-    car.charger = SimpleNamespace(update_charger_for_user_change=AsyncMock())
+    await _attach_real_charger(hass, car, charger_factory, "pct_num")
 
     result = await car.set_next_charge_target_percent("90")
     assert car._next_charge_target == 90
@@ -148,10 +170,11 @@ async def test_set_next_charge_target_percent_str_invalid(
 async def test_set_next_charge_target_percent_int_value(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
+    charger_factory,
 ) -> None:
     """Integer value should work directly (non-string path)."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="pct_int")
-    car.charger = SimpleNamespace(update_charger_for_user_change=AsyncMock())
+    await _attach_real_charger(hass, car, charger_factory, "pct_int")
 
     result = await car.set_next_charge_target_percent(85)
     assert car._next_charge_target == 85
@@ -160,10 +183,11 @@ async def test_set_next_charge_target_percent_int_value(
 async def test_set_next_charge_target_percent_returns_true_with_charger(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
+    charger_factory,
 ) -> None:
     """With charger attached, should return True after setting target."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="pct_ret")
-    car.charger = SimpleNamespace(update_charger_for_user_change=AsyncMock())
+    await _attach_real_charger(hass, car, charger_factory, "pct_ret")
     # setup_car_charge_target_if_needed returns target_charge
     car.setup_car_charge_target_if_needed = AsyncMock(return_value=85)
 
@@ -223,10 +247,11 @@ async def test_set_next_charge_target_energy_float_value(
 async def test_set_next_charge_target_energy_with_charger(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
+    charger_factory,
 ) -> None:
     """With charger, should return True."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="nrg_chg")
-    car.charger = SimpleNamespace(update_charger_for_user_change=AsyncMock())
+    await _attach_real_charger(hass, car, charger_factory, "nrg_chg")
 
     result = await car.set_next_charge_target_energy(50.0)
     assert result is True
@@ -251,25 +276,29 @@ async def test_set_next_charge_target_energy_without_charger(
 async def test_user_set_next_charge_target_percent_mode(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
+    charger_factory,
 ) -> None:
     """In percent mode, delegates to set_next_charge_target_percent."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="usr_pct")
-    car.charger = SimpleNamespace(update_charger_for_user_change=AsyncMock())
+    charger = await _attach_real_charger(hass, car, charger_factory, "usr_pct")
     car.convert_auto_constraint_to_manual_if_needed = AsyncMock(return_value=False)
     car.set_next_charge_target_percent = AsyncMock(return_value=True)
 
     await car.user_set_next_charge_target("85%")
     car.set_next_charge_target_percent.assert_awaited_once_with("85%")
     car.charger.update_charger_for_user_change.assert_awaited_once()
+    # QS-416 D3: a user action on the attached car pins it on its charger
+    assert charger.get_user_originated(USER_ORIGINATED_CAR_NAME) == car.name
 
 
 async def test_user_set_next_charge_target_energy_mode(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
+    charger_factory,
 ) -> None:
     """In energy mode, delegates to set_next_charge_target_energy."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="usr_nrg")
-    car.charger = SimpleNamespace(update_charger_for_user_change=AsyncMock())
+    charger = await _attach_real_charger(hass, car, charger_factory, "usr_nrg")
     car.car_is_invited = True  # force energy mode
     car.convert_auto_constraint_to_manual_if_needed = AsyncMock(return_value=False)
 
@@ -282,21 +311,26 @@ async def test_user_set_next_charge_target_energy_mode(
     await car.user_set_next_charge_target("30kWh")
     assert car.get_user_originated("charge_target_energy") == 30000
     car.charger.update_charger_for_user_change.assert_awaited_once()
+    # QS-416 D3: a user action on the attached car pins it on its charger
+    assert charger.get_user_originated(USER_ORIGINATED_CAR_NAME) == car.name
 
 
 async def test_user_set_next_charge_target_sets_person(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
+    charger_factory,
 ) -> None:
     """Should fix the person when a forecasted person is set."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="usr_pers")
-    car.charger = SimpleNamespace(update_charger_for_user_change=AsyncMock())
+    charger = await _attach_real_charger(hass, car, charger_factory, "usr_pers")
     car.convert_auto_constraint_to_manual_if_needed = AsyncMock(return_value=False)
     car.set_next_charge_target_percent = AsyncMock(return_value=False)
     car.current_forecasted_person = SimpleNamespace(name="MyPerson")
 
     await car.user_set_next_charge_target(80)
     assert car.get_user_originated("person_name") == "MyPerson"
+    # QS-416 D3: a user action on the attached car pins it on its charger
+    assert charger.get_user_originated(USER_ORIGINATED_CAR_NAME) == car.name
 
 
 # ===========================================================================
@@ -1412,10 +1446,11 @@ async def test_can_force_charge_with_charger(
 async def test_user_add_default_charge_at_datetime(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
+    charger_factory,
 ) -> None:
     """Sets do_next_charge_time and person."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="def_dt")
-    car.charger = SimpleNamespace()
+    charger = await _attach_real_charger(hass, car, charger_factory, "def_dt")
     car.current_forecasted_person = SimpleNamespace(name="P1")
     end = datetime(2026, 2, 11, 8, 0, tzinfo=pytz.UTC)
 
@@ -1423,6 +1458,8 @@ async def test_user_add_default_charge_at_datetime(
     assert result is True
     assert car.do_next_charge_time == end
     assert car.get_user_originated("person_name") == "P1"
+    # QS-416 D3: a user action on the attached car pins it on its charger
+    assert charger.get_user_originated(USER_ORIGINATED_CAR_NAME) == car.name
 
 
 async def test_user_add_default_charge_at_datetime_no_charger(

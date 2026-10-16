@@ -1392,7 +1392,7 @@ class TestAbstractDeviceStorage:
         device.num_on_off = 5
 
         data = {}
-        device.update_to_be_saved_extra_device_info(data)
+        device.update_to_be_saved_extra_device_info(data, datetime.now(tz=pytz.UTC))
 
         assert data["num_on_off"] == 5
 
@@ -3697,7 +3697,7 @@ class TestAbstractLoadStorage:
         load.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
 
         data = {}
-        load.update_to_be_saved_extra_device_info(data)
+        load.update_to_be_saved_extra_device_info(data, datetime.now(tz=pytz.UTC))
 
         # From AbstractDevice
         assert data["num_on_off"] == 5
@@ -3713,7 +3713,7 @@ class TestAbstractLoadStorage:
         load.external_user_initiated_state = "ON_STATE"
 
         data = {}
-        load.update_to_be_saved_extra_device_info(data)
+        load.update_to_be_saved_extra_device_info(data, datetime.now(tz=pytz.UTC))
 
         assert data["external_user_initiated_state"] == "ON_STATE"
 
@@ -3726,7 +3726,7 @@ class TestAbstractLoadStorage:
         load.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = test_time
 
         data = {}
-        load.update_to_be_saved_extra_device_info(data)
+        load.update_to_be_saved_extra_device_info(data, datetime.now(tz=pytz.UTC))
 
         # Datetime fields should be stored as strings
         assert data["external_user_initiated_state_time"] == str(test_time)
@@ -3739,7 +3739,7 @@ class TestAbstractLoadStorage:
         load.num_on_off = 10
 
         data = {}
-        load.update_to_be_saved_extra_device_info(data)
+        load.update_to_be_saved_extra_device_info(data, datetime.now(tz=pytz.UTC))
 
         # num_on_off from AbstractDevice.update_to_be_saved_extra_device_info
         assert data["num_on_off"] == 10
@@ -3820,7 +3820,7 @@ class TestAbstractLoadStorage:
 
         # Save to dict
         saved_data = {}
-        load1.update_to_be_saved_extra_device_info(saved_data)
+        load1.update_to_be_saved_extra_device_info(saved_data, datetime.now(tz=pytz.UTC))
 
         # Create new load and restore
         load2 = self.create_load()
@@ -3845,7 +3845,7 @@ class TestAbstractLoadStorage:
 
         # Save to dict
         saved_data = {}
-        load1.update_to_be_saved_extra_device_info(saved_data)
+        load1.update_to_be_saved_extra_device_info(saved_data, datetime.now(tz=pytz.UTC))
 
         # Create new load and restore
         load2 = self.create_load()
@@ -3879,7 +3879,7 @@ class TestAbstractLoadStorage:
 
         # Save
         saved_data = {}
-        load.update_to_be_saved_extra_device_info(saved_data)
+        load.update_to_be_saved_extra_device_info(saved_data, datetime.now(tz=pytz.UTC))
 
         # Restore
         load2 = self.create_load()

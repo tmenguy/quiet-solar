@@ -281,6 +281,12 @@ def test_get_normalized_score_increases_with_bump() -> None:
     charger.car.name = "TestCar"
     charger.car.get_car_charge_percent.return_value = 50.0
     charger.car.car_battery_capacity = 60000
+    # QS-416: the charger's bump proxy now calls the car's
+    # `set_qs_bump_solar_charge_priority` (it threads `for_init`): make the mock car
+    # store the value like the real one
+    charger.car.set_qs_bump_solar_charge_priority.side_effect = lambda value, for_init=False: setattr(
+        charger.car, "qs_bump_solar_charge_priority", value
+    )
 
     ct = LoadConstraint(time=datetime.now(pytz.UTC), load=charger)
     ct.end_of_constraint = datetime.now(pytz.UTC) + timedelta(hours=4)

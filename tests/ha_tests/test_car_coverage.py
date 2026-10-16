@@ -621,7 +621,7 @@ async def test_car_update_to_be_saved_extra_device_info(
     car_device.current_forecasted_person = mock_person
 
     data = {}
-    car_device.update_to_be_saved_extra_device_info(data)
+    car_device.update_to_be_saved_extra_device_info(data, datetime.now(tz=pytz.UTC))
 
     # person_name is now persisted via _user_originated, not as a separate key
     assert "_user_originated" in data

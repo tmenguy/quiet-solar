@@ -231,7 +231,10 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   `if enabled != self._enabled:` guard, which covers both edges and makes an
   idempotent re-write unable to reach it — load-bearing, because
   `switch.py::QSSwitchEntityWithRestore.async_added_to_hass` drives the setter
-  via `async_turn_on/off(for_init=True)` on every HA startup.
+  via `async_turn_on/off(for_init=True)` on every HA startup. The same guard
+  calls the no-op hook `_on_qs_enable_device_changed(enabled)` (after
+  `reset()`, both edges); `QSChargerGeneric` overrides it to drop its user car
+  pin on disable (QS-416).
 
   Two deliberate edges. **`user_clean_constraints` is excluded**: it keeps the
   in-flight command, so the device is still being commanded and still not

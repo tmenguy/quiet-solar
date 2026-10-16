@@ -481,6 +481,7 @@ class AbstractDevice:
             self._acknowledge_lost_control("the user changed the device's enabled state")
             self.reset()
             self._enabled = enabled
+            self._on_qs_enable_device_changed(enabled)
             if self.home is not None:
                 if enabled is False:
                     self.home.remove_device(self)
@@ -495,6 +496,9 @@ class AbstractDevice:
                 time = datetime.now(pytz.utc)
                 for ha_object in self._exposed_entities:
                     ha_object.async_update_callback(time)
+
+    def _on_qs_enable_device_changed(self, enabled: bool) -> None:
+        """Override in subclasses to react to an enable / disable edge (after `reset()`)."""
 
     def prepare_slots_for_amps_budget(
         self,
@@ -569,7 +573,7 @@ class AbstractDevice:
     def efficiency_factor(self):
         return 100.0 / self.efficiency
 
-    def update_to_be_saved_extra_device_info(self, data_to_update: dict):
+    def update_to_be_saved_extra_device_info(self, data_to_update: dict, time: datetime):
         data_to_update[STORAGE_KEY_NUM_ON_OFF] = self.num_on_off
         data_to_update[STORAGE_KEY_CURRENT_COMMAND] = (
             self.current_command.to_dict() if self.current_command is not None else None
@@ -1802,8 +1806,8 @@ class AbstractLoad(AbstractDevice):
             setattr(self, field, None)
         self._last_completed_constraint = None
 
-    def update_to_be_saved_extra_device_info(self, data_to_update: dict):
-        super().update_to_be_saved_extra_device_info(data_to_update)
+    def update_to_be_saved_extra_device_info(self, data_to_update: dict, time: datetime):
+        super().update_to_be_saved_extra_device_info(data_to_update, time)
         data_to_update[STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE] = self.external_user_initiated_state
         data_to_update[STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME] = None
         if self.external_user_initiated_state_time is not None:

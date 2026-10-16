@@ -4,7 +4,7 @@ slug: car-soc-estimation
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-06-29
+last_verified: 2026-10-16
 ---
 
 # Car SOC estimation — the effective-SOC model
@@ -152,7 +152,12 @@ mid-charge transition is a non-event (no double-advance).
 ## Manual charger assignment vs a wrong location tracker (QS-265)
 
 A *manual charger assignment* is the user explicitly attaching a car to a
-charger; it is distinct from a *manual SOC value* (the override above). When a
+charger; it is distinct from a *manual SOC value* (the override above). Since
+QS-416 any user action on the attached car (target, force, default charge,
+solar bump, person, clean constraints — from the car or the charger card)
+pins the association, so `_charger_assignment_is_user_originated()` also
+returns `True` afterwards and an API contradiction gets the manual treatment
+below (inferred flags + one WARNING per episode): the user confirmed that car. When a
 manually-assigned car's location tracker wrongly reports "away" (or the plug
 sensor reports unplugged) while the SOC sensor is live:
 

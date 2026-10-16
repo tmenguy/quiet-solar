@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-09-30
+last_verified: 2026-10-16
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -97,11 +97,24 @@ all plugged chargers: each charger scores every car (`get_car_score`) and
 the loop repeatedly assigns the best remaining (charger, car) pair. Two
 QS-342 facts to internalise:
 
-- **Exact score ties are a NORMAL operating case.** The dominant score
-  component is the distance bump, quantised in **0.5 m buckets** over 50 m
-  (deliberate — car GPS jitters by metres; finer resolution would make the
-  allocation flap with noise). Cars sleeping in their usual spots between
-  two wallboxes tie *every night*. Never "fix" a tie by sharpening the
+- **Score tiers (QS-416, option C).** `get_car_score` stacks five
+  non-overlapping tiers, most significant first: **proximity** (car GPS
+  ≤ `CAR_CHARGER_PROXIMITY_RADIUS_M` = 10 m) → **plug sensor**
+  (`plug_bump`: 5 for a real `on`, 2 for the instant-check fallback, else 1
+  as a *replacement* bonus when ≤ `CAR_CHARGER_PLUG_PROXY_RADIUS_M` = 3 m —
+  never added to an `on`) → **`sync_ok`** (car and charger plugged within
+  20 min of each other, sensor `on` only) → **fine distance** (`dist_bump`)
+  → **fine sync** (`plug_time_bump`, +1 for an incumbent attached > 20 min;
+  that +1 never counts as `sync_ok`). Each sub-score stays strictly below
+  its span (`CAR_SCORE_*_SPAN`), so a weaker tier can never outweigh a
+  stronger one: a car `on` within 10 m beats a car `off` at ≤ 3 m, and a
+  plug-synced car beats a closer unsynced one. The manual selection scores
+  `CAR_SCORE_MAX`, above any computed score.
+- **Exact score ties are a NORMAL operating case.** The distance bump is
+  quantised in **0.5 m buckets** over 50 m (deliberate — car GPS jitters by
+  metres; finer resolution would make the allocation flap with noise).
+  Cars sleeping in their usual spots between two wallboxes have the same
+  higher tiers and tie *every night*. Never "fix" a tie by sharpening the
   distance resolution.
 - **Ties are resolved by a deterministic cascade**, evaluated over ALL
   (charger, car) pairs at the max remaining score (not just each charger's
@@ -118,7 +131,43 @@ QS-342 facts to internalise:
 higher score, or by an **equal score with strictly higher regret** — the
 latter is required so a crossed pairing (leftover of the pre-fix
 ping-pong) recovers to the regret-consistent allocation. Any attachment
-state matching a regret-consistent allocation is a fixed point.
+state matching a regret-consistent allocation is a fixed point. The
+attached car's score is its **floor** (below), so a challenger must beat
+the incumbent's *best moment since attach*, not its current reading.
+
+**Attached-car floor (QS-416 — replaces the 1-hour lock).** The attached
+car never scores below its best computed score since its attach
+(`_attached_car_best_score`, cleared by `detach_car` — every unplug, car
+change, user car selection and clean-and-reset). It applies even when the
+computed score is 0 (car API asleep at night), never to the manual
+selection, the invited-car `-1` path, or a car scored on another charger.
+There is no absolute lock any more: a wrong car attached for hours is
+displaced as soon as a strictly better proof shows up. The floor is
+**persisted** with the charger (`STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_*`:
+car name, floor, `saved_at`, the car's plug reading at the save), moved to
+the boot slot by `device_post_home_init`, and restored by the first
+`attach_car` of the **same** car inside the boot window (120 s, like
+`_boot_car`) — unless an **`on` → `off` transition** of the car plug
+sensor is seen since `saved_at` (positive proof of an unplug during the
+shutdown, `_car_unplugged_since`: a valid `off` at/after `saved_at` whose
+previous valid reading — the saved reading when known, else the last
+valid sample before `saved_at` — is `on`). A bare `off` proves nothing:
+the boot poll re-stamps a sensor stuck at `off` with the boot time.
+`unavailable` / `unknown` holes do not block; a `saved_at` in the future
+of the attach — clock behind — refuses too. Only the **live** floor of the attached car is ever saved,
+stamped with the save `time` (`update_to_be_saved_extra_device_info(data,
+time)`); a pending restored value is never re-written — it lives in memory
+until the matching attach, so saves before that attach do not lose it, but
+a 2nd restart inside the boot window does (accepted risk). The same
+positive-proof check (`_car_unplugged_since`) guards a persisted **user
+car pin** on the car attached to that charger during the boot window
+(`STORAGE_KEY_USER_PIN_SAVED_AT` / `STORAGE_KEY_USER_PIN_PLUG_STATE`, only
+stamped for an attached pin — a pre-selection arms no guard,
+`_lift_boot_user_pin_if_car_unplugged` at the top of `_compute_best_car`
+and of the unplugged branch of `check_load_activity_and_constraints`, for
+a charger unplugged at boot; see `user-override.md`). `_compute_best_car` skips a car pinned on an
+enabled, inactive charger that still holds it, and never takes such a car
+as its boot car.
 
 **Known limitations:**
 
@@ -131,19 +180,19 @@ state matching a regret-consistent allocation is a fixed point.
   that starts *after* the restart has both clocks aligned and is
   unaffected. Follow-up:
   <https://github.com/tmenguy/quiet-solar/issues/344>.
-- *Residual failure mode — two unhysteresised quantisation edges.* (1) The
+- *Residual failure mode — unhysteresised quantisation edges.* (1) The
   0.5 m `dist_bump` bucket edge: a car GPS-jittering across it produces
-  alternating **strict-score** winners that no tie-break sees. (2) The
-  `dist <= 3.0` threshold that adds +1 to `plug_bump`: because `plug_bump`
-  is the lowest-order term, a ±1 flip converts an **exact tie** — where
-  stickiness protects the incumbent — into a strict win, which steals with
-  no margin at all. The second edge therefore *bypasses* the cascade rather
-  than being resolved by it, and it is reachable in the incident's own
-  geometry (3.58 / 3.69 / 3.97 m). Steal-margin hysteresis stays out of
-  scope until observed in the field.
+  alternating **strict-score** winners that no tie-break sees; since
+  QS-416 it only decides between cars with the same proximity, plug and
+  `sync_ok` tiers. (2) The ≤ 3 m edge now only decides *eligibility* of a
+  car whose sensor is not `on` (replacement plug bonus). (3) The new 10 m
+  proximity edge flips the top tier for a challenger whose GPS oscillates
+  around 10 m; for the incumbent the floor absorbs it. Steal-margin
+  hysteresis stays out of scope until observed in the field.
 
 `get_car_score` logs its decomposition at INFO-on-change keyed on the
-quantised tuple `(plug_bump, plug_time_bump, dist_bump)` only — a
+quantised tuple `(proximity_bump, plug_bump, sync_ok, plug_time_bump,
+dist_bump, floored)` only (the raw pre-floor score rides along as payload) — a
 deliberate INFO exception to the QS-306 volume rules, because this line is
 what makes allocation incidents diagnosable without a recorder-DB
 forensic session.

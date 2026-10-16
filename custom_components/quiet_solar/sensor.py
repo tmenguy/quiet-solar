@@ -791,7 +791,7 @@ class QSDeviceSensorData(QSBaseSensorRestore):
             self._attr_native_value = new_val
 
         to_be_updated_info = {}
-        self.device.update_to_be_saved_extra_device_info(to_be_updated_info)
+        self.device.update_to_be_saved_extra_device_info(to_be_updated_info, time)
         self._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LOAD_INFO] = to_be_updated_info
 
         self.async_write_ha_state()
