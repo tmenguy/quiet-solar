@@ -148,6 +148,9 @@ from ..const import (
     FORCE_CAR_NO_CHARGER_CONNECTED,
     PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS,
     SENSOR_CONSTRAINT_SENSOR_CHARGE,
+    STORAGE_KEY_ATTACHED_CAR_BEST_SCORE,
+    STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_CAR_NAME,
+    STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT,
     USER_ORIGINATED_CAR_NAME,
     USER_ORIGINATED_CHARGE_TIME,
     USER_ORIGINATED_CHARGER_NAME,
@@ -202,8 +205,30 @@ CHARGER_CHECK_REAL_POWER_WINDOW_S = (
 CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT = 5.0
 
 
+# QS-416: no longer an attach lock — only the denominator of the plug-sync score
+# (`plug_time_bump`) in `get_car_score`. Kept under its historical name.
 CAR_CHARGER_LONG_RELATIONSHIP_S = 60 * 60
 CHARGER_LONG_CONNECTION_S = 60 * 20
+# QS-416: a car with GPS within this radius of the charger gets the top score tier.
+CAR_CHARGER_PROXIMITY_RADIUS_M = 10.0
+# QS-416: a car within this radius is assumed plugged even if its sensor is not "on"
+# (replacement plug bonus, never added to a real "on").
+CAR_CHARGER_PLUG_PROXY_RADIUS_M = 3.0
+# QS-416: `get_car_score` tier spans. Each sub-score must stay strictly below its
+# span, so no tier overflows into the next one (see `get_car_score`).
+CAR_SCORE_PLUG_SPAN = 10.0
+CAR_SCORE_PLUG_TIME_SPAN = 10000.0
+CAR_SCORE_DIST_SPAN = 1000.0
+CAR_SCORE_SYNC_OK_SPAN = 10.0
+CAR_SCORE_PROXIMITY_SPAN = 10.0
+# the manual car selection score; also the upper bound of a persisted floor
+CAR_SCORE_MAX = (
+    CAR_SCORE_PLUG_TIME_SPAN
+    * CAR_SCORE_DIST_SPAN
+    * CAR_SCORE_SYNC_OK_SPAN
+    * CAR_SCORE_PLUG_SPAN
+    * CAR_SCORE_PROXIMITY_SPAN
+)
 
 
 STATE_CMD_RETRY_NUMBER = 3
@@ -2441,6 +2466,13 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
         self.car: QSCar | None = None
         self.car_attach_time: datetime | None = None
+        # QS-416 floor: best score of the attached car since its attach (cleared by
+        # `detach_car`). Set BEFORE `super().__init__`, whose reset() detaches.
+        self._attached_car_best_score: float | None = None
+        # (car name, floor, saved_at): read from storage, then moved to the boot slot
+        # by `device_post_home_init`, consumed by the matching `attach_car`.
+        self._saved_attached_car_best_score: tuple[str, float, datetime] | None = None
+        self._boot_attached_car_best_score: tuple[str, float, datetime] | None = None
         # QS-346: the car this charger last had attached, used to keep the plug-state
         # rescue alive after a `detach_car()` (e.g. a `qs_device_clean_and_reset`) so a
         # faulted charger does not lose the very car that proves it is plugged. Only
@@ -2535,8 +2567,51 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
     def update_to_be_saved_extra_device_info(self, data_to_update: dict):
         super().update_to_be_saved_extra_device_info(data_to_update)
 
+        # QS-416: persist the attached car's score floor. While a restored value is
+        # still pending (boot window, before the matching attach), re-write it with
+        # its original `saved_at`: saves happen before the first attach and would
+        # otherwise erase it, and it must survive a 2nd restart inside the window.
+        payload: tuple[str, float, datetime] | None
+        if self.car is not None and self._attached_car_best_score:
+            payload = (self.car.name, self._attached_car_best_score, datetime.now(tz=pytz.UTC))
+        else:
+            payload = self._boot_attached_car_best_score or self._saved_attached_car_best_score
+
+        if payload is None:
+            data_to_update[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_CAR_NAME] = None
+            data_to_update[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE] = None
+            data_to_update[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT] = None
+        else:
+            data_to_update[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_CAR_NAME] = payload[0]
+            data_to_update[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE] = payload[1]
+            data_to_update[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT] = payload[2].isoformat()
+
     def use_saved_extra_device_info(self, stored_load_info: dict):
         super().use_saved_extra_device_info(stored_load_info)
+        self._saved_attached_car_best_score = self._read_saved_attached_car_best_score(stored_load_info)
+
+    @staticmethod
+    def _read_saved_attached_car_best_score(
+        stored_load_info: dict,
+    ) -> tuple[str, float, datetime] | None:
+        """Validate the persisted QS-416 floor; anything malformed (or an older store) → None."""
+        name = stored_load_info.get(STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_CAR_NAME)
+        best = stored_load_info.get(STORAGE_KEY_ATTACHED_CAR_BEST_SCORE)
+        saved_at_str = stored_load_info.get(STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT)
+
+        if not isinstance(name, str) or not isinstance(saved_at_str, str):
+            return None
+        if isinstance(best, bool) or not isinstance(best, int | float):
+            return None
+        if not math.isfinite(best) or not 0 < best < CAR_SCORE_MAX:
+            return None
+        try:
+            saved_at = datetime.fromisoformat(saved_at_str)
+        except ValueError:
+            return None
+        if saved_at.tzinfo is None:
+            return None
+        return name, float(best), saved_at
 
     def support_user_override(self) -> bool:
         return True
@@ -3159,6 +3234,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
     def reset_boot_data(self):
         self._boot_time = None
         self._boot_car = None
+        # QS-416: a restored floor lives exactly as long as the other boot data
+        self._boot_attached_car_best_score = None
         self._boot_time_adjusted = None
         self._boot_constraints = []
         self._boot_last_completed_constraint = None
@@ -3251,25 +3328,40 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
     def get_car_score(self, car: QSCar, time: datetime, cache: dict) -> float:
 
-        # 0 to 9: part of the score for the plug only
-        # 10 to 10*10000 - 1: part of the score for the plug_time only: 10000 span
-        # 100000 to 1000*100000: part of the score for the distance to the charger 1000span
-        plug_span = 10.0
-        plug_time_span = 10000.0
-        dist_span = 1000.0
-        max_sore = plug_span * plug_time_span * dist_span * 10.0
+        # QS-416 score tiers, from the least to the most significant (option C):
+        #   score_plug_time_bump  fine plug sync (+1 for a > 20 min incumbent)  < plug_time_span
+        #   score_dist_bump       fine distance (0.5 m buckets up to 50 m)     < dist_span
+        #   score_sync_ok         car and charger plugged within 20 min        < sync_ok_span
+        #   score_plug_bump       car plug sensor (5 / 2 fallback / 1 <= 3 m)  < plug_span
+        #   score_proximity_bump  car GPS within 10 m of the charger           < proximity_span
+        # Each sub-score stays strictly below its span, so a tier never overflows into
+        # the next one: proximity, then the plug sensor, then sync_ok, then the fine
+        # distance, then the fine sync. The attached car never scores below its best
+        # score since the attach (the floor, persisted across restarts).
+        plug_span = CAR_SCORE_PLUG_SPAN
+        plug_time_span = CAR_SCORE_PLUG_TIME_SPAN
+        dist_span = CAR_SCORE_DIST_SPAN
+        sync_ok_span = CAR_SCORE_SYNC_OK_SPAN
+        proximity_span = CAR_SCORE_PROXIMITY_SPAN
+        max_sore = plug_time_span * dist_span * sync_ok_span * plug_span * proximity_span
 
         score = None
 
-        is_long_time_attached = False
+        # compare by name: a config reload recreates the car object
+        is_attached_here = self.car is not None and self.car.name == car.name
         connected_time_delta = None
-        if self.car is not None and self.car.name == car.name:
+        if is_attached_here:
             connected_time_delta = time - self.car_attach_time
-            is_long_time_attached = connected_time_delta > timedelta(seconds=CAR_CHARGER_LONG_RELATIONSHIP_S)
 
-        if self.get_user_originated(USER_ORIGINATED_CAR_NAME) is not None:
-            if self.get_user_originated(USER_ORIGINATED_CAR_NAME) != CHARGER_NO_CAR_CONNECTED:
-                attached_car = self.home.get_car_by_name(self.get_user_originated(USER_ORIGINATED_CAR_NAME))
+        pinned_car_name = self.get_user_originated(USER_ORIGINATED_CAR_NAME)
+        if pinned_car_name is not None:
+            if pinned_car_name != CHARGER_NO_CAR_CONNECTED:
+                # QS-416: resolve the generic car like `_compute_best_car` does, so a
+                # pinned generic car gives 0 to every real car on this charger.
+                if pinned_car_name == self._default_generic_car.name:
+                    attached_car = self._default_generic_car
+                else:
+                    attached_car = self.home.get_car_by_name(pinned_car_name)
                 if attached_car is not None and car is not None:
                     if attached_car.name != car.name:
                         score = 0.0
@@ -3282,13 +3374,6 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                         _LOGGER.debug(
                             f"get_car_score: {car.name} for {self.name} score: {score}, Best Car from user selection"
                         )
-
-        if score is None and is_long_time_attached:
-            if car.car_is_invited is False:
-                score = max_sore - 1.0
-                _LOGGER.debug(
-                    f"get_car_score: {car.name} for {self.name} score: {score}, is_long_time_attached to charger"
-                )
 
         if score is None and car.car_is_invited is False:
             score = 0.0
@@ -3318,7 +3403,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     )
 
             score_plug_time_bump = 0
-            if score_plug_bump > 0:
+            score_sync_ok = 0
+            # sync is gated on the plug SENSOR only: the <= 3 m replacement bonus below
+            # never earns a sync nor the incumbent +1
+            if car_plug_res:
                 charger_plugged_duration = cache.get(self, {}).get("charger_plugged_duration")
                 if charger_plugged_duration is None:
                     charger_plugged_duration = self.get_continuous_plug_duration(time)
@@ -3344,15 +3432,17 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                             )
                         )
 
-                if connected_time_delta is not None:
-                    if connected_time_delta > timedelta(seconds=CAR_CHARGER_LONG_RELATIONSHIP_S):
-                        # not usefull seeing the return above on is_long_time_attached
-                        score_plug_time_bump += 2 * (plug_time_span / 10.0)
-                    elif connected_time_delta > timedelta(seconds=CHARGER_LONG_CONNECTION_S):
-                        # the current charger has been connected to this car for a long time, we can keep it?
-                        score_plug_time_bump += 1.0
+                # set BEFORE the incumbent +1: that +1 must not count as a sync
+                score_sync_ok = 1 if score_plug_time_bump > 0 else 0
+
+                if connected_time_delta is not None and connected_time_delta > timedelta(
+                    seconds=CHARGER_LONG_CONNECTION_S
+                ):
+                    # small preference for the incumbent inside a same tier
+                    score_plug_time_bump += 1.0
 
             score_dist_bump = 0
+            score_proximity_bump = 0
             dist = -1
             if self.charger_latitude is not None and self.charger_longitude is not None:
                 max_dist = 50.0  # 50 meters
@@ -3364,9 +3454,13 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     if dist <= max_dist:
                         score_dist_bump = 1.0 + int((dist_span / 10.0) * (max_dist - dist) / max_dist)
 
-                    if dist <= 3.0:
-                        # we are very very close to the charger, we can assume it is plugged
-                        score_plug_bump += 1
+                    if dist <= CAR_CHARGER_PROXIMITY_RADIUS_M:
+                        score_proximity_bump = 1
+
+                    if dist <= CAR_CHARGER_PLUG_PROXY_RADIUS_M and score_plug_bump == 0:
+                        # we are very very close to the charger, we can assume it is
+                        # plugged: a REPLACEMENT bonus, never added to a real "on"
+                        score_plug_bump = 1
 
             home_instant_fallback = False
             car_home_res = car_cache.get("car_home_res", "NOT_FOUND")
@@ -3394,7 +3488,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             if score_plug_bump > 0 and (score_dist_bump > 0 or score_plug_time_bump > 0):
                 # only if plugged .... then if home or a very compatible plug time
                 score = (
-                    score_plug_bump + plug_span * score_plug_time_bump + plug_span * plug_time_span * score_dist_bump
+                    score_plug_time_bump
+                    + score_dist_bump * plug_time_span
+                    + score_sync_ok * plug_time_span * dist_span
+                    + score_plug_bump * plug_time_span * dist_span * sync_ok_span
+                    + score_proximity_bump * plug_time_span * dist_span * sync_ok_span * plug_span
                 )
             elif score_plug_bump > 0 or score_dist_bump > 0 or score_plug_time_bump > 0:
                 _LOGGER.debug(
@@ -3407,6 +3505,16 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     score_plug_time_bump,
                 )
 
+            # QS-416 floor: the attached car never scores below its best score since
+            # the attach — protects a night charge against a sleeping car API, without
+            # the old absolute 1-hour lock (a strictly better challenger still wins).
+            raw_score = score
+            floored = False
+            if is_attached_here:
+                self._attached_car_best_score = max(self._attached_car_best_score or 0.0, raw_score)
+                score = self._attached_car_best_score
+                floored = raw_score < score
+
             # Deliberate INFO exception to the "debug for non-user-facing" rule: this
             # decomposition is what makes allocation incidents diagnosable without a
             # recorder-DB session. Change key = the quantised tuple ONLY, so GPS jitter
@@ -3414,9 +3522,17 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             # ride along as payload.
             self.log_info_on_change(
                 f"get_car_score:{car.name}",
-                (score_plug_bump, score_plug_time_bump, score_dist_bump),
+                (
+                    score_proximity_bump,
+                    score_plug_bump,
+                    score_sync_ok,
+                    score_plug_time_bump,
+                    score_dist_bump,
+                    floored,
+                ),
                 time,
-                "get_car_score: %s for %s score: %s dist_bump: %s dist: %.2fm plug_bump: %s plug_time_bump: %s connected: %s",
+                "get_car_score: %s for %s score: %s dist_bump: %s dist: %.2fm plug_bump: %s plug_time_bump: %s "
+                "connected: %s proximity: %s sync_ok: %s floored: %s raw_score: %s",
                 car.name,
                 self.name,
                 score,
@@ -3425,6 +3541,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 score_plug_bump,
                 score_plug_time_bump,
                 connected_time_delta,
+                score_proximity_bump,
+                score_sync_ok,
+                floored,
+                raw_score,
             )
 
         if score is None:
@@ -3812,6 +3932,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         self._boot_last_completed_constraint = self._last_completed_constraint
         self._boot_constraints = self._constraints
         self._constraints = []
+
+        # QS-416: hand the persisted floor to the boot window (the reset_boot_data()
+        # above would otherwise have wiped it before any attach).
+        self._boot_attached_car_best_score = self._saved_attached_car_best_score
+        self._saved_attached_car_best_score = None
 
     def _has_state_to_reset(self, keep_commands: bool) -> bool:
         """Extend the base predicate with the user-initiated flags this class clears.
@@ -4852,8 +4977,47 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
         car.charger = self
 
+        self._restore_boot_attached_car_best_score(car, time)
+
         if self.home:
             self.home.force_next_person_allocation_compute_and_set()
+
+    def _restore_boot_attached_car_best_score(self, car: QSCar, time: datetime) -> None:
+        """QS-416: restore the persisted floor when the SAME car re-attaches after a restart.
+
+        A non-matching car (e.g. the generic car attaching first) consumes nothing.
+        Refused only on positive proof of an unplug: a valid "off" of the car plug
+        sensor recorded since `saved_at`. `unavailable` / `unknown` / no state at all
+        restore — a cloud integration restarting always leaves such holes.
+        """
+        boot = self._boot_attached_car_best_score
+        if boot is None:
+            return
+        car_name, best_score, saved_at = boot
+        if car_name != car.name:
+            return
+        self._boot_attached_car_best_score = None
+
+        if car.car_plugged is not None:
+            num_seconds = max(0.0, (time - saved_at).total_seconds())
+            for state_time, state, _attr in car.get_state_history_data(car.car_plugged, num_seconds, to_ts=time):
+                if state == "off" and state_time is not None and state_time >= saved_at:
+                    _LOGGER.info(
+                        "attach_car: %s on %s: persisted score floor NOT restored, car unplugged at %s",
+                        car.name,
+                        self.name,
+                        state_time,
+                    )
+                    return
+
+        self._attached_car_best_score = best_score
+        _LOGGER.info(
+            "attach_car: %s on %s: persisted score floor %s restored (saved at %s)",
+            car.name,
+            self.name,
+            best_score,
+            saved_at,
+        )
 
     def detach_car(self):
         if self.car is not None:
@@ -4877,6 +5041,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         self.car = None
         self._power_steps = []
         self.car_attach_time = None
+        self._attached_car_best_score = None
         # NO log-state wipe here, deliberately. `detach_car()` is on the churn path
         # itself, so wiping dropped the key on every allocation change and made the
         # throttle a no-op. It is also redundant: every key is car-qualified or carries

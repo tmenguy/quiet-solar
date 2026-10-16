@@ -353,6 +353,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     # freeze has just converted the (held) forecasted person into a
                     # user pin, so drop the hold in the same step.
                     self.clear_system_person_hold()
+        # QS-416: a USER action on the attached car also pins the car <-> charger
+        # association until unplug (a system action never reaches this hook — QS-353
+        # user != system). The charger-choice key is excluded: picking a charger from
+        # the car card already pins the NEW charger via `user_set_selected_car_by_name`.
+        # Boot-replay invariant: restored entities replay their user setters before the
+        # first `attach_car` (>= 30 s after boot), so `self.charger` is None then and
+        # nothing gets pinned. If the boot attach ever moved before entity restore,
+        # those replays would pin the association.
+        if self.charger is not None and key != USER_ORIGINATED_CHARGER_NAME:
+            self.charger.set_user_originated(USER_ORIGINATED_CAR_NAME, self.name)
 
     def update_to_be_saved_extra_device_info(self, data_to_update: dict):
         super().update_to_be_saved_extra_device_info(data_to_update)
@@ -2955,6 +2965,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         if self.charger is not None and self.charger.name != charger_name:
             self.detach_charger()
+
+        # QS-416: leaving a charger this car was pinned to (a user action froze the
+        # pair) must drop that pin, or the old charger would take the car back against
+        # the user's new choice. Re-choosing the same charger keeps it.
+        if (
+            orig_charger is not None
+            and orig_charger.name != charger_name
+            and orig_charger.get_user_originated(USER_ORIGINATED_CAR_NAME) == self.name
+        ):
+            orig_charger.clear_user_originated(USER_ORIGINATED_CAR_NAME)
 
         if charger_name == FORCE_CAR_NO_CHARGER_CONNECTED:
             self.set_user_originated(USER_ORIGINATED_CHARGER_NAME, FORCE_CAR_NO_CHARGER_CONNECTED)

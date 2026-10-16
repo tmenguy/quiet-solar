@@ -4,7 +4,7 @@ slug: user-override
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-09-16
+last_verified: 2026-10-16
 ---
 
 # User override
@@ -181,6 +181,24 @@ command state.
   This is by design (QS-353 D1) — but only a *user* action may trigger
   it. A **system** action (the daily person notification) must set a
   time-boxed system hold instead, never write user-originated state.
+  **QS-416:** the same hook also **pins the car↔charger association**:
+  when the car is attached, it sets the charger's
+  `USER_ORIGINATED_CAR_NAME` to the car, so no better-scoring car can take
+  the charger until unplug. The charger-card actions that delegate to the
+  car (solar bump, default charge, force charge) pin too — the card shows
+  the attached car, acting on it approves it (even a wrongly attached one:
+  fix it with the charger's car selector). Excluded: a change of
+  `USER_ORIGINATED_CHARGER_NAME` (the car-card charger choice already pins
+  the *new* charger), `QSChargerGeneric.user_clean_constraints` (direct
+  attribute writes), an action on a non-attached car (nothing is replayed
+  at attach), system actions and storage restore. The pin is lifted by the
+  physical unplug, the car's or the charger's clean-and-reset, and by
+  choosing another charger (or "no charger") from the car card, which
+  clears the old charger's pin. The generic car is pinned like any other.
+  **Boot-replay invariant:** restored entities (bump switch, charge-target
+  select) replay their user setters before the first boot `attach_car`
+  (≥ 30 s after boot), while `car.charger is None`, so they pin nothing —
+  if that order ever changed, the replays would pin the association.
 - Storing `None` under a target key (`charge_target_percent` /
   `charge_target_energy`). The freeze stamps only the key matching the
   car's percent capability and never a `None` value (QS-353 B); a

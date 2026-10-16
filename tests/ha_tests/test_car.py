@@ -1364,7 +1364,8 @@ async def test_car_user_charge_actions(
     await hass.async_block_till_done()
 
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
-    car_device.charger = SimpleNamespace(update_charger_for_user_change=AsyncMock())
+    # QS-416: a user action on an attached car pins the association on its charger
+    car_device.charger = SimpleNamespace(update_charger_for_user_change=AsyncMock(), set_user_originated=MagicMock())
     car_device.default_charge_time = datetime(2026, 1, 15, 7, 30, tzinfo=pytz.UTC).time()
     car_device.get_next_time_from_hours = MagicMock(return_value=datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC))
 

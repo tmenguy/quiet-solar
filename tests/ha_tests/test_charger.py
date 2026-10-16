@@ -3860,47 +3860,6 @@ async def test_charger_get_car_score_user_attached(
     assert score is not None
 
 
-async def test_charger_get_car_score_long_attached(
-    hass: HomeAssistant,
-    home_config_entry: ConfigEntry,
-) -> None:
-    """Test get_car_score for long attached car."""
-    from .const import MOCK_CHARGER_CONFIG
-
-    await hass.config_entries.async_setup(home_config_entry.entry_id)
-    await hass.async_block_till_done()
-
-    charger_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data=MOCK_CHARGER_CONFIG,
-        entry_id="charger_get_car_score_long_test",
-        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
-        unique_id="quiet_solar_charger_get_car_score_long_test",
-    )
-    charger_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(charger_entry.entry_id)
-    await hass.async_block_till_done()
-
-    charger_device = hass.data[DOMAIN].get(charger_entry.entry_id)
-
-    class DummyCar:
-        def __init__(self, name: str) -> None:
-            self.name = name
-            self.car_is_invited = False
-
-        def __hash__(self) -> int:
-            return id(self)
-
-    car = DummyCar("Car Long")
-    charger_device.car = car
-    charger_device.car_attach_time = datetime(2026, 1, 14, 0, 0, tzinfo=pytz.UTC)
-    charger_device.clear_user_originated(USER_ORIGINATED_CAR_NAME)
-
-    cache: dict = {}
-    score = charger_device.get_car_score(car, datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC), cache)
-    assert score is not None
-
-
 async def test_charger_get_car_score_plug_time_edges(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
