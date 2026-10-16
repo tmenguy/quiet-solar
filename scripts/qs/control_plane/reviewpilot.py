@@ -263,6 +263,11 @@ def _payload(raw: str | None) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _ints(value: Any) -> list[int]:
+    """The ``int`` elements of a list (never a nested list, which no set holds); anything else is ``[]``."""
+    return [i for i in value if isinstance(i, int)] if isinstance(value, list) else []
+
+
 def _event_rows(conn: sqlite3.Connection, prefix: str) -> list[sqlite3.Row]:
     """Every pilot trigger row of events whose key starts with ``prefix`` (attempts included)."""
     return conn.execute(
@@ -288,12 +293,11 @@ def _alert_events(conn: sqlite3.Connection, clock: clock_mod.Clock) -> None:
         ids = set(group["ids"])
         same = None
         for row in _event_rows(conn, family):
-            known = _payload(row["trigger"]).get("alert_ids")
-            if isinstance(known, list) and ids & set(known):
+            if ids & set(_ints(_payload(row["trigger"]).get("alert_ids"))):
                 same = row  # the latest row of the same occurrence wins (rows are ordered by id)
         if same is not None:  # one occurrence, one event: newly raised rows join its identity
             trigger = _payload(same["trigger"])
-            merged = sorted(ids | set(trigger["alert_ids"]))
+            merged = sorted(ids | set(_ints(trigger["alert_ids"])))
             if merged != trigger.get("alert_ids"):
                 conn.execute(
                     'UPDATE review_triggers SET "trigger" = ? WHERE id = ?',
@@ -389,8 +393,9 @@ def retry_failed(conn: sqlite3.Connection, clock: clock_mod.Clock) -> None:
             latest[split[0]] = (split[1], row)
     with db.write(conn):
         for event, (attempt, row) in latest.items():
-            if row["review_state"] == "failed" and attempt < PILOT_ATTEMPTS:
-                _queue_locked(conn, clock, event, attempt + 1, json.loads(row["trigger"]))
+            trigger = _payload(row["trigger"])
+            if row["review_state"] == "failed" and attempt < PILOT_ATTEMPTS and isinstance(trigger.get("tasks"), list):
+                _queue_locked(conn, clock, event, attempt + 1, trigger)  # a trigger with no task list: skipped
 
 
 # --------------------------------------------------------------------------- 3c. the queue → request → launcher (D10)
@@ -417,16 +422,18 @@ def drain(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) -> lis
     for row in queued:
         if _split(row["tool_key"]) is None:
             continue  # not a pilot attempt key: never requested
-        trigger = json.loads(row["trigger"])
+        trigger = _payload(row["trigger"])
+        if not isinstance(trigger.get("tasks"), list):
+            continue  # a trigger with no task list: never requested
         with db.write(conn):  # the daemon is a singleton: no other writer moves a pilot row meanwhile
-            if trigger.get("source") == "alert" and not _alerts_open(conn, trigger.get("alert_ids", [])):
+            if trigger.get("source") == "alert" and not _alerts_open(conn, _ints(trigger.get("alert_ids"))):
                 conn.execute("UPDATE review_triggers SET outcome = 'skipped' WHERE id = ?", (row["id"],))  # C4-3
                 continue
             out = reviews.request_locked(
                 conn,
                 clock,
                 kind=reviews.CROSS_RUN,
-                tasks=trigger.get("tasks", []),
+                tasks=trigger["tasks"],
                 trigger=trigger,
                 actor=ACTOR,
                 tool_key=row["tool_key"],

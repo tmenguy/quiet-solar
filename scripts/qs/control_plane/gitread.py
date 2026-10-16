@@ -13,10 +13,11 @@ op          arguments                                   runs
 ``files``   ``--base SHA --head SHA [--path P]``        ``git diff … --name-status <base> <head> [-- P]``
 ==========  ==========================================  =====================================================
 
-Paths are printed unquoted (``core.quotePath=false``), so a name from ``files`` / ``ls-tree`` / ``grep`` is a
-valid ``--path``. No other git option can be passed. Exempt: no DB, no token. The output is decoded with
-``surrogateescape``, cut at ``READ_MAX_BYTES`` (backing off to a UTF-8 boundary), then printed with
-``errors="replace"``; ``lossy`` when a kept byte was not UTF-8.
+``core.quotePath=false`` stops git from quoting non-ASCII bytes only: a name holding ``"``, ``\\``, a tab or a
+newline is still C-quoted, so only an ordinary name printed by ``files`` / ``ls-tree`` is a valid ``--path``
+as printed (``grep`` prints ``<rev>:<path>:<line>:``, not a bare path). No other git option can be passed.
+Exempt: no DB, no token. The output is decoded with ``surrogateescape``, cut at ``READ_MAX_BYTES`` (backing off
+to a UTF-8 boundary), then printed with ``errors="replace"``; ``lossy`` when a kept byte was not UTF-8.
 """
 
 from __future__ import annotations

@@ -542,7 +542,8 @@ def _reserve(ctx: tools.StepCtx) -> None:
 
 
 class Unidentified(tools.StepFailed):
-    """``identify`` never saw a known listing: the call fails, the launched review stays ``launching`` (R1).
+    """``identify``'s latest listing at the deadline was unknown: the call fails, the launched review stays
+    ``launching`` (R1).
 
     Only a known listing that does not show a launched review fails it early; under an unknown listing only
     ``REQUEST_TTL_S`` does (the review pilot's ``close_dead``), and a later known listing may still adopt it.
@@ -650,10 +651,10 @@ def _identify(ctx: tools.StepCtx, rid: str) -> dict[str, Any]:
     """The listing by name until the settle deadline; the row's state is re-read on every poll.
 
     ``finished``, or ``running`` once the pilot adopted it, ends the step; ``failed`` / ``abandoned`` fail it. Never
-    listed by the deadline fails the review only when a listing was known (R1): else ``Unidentified``.
+    listed by the deadline fails the review only when the latest poll's listing was known (R1): else
+    ``Unidentified``. A timed-out launch gets a full settle window from the first poll (a genuine exit 124 too).
     """
     deadline: float | None = None
-    known = False
     while True:
         with db.read(ctx._call.conn) as conn:
             row = _row(conn, rid)
@@ -663,8 +664,10 @@ def _identify(ctx: tools.StepCtx, rid: str) -> dict[str, Any]:
             return {"session_id": row["session_id"], "short_id": row["short_id"]}
         if deadline is None:
             deadline = clock_mod.parse(row["launch_at"]).timestamp() + nodes.LAUNCH_SETTLE_S
+            if (ctx.outputs.get("launch") or {}).get("timeout"):  # `claude --bg` outlived the settle window
+                deadline = max(deadline, ctx.clock.now().timestamp() + nodes.LAUNCH_SETTLE_S)
         listing = ctx.claude.try_agents()
-        known = known or listing is not None
+        known = listing is not None  # the latest listing decides, not an earlier one
         found = None if listing is None else liveness.find(listing, name=row["name"])
         if found is not None:
             return {"session_id": found.session_id, "short_id": found.id}
@@ -672,7 +675,10 @@ def _identify(ctx: tools.StepCtx, rid: str) -> dict[str, Any]:
             return {"session_id": row["session_id"], "short_id": row["short_id"]}
         if ctx.clock.now().timestamp() >= deadline:
             if not known:
-                raise Unidentified(f"review session {row['name']} was never listed: the session listing was unknown")
+                raise Unidentified(
+                    f"review session {row['name']} was never listed: the session listing was unknown",
+                    {"review_id": rid, "state": "launching", "listing": "unknown"},
+                )
             raise tools.StepFailed(f"review session {row['name']} was never listed")
         ctx.clock.sleep(tools.IDENTIFY_POLL_S)
 
@@ -907,8 +913,9 @@ def finish(conn: sqlite3.Connection, clock: clock_mod.Clock, *, token: str, data
 def outcome(conn: sqlite3.Connection, task_id: str, *, kind: str, head_sha: str | None) -> dict[str, Any] | None:
     """Child 7's reader: the latest **finished** review outcome of ``task_id`` for ``kind`` at ``head_sha``.
 
-    ``None`` when there is none, and for a ``None`` or blank ``head_sha``: an outcome on no head is advisory. The
-    sha is matched stripped and lower-cased (the capture stores full, lower-case shas).
+    ``None`` when there is none, and for a ``None`` or blank ``head_sha``: an outcome on no head is advisory.
+    ``head_sha`` is the full sha, matched stripped and lower-cased (the capture stores full, lower-case shas); an
+    abbreviated sha matches nothing.
     """
     if head_sha is None or not head_sha.strip():
         return None

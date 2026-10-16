@@ -384,7 +384,7 @@ class TestRetry:
     def test_a_pilot_row_with_a_non_object_trigger_stops_nothing(self, pw) -> None:
         ids = cross(pw)
         family = event_key(alerts.OVERLAP_CROSS_RUN, ("T1", "T5"), ids[0]).rpartition(":")[0]
-        for n, trigger in enumerate(("[]", '{"alert_ids": 5}')):
+        for n, trigger in enumerate(("[]", '{"alert_ids": 5}', '{"alert_ids": [[1], "x"]}')):
             sql(
                 pw["db"],
                 "INSERT INTO review_triggers (actor, \"trigger\", tool_key, outcome, at) VALUES (?, ?, ?, 'skipped', 'x')",
@@ -392,6 +392,27 @@ class TestRetry:
             )
         tick(pw)
         assert review_states(pw) == {"V1": "requested"} and len(pw["popen"].calls) == 1
+
+    def test_a_queued_pilot_row_with_a_bad_trigger_stops_nothing(self, pw) -> None:
+        for n, trigger in enumerate(("[]", "x", '{"tasks": 5}', '{"source": "alert", "tasks": [], "alert_ids": [[1]]}')):
+            sql(
+                pw["db"],
+                "INSERT INTO review_triggers (actor, \"trigger\", tool_key, outcome, at) VALUES (?, ?, ?, 'queued', 'x')",
+                [reviewpilot.ACTOR, trigger, f"pilot:junk{n}:1"],
+            )
+        cross(pw)
+        tick(pw)
+        assert review_states(pw) == {"V1": "requested"} and len(pw["popen"].calls) == 1
+        assert [t[1] for t in triggers(pw)][:4] == ["queued", "queued", "queued", "skipped"]
+
+    def test_a_failed_review_with_a_bad_trigger_is_not_retried(self, pw) -> None:
+        cross(pw)
+        tick(pw)
+        sql(pw["db"], "UPDATE reviews SET state = 'failed'")
+        for trigger in ("[]", "x", '{"tasks": 5}'):
+            sql(pw["db"], "UPDATE review_triggers SET \"trigger\" = ?", [trigger])
+            reviewpilot.retry_failed(pw["conn"], pw["clock"])  # direct: discovery would re-raise the event
+            assert len(triggers(pw)) == 1
 
     def test_payload_decoding(self) -> None:
         assert reviewpilot._payload(None) == {} and reviewpilot._payload("[1]") == {}

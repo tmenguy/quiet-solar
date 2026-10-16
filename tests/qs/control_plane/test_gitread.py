@@ -45,6 +45,11 @@ class TestArgv:
                 {"base": A, "head": B, "path": "d"},
                 ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--name-status", A, B, "--", "d"],
             ),
+            (  # a directory with a trailing slash narrows the same way
+                "files",
+                {"base": A, "head": B, "path": "d/"},
+                ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--name-status", A, B, "--", "d"],
+            ),
         ],
     )
     def test_each_op_is_one_fixed_argv(self, fake_main: Path, op: str, given: dict[str, str], tail: list[str]) -> None:
@@ -209,6 +214,7 @@ class TestCommand:
         assert files == "M\ta.py\nA\tbin.dat\nA\td/é.py\n"  # unquoted: the name round-trips to --path
         assert "+y = 1" in gitread.read(real, repo, "diff", {"base": base, "head": head, "path": "d/é.py"})["output"]
         assert gitread.read(real, repo, "files", {"base": base, "head": head, "path": "d"})["output"] == "A\td/é.py\n"
+        assert gitread.read(real, repo, "files", {"base": base, "head": head, "path": "d/"})["output"] == "A\td/é.py\n"
         binary = gitread.read(real, repo, "show", {"rev": head, "path": "bin.dat"})
         assert binary["lossy"] is True and binary["output"].endswith("z")
         with pytest.raises(errors.CpError) as exc:

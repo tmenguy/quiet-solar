@@ -695,13 +695,17 @@ def append_blast_radius_locked(
 
 
 def blast_radius(conn: sqlite3.Connection, task_id: str, head_sha: str | None = None) -> dict[str, Any] | None:
-    """Child 7's reader: the latest rating, or the latest for ``head_sha``; ``None`` when there is none."""
+    """Child 7's reader: the latest rating, or the latest for ``head_sha``; ``None`` when there is none.
+
+    ``head_sha`` is the full sha (``review finish`` stores the capture's full sha), matched stripped and
+    case-insensitively, as ``reviews.outcome`` does; an abbreviated sha matches nothing.
+    """
     if head_sha is not None:
         head_sha = _text(head_sha)
         if head_sha is None:  # given but blank: no rating, never another head's
             return None
-    sql = "SELECT * FROM blast_radius WHERE task_id = ?" + ("" if head_sha is None else " AND head_sha = ?")
-    params = (task_id,) if head_sha is None else (task_id, head_sha)
+    sql = "SELECT * FROM blast_radius WHERE task_id = ?" + ("" if head_sha is None else " AND lower(head_sha) = ?")
+    params = (task_id,) if head_sha is None else (task_id, head_sha.lower())
     return db.as_dict(conn.execute(sql + " ORDER BY id DESC LIMIT 1", params).fetchone())
 
 

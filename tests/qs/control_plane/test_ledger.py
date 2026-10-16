@@ -677,6 +677,11 @@ class TestBlastRadius:
         by_sha = ledger.blast_radius(lw.conn, "T1", "h1")
         assert by_sha is not None and by_sha["value"] == "ok"
         assert ledger.blast_radius(lw.conn, "T1", "h9") is None
+        upper = ledger.blast_radius(lw.conn, "T1", " H1 ")  # the sha is matched case-insensitively
+        assert upper is not None and upper["value"] == "ok"
+        put("ok", "AB3", "G3")
+        mixed = ledger.blast_radius(lw.conn, "T1", "ab3")
+        assert mixed is not None and mixed["review"] == "G3"
         assert code_of(put, "huge", "h", "G") == "USAGE"
         assert code_of(put, "ok", " ", "G") == "USAGE"
 

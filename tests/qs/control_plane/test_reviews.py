@@ -828,6 +828,36 @@ class TestIdentifyAndFailures:
 
     def test_an_unknown_listing_fails_the_call_but_not_the_review(self, rw) -> None:
         self._unknown_listing(rw)
+        result = __import__("json").loads(sql(rw["db"], "SELECT result FROM tool_calls WHERE tool = 'review'")[0][0])
+        assert result["output"] == {"review_id": "V1", "state": "launching", "listing": "unknown"}
+
+    def _listings(self, rw, first: Any, then: Any) -> tuple[int, Any]:
+        """The first identify poll's listing is ``first``, every later one ``then``."""
+        rw["launch"]["list"] = False
+
+        def launched(call: Any) -> None:
+            base = rw["claude"].listings
+            rw["claude"].listing = first
+
+            def switch() -> None:
+                if rw["claude"].listings > base + 1:
+                    rw["claude"].listing = then
+
+            rw["claude"].before_list = switch
+
+        rw["launch"]["on_launch"] = launched
+        return global_r1(rw)
+
+    def test_the_latest_listing_decides_an_unknown_one_at_the_deadline(self, rw) -> None:
+        code, out = self._listings(rw, [], None)  # known at t=0, unknown ever after
+        assert code == 1 and "the session listing was unknown" in out["detail"], out
+        row = review_row(rw["db"], "V1")
+        assert (row["state"], row["error"]) == ("launching", None) and review_alerts(rw["db"]) == []
+
+    def test_the_latest_listing_decides_a_known_one_at_the_deadline(self, rw) -> None:
+        code, out = self._listings(rw, None, [])
+        assert code == 1 and "the session listing was unknown" not in out["detail"], out
+        assert review_row(rw["db"], "V1")["state"] == "failed"
 
     def test_a_later_pilot_tick_adopts_the_session_by_name(self, rw) -> None:
         from .conftest import agent
@@ -860,6 +890,26 @@ class TestIdentifyAndFailures:
         assert out["result"]["state"] == "running" and review_row(rw["db"], "V1")["short_id"] == "short-t"
         outputs = __import__("json").loads(sql(rw["db"], "SELECT outputs FROM tool_calls WHERE tool = 'review'")[0][0])
         assert outputs["launch"] == {"launched": True, "timeout": True}
+
+    def test_a_timed_out_launch_gets_a_full_settle_window(self, rw) -> None:
+        from .conftest import agent
+
+        def slow(call: Any) -> None:  # `claude --bg` hit the runner's timeout, past launch_at + LAUNCH_SETTLE_S
+            name = call.argv[call.argv.index("-n") + 1]
+            rw["clock"].advance(120)
+            base = rw["claude"].listings
+
+            def second() -> None:
+                if rw["claude"].listings > base + 1:
+                    rw["claude"].listing = [agent(f"S-{name}", name, id="short-s")]
+
+            rw["claude"].before_list = second
+
+        rw["launch"]["exit"] = 124
+        rw["launch"]["on_launch"] = slow
+        code, out = global_r1(rw)
+        assert code == 0, out
+        assert out["result"]["state"] == "running" and review_row(rw["db"], "V1")["short_id"] == "short-s"
 
     def test_a_timed_out_launch_never_listed_fails(self, rw) -> None:
         rw["launch"]["exit"] = 124
