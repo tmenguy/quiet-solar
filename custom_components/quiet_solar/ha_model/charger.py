@@ -2607,9 +2607,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         pinned_car_name = self.get_user_originated(USER_ORIGINATED_CAR_NAME)
         if pinned_car_name is not None and pinned_car_name != CHARGER_NO_CAR_CONNECTED:
             data_to_update[STORAGE_KEY_USER_PIN_SAVED_AT] = time.isoformat()
-            data_to_update[STORAGE_KEY_USER_PIN_PLUG_STATE] = self._car_plug_reading(
-                self.home.get_car_by_name(pinned_car_name), time
-            )
+            pinned_car = self.home.get_car_by_name(pinned_car_name) if self.home is not None else None
+            data_to_update[STORAGE_KEY_USER_PIN_PLUG_STATE] = self._car_plug_reading(pinned_car, time)
         else:
             data_to_update[STORAGE_KEY_USER_PIN_SAVED_AT] = None
             data_to_update[STORAGE_KEY_USER_PIN_PLUG_STATE] = None
@@ -3989,6 +3988,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
     async def user_set_selected_car_by_name(self, car_name: str | None):
         self.set_user_originated(USER_ORIGINATED_CAR_NAME, car_name)
+        # QS-416 R4-2: a choice made once the charger is (instantly) unplugged is a
+        # pre-selection: the plugged -> unplugged edge the check window confirms a few
+        # seconds later must not wipe it (see `_seen_plugged`)
+        if self.is_not_plugged(datetime.now(pytz.UTC)):
+            self._seen_plugged = False
         # QS-416: a REAL car chosen here drops that car's pin on every other charger
         # (mirror of the car-card path), or a stale pin there could later win the
         # "manually attached to multiple chargers" branch against this latest choice.
@@ -4283,6 +4287,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         await self._on_charger_fault_cycle(time)
 
         if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
+            # QS-416 R4-1: a charger unplugged at boot never reaches `_compute_best_car`
+            # in the boot window: run the persisted-pin guard here too (same on -> off
+            # proof), or the pin outlives the boot window and its proof
+            self._lift_boot_user_pin_if_car_unplugged(time)
             # QS-416 R3-2: edge-triggered — see `_seen_plugged` (a car still attached
             # here also proves the charger was plugged, as before QS-416)
             unplug_edge = self._seen_plugged or self.car is not None

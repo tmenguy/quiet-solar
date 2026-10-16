@@ -233,7 +233,19 @@ command state.
   lift it; a pin the user sets after the restart is never lifted. The
   saved time is re-stamped at every save, so an unplug during a first
   downtime is missed if HA restarts a second time inside the boot window
-  (accepted, like the floor).
+  (accepted, like the floor). Hook points: the top of `_compute_best_car`
+  and the top of the unplugged branch of
+  `check_load_activity_and_constraints` (a charger unplugged at boot never
+  reaches `_compute_best_car` in the boot window — QS-416 R4-1). Accepted
+  risks: an integration that starts its binary sensor at `off` (not
+  `unavailable`) before its first fetch fakes an `on` → `off` transition
+  when the saved reading was `on` (pin lifted, floor refused, although the
+  car never moved); a pin with no possible proof (no plug sensor, sensor
+  stuck `off` at the save) stays until the next real plug/unplug, including
+  when the charger is unplugged at boot. A charger-card choice made while
+  the charger is already (instantly) unplugged — e.g. in the ~15 s before
+  the unplug cycle confirms it — resets `_seen_plugged`: it is a
+  pre-selection, not wiped by that unplug edge (R4-2).
   The generic car is pinned like any other. **Entity restore replay:** the
   replay marker is a per-task `ContextVar` (`_USER_REPLAY_FOR_INIT` in
   `ha_model/car.py`) set through `user_replay_context(for_init)` — a

@@ -162,8 +162,9 @@ a 2nd restart inside the boot window does (accepted risk). The same
 positive-proof check (`_car_unplugged_since`) guards a persisted **user
 car pin** during the boot window (`STORAGE_KEY_USER_PIN_SAVED_AT` /
 `STORAGE_KEY_USER_PIN_PLUG_STATE`,
-`_lift_boot_user_pin_if_car_unplugged` at the top of `_compute_best_car`;
-see `user-override.md`). `_compute_best_car` skips a car pinned on an
+`_lift_boot_user_pin_if_car_unplugged` at the top of `_compute_best_car`
+and of the unplugged branch of `check_load_activity_and_constraints`, for
+a charger unplugged at boot; see `user-override.md`). `_compute_best_car` skips a car pinned on an
 enabled, inactive charger that still holds it, and never takes such a car
 as its boot car.
 
