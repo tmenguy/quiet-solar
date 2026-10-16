@@ -945,3 +945,264 @@ def test_register_review_tool_is_idempotent_and_selfchecked() -> None:
     assert "review" not in tools.REGISTRY
     reviews.register_review_tool()
     assert "review" in tools.REGISTRY
+
+
+# --------------------------------------------------------------------------- T8: review finish, review_done, outcome
+
+
+def session(rw: dict[str, Any], rid: str = "V1") -> str:
+    return f"review:{rid}.1.{review_row(rw['db'], rid)['nonce']}"
+
+
+def finish_cli(rw: dict[str, Any], token: str, data: Any, name: str = "finish.json") -> tuple[int, Any]:
+    import json as _json
+
+    from .conftest import run_cli
+
+    f = rw["tmp"] / name
+    f.write_text(data if isinstance(data, str) else _json.dumps(data))
+    return run_cli("review", "finish", "--input", str(f), "--token", token)
+
+
+GOOD = {
+    "summary": "fits together",
+    "tasks": {
+        "T1": {"outcome": "pass", "blast_radius": "ok"},
+        "T2": {"outcome": "fail", "reason": "breaks T1", "blast_radius": "doubt"},
+        "T3": {"outcome": "pass"},
+        "T4": {"outcome": "pass", "reason": "plan only"},
+    },
+}
+
+
+def messages_of(path: Path) -> list[dict[str, Any]]:
+    import json as _json
+
+    rows = sql(
+        path, "SELECT run_id, kind, sender, dedupe_key, payload FROM messages WHERE kind = 'review_done' ORDER BY id"
+    )
+    return [{**dict(r), "payload": _json.loads(r["payload"])} for r in rows]
+
+
+class TestFinish:
+    def test_a_global_review_hands_back(self, rw) -> None:
+        from .conftest import run_cli
+
+        assert global_r1(rw)[0] == 0
+        token = session(rw)
+        item = rw["tmp"] / "item.json"
+        item.write_text('{"severity": "must_fix", "category": "design", "title": "T2 breaks T1", "body": "b"}')
+        base = ("finding", "open", "--phase", "build", "--source", "global_review", "--input", str(item))
+        assert run_cli(*base, "--task", "T2", "--token", token) == (0, {"ok": True, "ids": [1]})
+        code, out = finish_cli(rw, token, GOOD)
+        assert code == 0, out
+        [msg] = messages_of(rw["db"])
+        assert out == {
+            "ok": True,
+            "review_id": "V1",
+            "state": "finished",
+            "messages": [{"run_id": "R1", "message_id": msg_id(rw)}],
+        }
+        row = review_row(rw["db"], "V1")
+        assert (row["state"], row["summary"]) == ("finished", "fits together") and row["finished_at"]
+        rated = sql(rw["db"], "SELECT task_id, value, head_sha, review, reason, actor FROM blast_radius ORDER BY id")
+        assert [tuple(r) for r in rated] == [
+            ("T1", "ok", H1, "V1", None, "review:V1"),
+            ("T2", "doubt", H2, "V1", "breaks T1", "review:V1"),
+        ]
+        recorded = sql(
+            rw["db"],
+            "SELECT task_id, outcome, reason, blast_radius_id FROM review_tasks WHERE review_id = 'V1' ORDER BY 1",
+        )
+        assert [tuple(r) for r in recorded] == [
+            ("T1", "pass", None, 1),
+            ("T2", "fail", "breaks T1", 2),
+            ("T3", "pass", None, None),
+            ("T4", "pass", "plan only", None),
+        ]
+        assert (msg["run_id"], msg["sender"], msg["dedupe_key"]) == ("R1", "review:V1", "review:V1")
+        payload = msg["payload"]
+        assert (payload["review_id"], payload["kind"], payload["summary"], payload["other_runs"]) == (
+            "V1",
+            "global",
+            "fits together",
+            [],
+        )
+        assert payload["tasks"][1] == {
+            "task_id": "T2",
+            "base_sha": B2,
+            "head_sha": H2,
+            "head_state": "branch",
+            "outcome": "fail",
+            "reason": "breaks T1",
+            "blast_radius": "doubt",
+            "finding_ids": [1],
+        }
+        code, again = finish_cli(rw, token, GOOD)  # no replay: the token is void
+        assert (
+            code == 3 and again["error"] == "STALE_TOKEN" and again["instructions"].startswith("This review is closed")
+        )
+        assert run_cli(*base, "--task", "T1", "--token", token)[1]["error"] == "STALE_TOKEN"
+
+    def test_a_cross_run_review_posts_to_each_open_run(self, rw) -> None:
+        token = grant_request(rw)
+        assert tool_review(rw, "pilot:alert:ev:1", token, review="V1")[0] == 0
+        r3, _ = open_run("r3", "S-3")
+        done = {"summary": "s", "tasks": {"T1": {"outcome": "pass"}, "T5": {"outcome": "fail", "reason": "dup of T1"}}}
+        bad = {"summary": "s", "tasks": {"T1": {"outcome": "pass", "blast_radius": "ok"}, "T5": {"outcome": "pass"}}}
+        code, out = finish_cli(rw, session(rw), bad)
+        assert code == 2 and "only a global review" in out["detail"]
+        code, out = finish_cli(rw, session(rw), done)
+        assert code == 0, out
+        msgs = messages_of(rw["db"])
+        assert [
+            (m["run_id"], [t["task_id"] for t in m["payload"]["tasks"]], m["payload"]["other_runs"]) for m in msgs
+        ] == [
+            ("R1", ["T1"], ["R2"]),
+            ("R2", ["T5"], ["R1"]),
+        ]
+        assert r3 not in {m["run_id"] for m in msgs}
+
+    def test_a_closed_run_gets_no_review_done(self, rw) -> None:
+        token = grant_request(rw)
+        assert tool_review(rw, "pilot:alert:ev:1", token, review="V1")[0] == 0
+        sql(rw["db"], "UPDATE runs SET state = 'closed' WHERE id = 'R2'")
+        done = {"summary": "s", "tasks": {"T1": {"outcome": "pass"}, "T5": {"outcome": "pass"}}}
+        assert finish_cli(rw, session(rw), done)[0] == 0
+        assert [m["run_id"] for m in messages_of(rw["db"])] == ["R1"]
+
+    def test_a_finish_while_still_launching(self, rw) -> None:
+        assert global_r1(rw)[0] == 0
+        sql(rw["db"], "UPDATE reviews SET state = 'launching'")
+        assert finish_cli(rw, session(rw), GOOD)[0] == 0
+        assert review_row(rw["db"], "V1")["state"] == "finished"
+
+    def test_the_order_of_checks(self, rw) -> None:
+        from .conftest import insert_node
+
+        assert global_r1(rw)[0] == 0
+        node = insert_node(rw["db"], "N1", "R1", "T1")
+        assert finish_cli(rw, node, "not json")[1]["error"] == "USAGE"  # the file first
+        assert finish_cli(rw, node, '{"tasks": {}, "tasks": {}}')[1]["error"] == "USAGE"  # duplicate keys
+        assert finish_cli(rw, node, "{}")[1]["error"] == "CONFLICT"  # then the token
+        assert finish_cli(rw, rw["tok1"], "{}")[1]["error"] == "CONFLICT"
+        grant = f"review:V1.0.{'0' * 32}"
+        assert finish_cli(rw, grant, "{}")[1]["error"] == "CONFLICT"
+        assert finish_cli(rw, session(rw), "{}")[1]["error"] == "USAGE"  # then the shape
+        from .conftest import run_cli
+
+        assert run_cli("review", "finish", "--input", str(rw["tmp"] / "missing.json"), "--token", node)[1]["error"] == (
+            "USAGE"
+        )
+
+    @pytest.mark.parametrize(
+        ("change", "error", "detail"),
+        [
+            (lambda d: d["tasks"].pop("T3"), "USAGE", "missing: T3"),
+            (lambda d: d["tasks"].update(T5={"outcome": "pass"}), "CONFLICT", "not in the scope"),
+            (lambda d: d["tasks"]["T3"].update(outcome="maybe"), "USAGE", "pass or fail"),
+            (lambda d: d["tasks"]["T2"].pop("reason"), "USAGE", "a fail needs a `reason`"),
+            (lambda d: d["tasks"]["T2"].update(reason="  "), "USAGE", "a fail needs a `reason`"),
+            (lambda d: d["tasks"]["T1"].pop("blast_radius"), "USAGE", "needs its `blast_radius`"),
+            (lambda d: d["tasks"]["T4"].update(blast_radius="ok"), "USAGE", "no head was reviewed"),
+            (lambda d: d["tasks"]["T1"].update(blast_radius="huge"), "USAGE", "ok, doubt or too_large"),
+            (lambda d: d["tasks"]["T1"].update(severity="x"), "USAGE", "must be an object of"),
+            (lambda d: d["tasks"].update(T3="pass"), "USAGE", "must be an object of"),
+            (lambda d: d["tasks"]["T3"].update(reason=7), "USAGE", "must be a string"),
+            (lambda d: d["tasks"]["T3"].update(reason="\ud800"), "USAGE", "not valid Unicode"),
+            (lambda d: d.update(summary=["s"]), "USAGE", "must be a string"),
+            (lambda d: d.update(extra=1), "USAGE", "--input must be"),
+            (lambda d: d.update(tasks=[]), "USAGE", "--input must be"),
+        ],
+    )
+    def test_validation(self, rw, change, error: str, detail: str) -> None:
+        import copy
+
+        assert global_r1(rw)[0] == 0
+        data = copy.deepcopy(GOOD)
+        change(data)
+        code, out = finish_cli(rw, session(rw), data)
+        assert out["error"] == error and detail in out["detail"], out
+        assert review_row(rw["db"], "V1")["state"] == "running"
+        assert sql(rw["db"], "SELECT count(*) FROM blast_radius")[0][0] == 0
+
+    def test_an_item_blast_radius_is_optional(self, rw) -> None:
+        import copy
+
+        assert global_r1(rw)[0] == 0
+        data = copy.deepcopy(GOOD)
+        data["tasks"]["T3"]["blast_radius"] = "too_large"
+        assert finish_cli(rw, session(rw), data)[0] == 0
+        assert sql(rw["db"], "SELECT value FROM blast_radius WHERE task_id = 'T3'")[0][0] == "too_large"
+
+    def test_atomic(self, rw, monkeypatch) -> None:
+        from control_plane import messages
+
+        assert global_r1(rw)[0] == 0
+
+        def broken(*a: Any, **kw: Any) -> Any:
+            raise errors.CpError("INTERNAL", "post failed")
+
+        monkeypatch.setattr(messages, "post_locked", broken)
+        assert finish_cli(rw, session(rw), GOOD)[1]["error"] == "INTERNAL"
+        assert review_row(rw["db"], "V1")["state"] == "running"
+        assert sql(rw["db"], "SELECT count(*) FROM blast_radius")[0][0] == 0
+        assert {r[0] for r in sql(rw["db"], "SELECT outcome FROM review_tasks")} == {None}
+
+
+def msg_id(rw: dict[str, Any]) -> int:
+    return int(sql(rw["db"], "SELECT id FROM messages WHERE kind = 'review_done'")[0][0])
+
+
+class TestOutcome:
+    def _finished(self, rw, rid: str, finished_at: str, outcomes: dict[str, str], kind: str = "global") -> None:
+        sql(
+            rw["db"],
+            "INSERT INTO reviews (id, kind, coalesce_key, state, agent, name, requested_by, created_at, updated_at,"
+            " finished_at) VALUES (?, ?, ?, 'finished', 'a', ?, 'x', 'x', 'x', ?)",
+            [rid, kind, f"k-{rid}", f"n-{rid}", finished_at],
+        )
+        for task, out in outcomes.items():
+            sql(
+                rw["db"],
+                "INSERT INTO review_tasks (review_id, task_id, run_id, base_sha, head_sha, head_state, outcome, reason)"
+                " VALUES (?, ?, 'R1', 'b', ?, 'branch', ?, ?)",
+                [rid, task, H1, out, f"{rid}:{out}"],
+            )
+
+    def _conn_outcome(self, rw, *a: Any, **kw: Any) -> Any:
+        conn = db.connect(rw["db"])
+        try:
+            return reviews.outcome(conn, *a, **kw)
+        finally:
+            conn.close()
+
+    def test_the_latest_finished_for_that_task_kind_and_head(self, rw) -> None:
+        self._finished(rw, "V8", "2026-10-03T10:00:00.000000Z", {"T1": "fail"})
+        self._finished(rw, "V9", "2026-10-03T11:00:00.000000Z", {"T1": "pass"})
+        self._finished(rw, "V10", "2026-10-03T11:00:00.000000Z", {"T1": "fail"})  # same time: the newer id
+        self._finished(rw, "V11", "2026-10-03T12:00:00.000000Z", {"T1": "pass"}, kind="cross_run")
+        assert self._conn_outcome(rw, "T1", kind="global", head_sha=H1) == {
+            "review_id": "V10",
+            "outcome": "fail",
+            "reason": "V10:fail",
+            "base_sha": "b",
+            "head_sha": H1,
+            "finished_at": "2026-10-03T11:00:00.000000Z",
+        }
+        assert self._conn_outcome(rw, "T1", kind="cross_run", head_sha=f" {H1} ")["review_id"] == "V11"
+        assert self._conn_outcome(rw, "T1", kind="global", head_sha="other") is None
+        assert self._conn_outcome(rw, "T2", kind="global", head_sha=H1) is None
+
+    def test_no_head_is_advisory(self, rw) -> None:
+        self._finished(rw, "V8", "2026-10-03T10:00:00.000000Z", {"T1": "pass"})
+        for head in (None, "", "  "):
+            assert self._conn_outcome(rw, "T1", kind="global", head_sha=head) is None
+
+    def test_only_finished_reviews_with_an_outcome(self, rw) -> None:
+        self._finished(rw, "V8", "2026-10-03T10:00:00.000000Z", {"T1": "pass"})
+        sql(rw["db"], "UPDATE reviews SET state = 'abandoned'")
+        assert self._conn_outcome(rw, "T1", kind="global", head_sha=H1) is None
+        sql(rw["db"], "UPDATE reviews SET state = 'finished'")
+        sql(rw["db"], "UPDATE review_tasks SET outcome = NULL")
+        assert self._conn_outcome(rw, "T1", kind="global", head_sha=H1) is None

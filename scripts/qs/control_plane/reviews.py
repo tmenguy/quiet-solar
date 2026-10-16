@@ -23,7 +23,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from . import alerts, daemon, db, errors, hooks, liveness, nodes, paths, runs, tokens, tools
+from . import alerts, daemon, db, errors, hooks, ledger, liveness, messages, nodes, paths, runs, tokens, tools
 from . import clock as clock_mod
 from .schema_reviews import AGENTS, IN_FLIGHT, KINDS, REVIEW_TTL_S, SOURCES
 
@@ -702,3 +702,173 @@ def register_review_tool() -> None:
     """Register ``tool review``; idempotent (``cli`` calls it at import and in ``main``)."""
     if TOOL_NAME not in tools.REGISTRY:
         tools.register(SPEC)
+
+
+# --------------------------------------------------------------------------- review finish: the hand-back (D4)
+
+REVIEW_DONE = "review_done"  # the message kind posted to each open run of the scope
+_FINISH_KEYS = frozenset({"summary", "tasks"})
+_TASK_KEYS = frozenset({"outcome", "reason", "blast_radius"})
+
+
+def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    seen: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise errors.CpError("USAGE", f"--input: duplicate key {key!r}")
+        seen[key] = value
+    return seen
+
+
+def parse_finish(text: str) -> Any:
+    """``review finish --input``'s JSON; duplicate keys and non-JSON are ``USAGE`` (checked before the token)."""
+    try:
+        return json.loads(text, object_pairs_hook=_no_duplicates)
+    except (ValueError, RecursionError) as exc:
+        raise errors.CpError("USAGE", f"--input is not JSON: {exc}") from exc
+
+
+def _text(entry: Mapping[str, Any], key: str, where: str) -> str | None:
+    value = entry.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise errors.CpError("USAGE", f"{where}: `{key}` must be a string")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise errors.CpError("USAGE", f"{where}: `{key}` is not valid Unicode") from exc
+    return value.strip() or None
+
+
+def _check_finish(data: Any, who: tokens.Principal, scope: Mapping[str, sqlite3.Row]) -> dict[str, dict[str, Any]]:
+    """The shape and the scope of a finish file → ``{task_id: {outcome, reason, blast_radius}}``."""
+    if not isinstance(data, dict) or set(data) - _FINISH_KEYS or not isinstance(data.get("tasks"), dict):
+        raise errors.CpError("USAGE", '--input must be {"summary": …, "tasks": {<task>: {…}}}')
+    outside = sorted(set(data["tasks"]) - set(scope))
+    if outside:
+        raise errors.CpError("CONFLICT", f"not in the scope of review {who.review_id}: {', '.join(outside)}")
+    missing = sorted(set(scope) - set(data["tasks"]))
+    if missing:
+        raise errors.CpError("USAGE", f"every scope task appears once; missing: {', '.join(missing)}")
+    checked: dict[str, dict[str, Any]] = {}
+    for task_id, entry in sorted(data["tasks"].items()):
+        where = f"tasks.{task_id}"
+        if not isinstance(entry, dict) or set(entry) - _TASK_KEYS:
+            raise errors.CpError("USAGE", f"{where} must be an object of {', '.join(sorted(_TASK_KEYS))}")
+        outcome, reason = entry.get("outcome"), _text(entry, "reason", where)
+        if outcome not in ("pass", "fail"):
+            raise errors.CpError("USAGE", f"{where}: `outcome` must be pass or fail")
+        if outcome == "fail" and reason is None:
+            raise errors.CpError("USAGE", f"{where}: a fail needs a `reason`")
+        blast = entry.get("blast_radius")
+        row = scope[task_id]
+        if blast is not None:
+            if who.review_kind != GLOBAL:
+                raise errors.CpError("USAGE", f"{where}: only a global review rates the blast radius")
+            if blast not in ("ok", "doubt", "too_large"):
+                raise errors.CpError("USAGE", f"{where}: `blast_radius` must be ok, doubt or too_large")
+            if row["head_sha"] is None:
+                raise errors.CpError("USAGE", f"{where}: no head was reviewed, so no blast radius")
+        elif who.review_kind == GLOBAL and row["is_deliverable"] and row["head_sha"] is not None:
+            raise errors.CpError("USAGE", f"{where}: a deliverable with a head needs its `blast_radius`")
+        checked[task_id] = {"outcome": outcome, "reason": reason, "blast_radius": blast}
+    return checked
+
+
+def finish(conn: sqlite3.Connection, clock: clock_mod.Clock, *, token: str, data: Any) -> dict[str, Any]:
+    """The session hands its review back, once: outcomes, the global review's blast radius, ``review_done``.
+
+    One transaction. Afterwards the session token is void: a second call is ``STALE_TOKEN``.
+    """
+    with db.write(conn):
+        who = tokens.require(conn, token, kinds={tokens.REVIEW})
+        rid = str(who.review_id)
+        scope = {
+            r["task_id"]: r
+            for r in conn.execute(
+                "SELECT rt.*, t.is_deliverable FROM review_tasks rt JOIN tasks t ON t.id = rt.task_id"
+                " WHERE rt.review_id = ?",
+                (rid,),
+            ).fetchall()
+        }
+        checked = _check_finish(data, who, scope)
+        summary = _text(data, "summary", "summary") or ""
+        now = db.now(clock)
+        conn.execute(
+            "UPDATE reviews SET state = 'finished', summary = ?, finished_at = ?, updated_at = ?"
+            " WHERE id = ? AND state IN ('launching', 'running')",
+            (summary, now, now, rid),
+        )
+        for task_id, entry in checked.items():
+            blast_id = None
+            if entry["blast_radius"] is not None:
+                blast_id = ledger.append_blast_radius_locked(
+                    conn,
+                    clock,
+                    task_id=task_id,
+                    value=entry["blast_radius"],
+                    head_sha=scope[task_id]["head_sha"],
+                    review=rid,
+                    reason=entry["reason"],
+                    actor=who.actor,
+                )
+            conn.execute(
+                "UPDATE review_tasks SET outcome = ?, reason = ?, blast_radius_id = ?, recorded_at = ?"
+                " WHERE review_id = ? AND task_id = ?",
+                (entry["outcome"], entry["reason"], blast_id, now, rid, task_id),
+            )
+        run_ids = sorted({r["run_id"] for r in scope.values() if r["run_id"] is not None})
+        posted = []
+        for run_id in open_runs_of(conn, rid):
+            tasks_of_run = [
+                {
+                    "task_id": t,
+                    "base_sha": scope[t]["base_sha"],
+                    "head_sha": scope[t]["head_sha"],
+                    "head_state": scope[t]["head_state"],
+                    **checked[t],
+                    "finding_ids": finding_ids(conn, rid, t),
+                }
+                for t in sorted(scope)
+                if scope[t]["run_id"] == run_id
+            ]
+            payload = {
+                "review_id": rid,
+                "kind": who.review_kind,
+                "summary": summary,
+                "tasks": tasks_of_run,
+                "other_runs": [r for r in run_ids if r != run_id],
+            }
+            out = messages.post_locked(
+                conn,
+                clock,
+                run_id=run_id,
+                recipient=messages.ORCHESTRATOR,
+                kind=REVIEW_DONE,
+                sender=who.actor,
+                payload=payload,
+                dedupe_key=f"review:{rid}",
+            )
+            posted.append({"run_id": run_id, "message_id": out["id"]})
+    return {"review_id": rid, "state": "finished", "messages": posted}
+
+
+# --------------------------------------------------------------------------- the reader (D13)
+
+
+def outcome(conn: sqlite3.Connection, task_id: str, *, kind: str, head_sha: str | None) -> dict[str, Any] | None:
+    """Child 7's reader: the latest **finished** review outcome of ``task_id`` for ``kind`` at ``head_sha``.
+
+    ``None`` when there is none, and for a ``None`` or blank ``head_sha``: an outcome on no head is advisory.
+    """
+    if head_sha is None or not head_sha.strip():
+        return None
+    row = conn.execute(
+        "SELECT rt.review_id, rt.outcome, rt.reason, rt.base_sha, rt.head_sha, r.finished_at FROM review_tasks rt"
+        " JOIN reviews r ON r.id = rt.review_id WHERE rt.task_id = ? AND r.kind = ? AND rt.head_sha = ?"
+        " AND r.state = 'finished' AND rt.outcome IS NOT NULL"
+        " ORDER BY r.finished_at DESC, CAST(substr(r.id, 2) AS INTEGER) DESC LIMIT 1",
+        (task_id, kind, head_sha.strip()),
+    ).fetchone()
+    return db.as_dict(row)

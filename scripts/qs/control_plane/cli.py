@@ -966,6 +966,17 @@ def _review_read(args: argparse.Namespace, io: Io) -> dict[str, Any]:
     return gitread.read(io.deps.runner, paths.main(), args.op, given)
 
 
+def _conf_review_finish(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--input", required=True, help="the finish JSON file")
+    _token(p)
+
+
+def _review_finish(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    """#407 D4: a review session hands its outcomes back, once (the JSON is read and parsed before the token)."""
+    data = reviews.parse_finish(read_file(args.input))
+    return _write(io, reviews.finish, io.deps.clock, token=args.token, data=data)
+
+
 COMMANDS: dict[str, Command] = {
     c.name: c
     for c in (
@@ -1012,6 +1023,9 @@ COMMANDS: dict[str, Command] = {
         Command("finding state", "write", _finding_state, _conf_finding_state, help="move a finding to a state"),
         Command(
             "blast-radius set", "write", _blast_radius_set, _conf_blast_radius_set, help="rate a task's blast radius"
+        ),
+        Command(
+            "review finish", "write", _review_finish, _conf_review_finish, help="a review session hands its review back"
         ),
         Command("msg post", "write", _msg_post, _conf_msg_post, help="post a message to a queue"),
         Command("msg pop", "write", _msg_pop, _conf_msg_pop, help="pop the next visible message (with a receipt)"),
