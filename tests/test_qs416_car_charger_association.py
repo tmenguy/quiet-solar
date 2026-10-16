@@ -1781,16 +1781,19 @@ async def test_charger_card_choice_while_still_plugged_keeps_the_unplug_edge():
     assert fx.w1.get_user_originated(USER_ORIGINATED_CAR_NAME) is None
 
 
-def test_pin_save_without_a_home_writes_no_plug_reading():
-    # R4-4: the persistence hook never dereferences a missing home
+def test_pin_save_without_a_home_still_writes_the_plug_reading():
+    # R4-4 / R6-2: the persistence hook never dereferences a missing home — it reads
+    # the attached car (self.car), so the plug reading is still written
     fx = _fx(car_names=("A",), with_plug_sensor=True)
-    fx.w1.attach_car(fx.cars["A"], T0 - timedelta(minutes=5))
+    a = fx.cars["A"]
+    fx.w1.attach_car(a, T0 - timedelta(minutes=5))
     fx.w1.set_user_originated(USER_ORIGINATED_CAR_NAME, "A")
+    a._add_state_history(a.car_plugged, "on", T0 - timedelta(seconds=5), None, {})
     fx.w1.home = None
     d: dict = {}
     fx.w1.update_to_be_saved_extra_device_info(d, T0)
     assert d[STORAGE_KEY_USER_PIN_SAVED_AT] == T0.isoformat()
-    assert d[STORAGE_KEY_USER_PIN_PLUG_STATE] is None
+    assert d[STORAGE_KEY_USER_PIN_PLUG_STATE] == "on"
 
 
 def _unplugged(w) -> None:

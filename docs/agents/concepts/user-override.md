@@ -235,9 +235,12 @@ command state.
   keeps it; a saved time in the future (clock behind) keeps it and leaves
   the guard armed; an `off` reported only after the boot window does not
   lift it; a pin the user sets after the restart is never lifted. The
-  saved time is re-stamped at every save, so an unplug during a first
-  downtime is missed if HA restarts a second time inside the boot window
-  (accepted, like the floor). Hook points: the top of `_compute_best_car`
+  saved time (and plug reading) is re-stamped at every save once the
+  pinned car is attached; before that (boot window, car not yet
+  re-attached) both keys are written `None` (QS-416 R5-1). In both cases a
+  second restart inside the boot window arms no useful guard and the pin
+  is kept, so an unplug during a first downtime is missed (accepted, like
+  the floor). Hook points: the top of `_compute_best_car`
   and the top of the unplugged branch of
   `check_load_activity_and_constraints` (a charger unplugged at boot never
   reaches `_compute_best_car` in the boot window — QS-416 R4-1). Accepted
