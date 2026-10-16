@@ -213,9 +213,13 @@ command state.
   (INFO line, once per episode), and is never taken as a boot car either,
   so no other charger wins it meanwhile; a pin on a charger that does not
   hold the car protects nothing. **Restart:** the pin is persisted with the
-  charger's user-originated data, stamped with its save time
-  (`STORAGE_KEY_USER_PIN_SAVED_AT`) and the pinned car's plug reading at
-  the save (`STORAGE_KEY_USER_PIN_PLUG_STATE`: `on` / `off` / `None`).
+  charger's user-originated data. A pin on the car **attached** to that
+  charger is also stamped with its save time
+  (`STORAGE_KEY_USER_PIN_SAVED_AT`) and the car's plug reading at the save
+  (`STORAGE_KEY_USER_PIN_PLUG_STATE`: `on` / `off` / `None`); a
+  pre-selection (pinned car not attached there) is saved unstamped, so no
+  boot guard is armed for it and an unplug of that car elsewhere does not
+  lift it across a restart (QS-416 R5-1).
   During the boot window, an **`on` → `off` transition** of the pinned
   car's plug sensor since that time (positive proof of an unplug while HA
   was down — the same rule as the persisted score floor,

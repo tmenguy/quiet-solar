@@ -160,8 +160,9 @@ time)`); a pending restored value is never re-written — it lives in memory
 until the matching attach, so saves before that attach do not lose it, but
 a 2nd restart inside the boot window does (accepted risk). The same
 positive-proof check (`_car_unplugged_since`) guards a persisted **user
-car pin** during the boot window (`STORAGE_KEY_USER_PIN_SAVED_AT` /
-`STORAGE_KEY_USER_PIN_PLUG_STATE`,
+car pin** on the car attached to that charger during the boot window
+(`STORAGE_KEY_USER_PIN_SAVED_AT` / `STORAGE_KEY_USER_PIN_PLUG_STATE`, only
+stamped for an attached pin — a pre-selection arms no guard,
 `_lift_boot_user_pin_if_car_unplugged` at the top of `_compute_best_car`
 and of the unplugged branch of `check_load_activity_and_constraints`, for
 a charger unplugged at boot; see `user-override.md`). `_compute_best_car` skips a car pinned on an

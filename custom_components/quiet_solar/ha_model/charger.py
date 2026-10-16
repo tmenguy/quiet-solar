@@ -2603,12 +2603,13 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
         # QS-416: stamp a car pin (persisted with the user-originated data) with the
         # save `time` and the pinned car's plug reading, so the boot guard can lift it
-        # on an unplug seen since then.
+        # on an unplug seen since then. Only a pin on the car ATTACHED here (R5-1): a
+        # pre-selection (car not attached here) arms no guard, so an unplug of that car
+        # elsewhere cannot lift it across a restart.
         pinned_car_name = self.get_user_originated(USER_ORIGINATED_CAR_NAME)
-        if pinned_car_name is not None and pinned_car_name != CHARGER_NO_CAR_CONNECTED:
+        if pinned_car_name is not None and self.car is not None and self.car.name == pinned_car_name:
             data_to_update[STORAGE_KEY_USER_PIN_SAVED_AT] = time.isoformat()
-            pinned_car = self.home.get_car_by_name(pinned_car_name) if self.home is not None else None
-            data_to_update[STORAGE_KEY_USER_PIN_PLUG_STATE] = self._car_plug_reading(pinned_car, time)
+            data_to_update[STORAGE_KEY_USER_PIN_PLUG_STATE] = self._car_plug_reading(self.car, time)
         else:
             data_to_update[STORAGE_KEY_USER_PIN_SAVED_AT] = None
             data_to_update[STORAGE_KEY_USER_PIN_PLUG_STATE] = None
@@ -3673,7 +3674,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         if self._boot_car is not None and self._boot_car.name == car.name:
             self._boot_car = None
         _LOGGER.info(
-            "get_best_car: %s on %s: persisted user pin lifted, car unplugged at %s (pin saved at %s)",
+            "boot_user_pin: %s on %s: persisted user pin lifted, car unplugged at %s (pin saved at %s)",
             car.name,
             self.name,
             unplugged_at,
@@ -3986,17 +3987,19 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         else:
             return self.car.name
 
-    async def user_set_selected_car_by_name(self, car_name: str | None):
+    async def user_set_selected_car_by_name(self, car_name: str | None, time: datetime | None = None):
+        if time is None:
+            time = datetime.now(pytz.UTC)
         self.set_user_originated(USER_ORIGINATED_CAR_NAME, car_name)
         # QS-416 R4-2: a choice made once the charger is (instantly) unplugged is a
         # pre-selection: the plugged -> unplugged edge the check window confirms a few
         # seconds later must not wipe it (see `_seen_plugged`)
-        if self.is_not_plugged(datetime.now(pytz.UTC)):
+        if self.is_not_plugged(time):
             self._seen_plugged = False
         # QS-416: a REAL car chosen here drops that car's pin on every other charger
         # (mirror of the car-card path), or a stale pin there could later win the
         # "manually attached to multiple chargers" branch against this latest choice.
-        if car_name is not None and self.home.get_car_by_name(car_name) is not None:
+        if car_name is not None and self.home is not None and self.home.get_car_by_name(car_name) is not None:
             for charger in self.home._chargers:
                 if charger is not self and charger.get_user_originated(USER_ORIGINATED_CAR_NAME) == car_name:
                     charger.clear_user_originated(USER_ORIGINATED_CAR_NAME)

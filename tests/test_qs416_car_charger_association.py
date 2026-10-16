@@ -1155,7 +1155,8 @@ async def test_persisted_pin_lifted_when_pinned_car_unplugged_during_downtime(ca
         assert a.get_user_originated(USER_ORIGINATED_CHARGER_NAME) is None
         assert fx.w1._boot_car is None
         assert fx.w1.car is b
-        assert any("persisted user pin" in r.getMessage() for r in caplog.records)
+        # R5-3: neutral prefix (emitted from both the decision and the unplugged branch)
+        assert any(r.getMessage().startswith("boot_user_pin: A on ") for r in caplog.records)
     else:
         assert fx.w1.get_user_originated(USER_ORIGINATED_CAR_NAME) == "A"
         assert fx.w1.car is a
@@ -1225,17 +1226,30 @@ async def test_persisted_pin_guard_ignores_a_changed_pin():
 
 
 @pytest.mark.parametrize(
-    ("pin", "expect_saved_at"),
-    [(None, False), (CHARGER_NO_CAR_CONNECTED, False), ("A", True)],
-    ids=["no_pin", "no_car_choice", "car_pin"],
+    ("pin", "attached", "expect_saved_at"),
+    [
+        (None, False, False),
+        (CHARGER_NO_CAR_CONNECTED, False, False),
+        ("A", False, False),
+        ("A", True, True),
+        ("B", True, False),
+    ],
+    ids=["no_pin", "no_car_choice", "preselection", "attached_car_pin", "pin_on_another_car"],
 )
-def test_pin_saved_at_written_only_for_a_car_pin(pin, expect_saved_at):
-    fx = _fx(car_names=("A",))
+def test_pin_saved_at_written_only_for_an_attached_car_pin(pin, attached, expect_saved_at):
+    # R5-1: only a pin on the car attached HERE is stamped (arms the boot guard); a
+    # pre-selection (pinned car not attached here) writes None for both keys
+    fx = _fx(car_names=("A", "B"), with_plug_sensor=True)
+    a = fx.cars["A"]
+    if attached:
+        fx.w1.attach_car(a, T0 - timedelta(minutes=5))
+    a._add_state_history(a.car_plugged, "on", T0 - timedelta(seconds=5), None, {})
     if pin is not None:
         fx.w1.set_user_originated(USER_ORIGINATED_CAR_NAME, pin)
     d: dict = {}
     fx.w1.update_to_be_saved_extra_device_info(d, T0)
     assert d[STORAGE_KEY_USER_PIN_SAVED_AT] == (T0.isoformat() if expect_saved_at else None)
+    assert d[STORAGE_KEY_USER_PIN_PLUG_STATE] == ("on" if expect_saved_at else None)
 
 
 def test_pin_saved_at_not_handed_to_boot_without_a_car_pin():
@@ -1737,7 +1751,9 @@ async def test_charger_card_choice_right_after_a_physical_unplug_is_kept():
     window_elapsed = [False]
     fx.w1.is_not_plugged = MagicMock(side_effect=_not_plugged)
     fx.w1.is_plugged = MagicMock(side_effect=_plugged)
-    await fx.w1.user_set_selected_car_by_name("B")
+    await fx.w1.user_set_selected_car_by_name("B", time=T0)
+    # R5-2: the instant-unplug check uses the injected time, not the wall clock
+    fx.w1.is_not_plugged.assert_any_call(T0)
     assert fx.w1.car is None
 
     window_elapsed[0] = True
@@ -1757,7 +1773,8 @@ async def test_charger_card_choice_while_still_plugged_keeps_the_unplug_edge():
     a, b = fx.cars["A"], fx.cars["B"]
     _drive_real_cycle_path([fx.w1], [a, b])
     _w1_plugged(fx)
-    await fx.w1.user_set_selected_car_by_name("B")
+    await fx.w1.user_set_selected_car_by_name("B", time=T0)
+    fx.w1.is_not_plugged.assert_any_call(T0)
     assert fx.w1._seen_plugged is True
     _w1_unplugged(fx)
     await fx.w1.check_load_activity_and_constraints(T0 + timedelta(seconds=7))
@@ -1767,9 +1784,84 @@ async def test_charger_card_choice_while_still_plugged_keeps_the_unplug_edge():
 def test_pin_save_without_a_home_writes_no_plug_reading():
     # R4-4: the persistence hook never dereferences a missing home
     fx = _fx(car_names=("A",), with_plug_sensor=True)
+    fx.w1.attach_car(fx.cars["A"], T0 - timedelta(minutes=5))
     fx.w1.set_user_originated(USER_ORIGINATED_CAR_NAME, "A")
     fx.w1.home = None
     d: dict = {}
     fx.w1.update_to_be_saved_extra_device_info(d, T0)
     assert d[STORAGE_KEY_USER_PIN_SAVED_AT] == T0.isoformat()
     assert d[STORAGE_KEY_USER_PIN_PLUG_STATE] is None
+
+
+def _unplugged(w) -> None:
+    w.is_not_plugged = MagicMock(return_value=True)
+    w.is_plugged = MagicMock(return_value=False)
+
+
+async def test_preselection_without_restart_survives_car_unplug_elsewhere():
+    # R5-1 contrast: a pre-selection on an unplugged W1 (A away) is kept when A is
+    # unplugged elsewhere — no boot guard involved
+    fx = _fx(car_names=("A", "B"), with_plug_sensor=True)
+    a, b = fx.cars["A"], fx.cars["B"]
+    _drive_real_cycle_path([fx.w1], [a, b])
+    _unplugged(fx.w1)
+    await fx.w1.user_set_selected_car_by_name("A", time=T0)
+    _set_car(a, sensor="off", dist=40000.0)
+    for i in range(5):
+        await fx.w1.check_load_activity_and_constraints(T0 + timedelta(seconds=10 + 10 * i))
+    assert fx.w1.get_user_originated(USER_ORIGINATED_CAR_NAME) == "A"
+
+
+async def test_preselection_across_restart_kept_when_car_unplugged_elsewhere():
+    # R5-1: a pre-selection (A pinned on the unplugged W1, never attached there) is
+    # persisted WITHOUT a pin stamp, so the restart arms no boot guard and an
+    # on -> off of A's plug sensor elsewhere does not lift it (same as no restart)
+    fx = _fx(car_names=("A", "B"), with_plug_sensor=True)
+    a, b = fx.cars["A"], fx.cars["B"]
+    _drive_real_cycle_path([fx.w1], [a, b])
+    a._add_state_history(a.car_plugged, "on", SAVED_AT - timedelta(seconds=5), None, {})
+    _unplugged(fx.w1)
+    await fx.w1.user_set_selected_car_by_name("A", time=SAVED_AT)
+    assert fx.w1.car is None
+    data: dict = {}
+    fx.w1.update_to_be_saved_extra_device_info(data, SAVED_AT)
+    assert data[STORAGE_KEY_USER_PIN_SAVED_AT] is None
+    assert data[STORAGE_KEY_USER_PIN_PLUG_STATE] is None
+
+    fx = _fx(car_names=("A", "B"), with_plug_sensor=True)
+    a, b = fx.cars["A"], fx.cars["B"]
+    _set_car(a, sensor="unknown", dist=40000.0)
+    _set_car(b, sensor="off", dist=1.25)
+    _history(a, [(-1200, "on")])
+    _drive_real_cycle_path([fx.w1], [a, b])
+    fx.w1.use_saved_extra_device_info(copy.deepcopy(data))
+    fx.w1.device_post_home_init(T0)
+    assert fx.w1.get_user_originated(USER_ORIGINATED_CAR_NAME) == "A"
+    assert fx.w1._boot_user_pin is None  # no guard armed for a pre-selection
+    _poll_plug(a, "off", T0 + timedelta(seconds=1))
+    _set_car(a, sensor="off", dist=40000.0)
+    _unplugged(fx.w1)
+    for i in range(5):
+        await fx.w1.check_load_activity_and_constraints(T0 + timedelta(seconds=10 + 10 * i))
+    assert fx.w1.get_user_originated(USER_ORIGINATED_CAR_NAME) == "A"
+
+
+async def test_charger_card_choice_without_a_home_skips_the_other_chargers():
+    # R5-3: the R2-7 "drop this car's pin elsewhere" loop never dereferences a
+    # missing home (mirror of the car-side loop)
+    fx = _fx(car_names=("A",))
+    fx.w1.home = None
+    fx.w1.update_charger_for_user_change = AsyncMock()
+    await fx.w1.user_set_selected_car_by_name("A", time=T0)
+    assert fx.w1.get_user_originated(USER_ORIGINATED_CAR_NAME) == "A"
+    fx.w1.update_charger_for_user_change.assert_awaited_once()
+
+
+async def test_charger_card_choice_defaults_to_the_wall_clock():
+    # R5-2: the entity entry point passes no time; the method resolves "now"
+    fx = _fx(car_names=("A",))
+    fx.w1.update_charger_for_user_change = AsyncMock()
+    fx.w1.is_not_plugged = MagicMock(return_value=False)
+    await fx.w1.user_set_selected_car_by_name("A")
+    (called_time,), _ = fx.w1.is_not_plugged.call_args
+    assert called_time.tzinfo is not None
