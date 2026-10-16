@@ -1164,7 +1164,10 @@ def test_review_agents_pin_the_contract(tmp_path: Path, stem: str, source: str) 
             "\n\n   `--pattern` is a basic regular expression (git's BRE): never escape",
             "`(`, `)`, `|`, `+`, `?`, `{` or `}` (`\\(`, `\\{`, `\\|`, `\\+`, `\\?` are",
             "operators); `.`, `*`, `[`, `^`, `$` and `\\` are special — escape one",
-            "with `\\` to match it. A pattern git cannot compile comes back",
+            "with `\\` to match it. Pass the pattern in single quotes",
+            "(`--pattern 'f(x)'`): unquoted, the shell eats a `\\`, globs a `*` and",
+            "fails on a `(`; a pattern holding `'` cannot be single-quoted: pick",
+            "another one. A pattern git cannot compile comes back",
             "`NOT_FOUND` with git's message: fix the pattern and retry once (the one",
             "exception to the `NOT_FOUND` rule below).\n\n4. The lens:",
         )

@@ -136,9 +136,12 @@ class TestBgFailure:
         assert text.startswith("claude --bg exited 1: y") and text.endswith("END; " + liveness.trust_hint(self.D))
 
     def test_head_and_hint_over_the_limit(self) -> None:
-        d = Path("/" + "d" * 400)
-        text = liveness.bg_failure(self._res(err=self.REFUSAL), d, 300)
-        assert text == "claude --bg exited 1; " + liveness.trust_hint(d)
+        d = Path("/" + "d" * 400 + "/END")
+        text = liveness.bg_failure(self._res(err=self.REFUSAL + "tail"), d, 300)
+        assert len(text) == 300  # never over the limit: the folder is shortened, its end kept (#421)
+        assert text.startswith("claude --bg exited 1; the folder is not trusted: run `claude` once in `…d")
+        assert text.endswith("d/END` or a parent folder and accept the trust prompt")
+        assert "tail" not in text
         exact = len("claude --bg exited 1: ; ") + len(liveness.trust_hint(self.D))  # no room: `[-0:]` is not used
         assert liveness.bg_failure(self._res(err=self.REFUSAL), self.D, exact) == (
             "claude --bg exited 1; " + liveness.trust_hint(self.D)

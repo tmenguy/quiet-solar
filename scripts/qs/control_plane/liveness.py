@@ -31,21 +31,26 @@ def untrusted(res: runner.RunResult) -> bool:
     return UNTRUSTED in res.stderr or UNTRUSTED in res.stdout
 
 
-def trust_hint(trust_dir: Path) -> str:
+def trust_hint(trust_dir: Path | str) -> str:
     return (
         f"the folder is not trusted: run `claude` once in `{trust_dir}` or a parent folder and accept the trust prompt"
     )
 
 
 def bg_failure(res: runner.RunResult, trust_dir: Path, limit: int) -> str:
-    """``claude --bg exited N: <tail>`` (+ ``; <trust hint>`` when refused for trust).
+    """``claude --bg exited N: <tail>`` (+ ``; <trust hint>`` when refused for trust), at most ``limit`` characters.
 
-    The tail is stderr's, else stdout's. At most ``limit`` characters, unless the prefix and the hint alone exceed
-    it (an unusually long ``trust_dir``): then exactly prefix + hint, with no tail.
+    The tail is stderr's, else stdout's: what the prefix and the hint leave room for. When the prefix and the hint
+    alone exceed ``limit`` (an unusually long ``trust_dir``), the hint shows the folder's end after a leading ``…``:
+    the result is then exactly ``limit`` characters, with no tail. ``limit`` must hold the prefix and the hint's
+    fixed text.
     """
     head = f"claude --bg exited {res.returncode}"
     output = res.stderr.strip() or res.stdout.strip()
     hint = "; " + trust_hint(trust_dir) if untrusted(res) else ""
+    excess = len(head) + len(hint) - limit
+    if hint and excess > 0:  # keep the head and the hint's text whole: `close_locked` keeps only the last `limit`
+        hint = "; " + trust_hint("…" + str(trust_dir)[excess + 1 :])
     budget = limit - len(head) - len(": ") - len(hint)
     tail = output[-budget:] if budget > 0 else ""  # the guard matters: `output[-0:]` is the whole output
     return head + (f": {tail}" if tail else "") + hint

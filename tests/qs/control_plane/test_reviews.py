@@ -790,12 +790,20 @@ class TestIdentifyAndFailures:
         }
         assert sum(rw["deps"].clock.sleeps) >= 60  # it waited LAUNCH_SETTLE_S
 
-    def test_a_failed_launch(self, rw) -> None:
+    @pytest.mark.parametrize(
+        ("stdout", "stderr", "expected"),
+        [
+            ("", "boom\n", "claude --bg exited 1: boom"),
+            ("out\n", "", "claude --bg exited 1: out"),  # stderr empty: stdout's tail
+            ("", "", "claude --bg exited 1"),  # no output: the bare head
+        ],
+    )
+    def test_a_failed_launch(self, rw, stdout: str, stderr: str, expected: str) -> None:
         rw["launch"]["exit"] = 1
-        rw["launch"]["stderr"] = "boom\n"
+        rw["launch"]["stdout"], rw["launch"]["stderr"] = stdout, stderr
         code, out = global_r1(rw)
         row = review_row(rw["db"], "V1")
-        assert row["error"] == "claude --bg exited 1: boom"  # the cause is kept (#421)
+        assert row["error"] == expected  # the cause is kept (#421)
         assert code == 1 and out["detail"].endswith(row["error"])
         assert row["state"] == "failed"
         assert review_alerts(rw["db"]) == [("R1", "review:V1:failed")]
@@ -816,6 +824,20 @@ class TestIdentifyAndFailures:
         assert row["error"].startswith("claude --bg exited 1: x")
         assert row["error"].endswith("; " + liveness.trust_hint(root))
         assert len(row["error"]) == reviews.ERROR_MAX
+        assert code == 1 and out["detail"].endswith(row["error"])
+
+    def test_a_failed_launch_untrusted_with_a_long_review_dir(self, rw, monkeypatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("QS_CP_REVIEW_DIR", str(tmp_path / ("d" * 200) / ("e" * 200) / "reviews"))
+        rw["launch"]["exit"] = 1
+        rw["launch"]["stderr"] = "Workspace not trusted. Run claude in /x once and accept the trust prompt"
+        code, out = global_r1(rw)
+        row = review_row(rw["db"], "V1")
+        assert len(str(Path(row["dir"]).parents[1])) > reviews.ERROR_MAX  # the hint alone would not fit
+        assert row["error"].startswith("claude --bg exited 1; the folder is not trusted")  # the head is kept
+        assert row["error"].endswith("e/reviews` or a parent folder and accept the trust prompt")
+        assert len(row["error"]) == reviews.ERROR_MAX
+        payload = __import__("json").loads(sql(rw["db"], "SELECT payload FROM alerts LIMIT 1")[0][0])
+        assert payload["error"] == row["error"]
         assert code == 1 and out["detail"].endswith(row["error"])
 
     def test_a_failed_launch_redacts_before_the_cut(self, rw) -> None:
