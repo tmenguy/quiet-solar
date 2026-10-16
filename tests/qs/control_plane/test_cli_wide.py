@@ -27,6 +27,7 @@ EXEMPT = {
     "hook pre-tool-use",
     "hook pre-push",
     "hooks-settings",
+    "review read",  # #407: no DB, no token
 }
 READ = {"session status", "snapshot", "task show", "export-summary", "ledger show"}
 NO_TOKEN_WRITES = {"run open", "run claim"}
@@ -323,6 +324,10 @@ def test_exempt_commands_under_a_newer_db(world, fake_popen, fake_clock) -> None
     sql(world["db"], f"PRAGMA user_version = {NEXT}")
     assert run_cli("version")[0] == 0
     assert run_cli("hooks-settings", "--role", "node")[0] == 0
+    assert run_cli("review", "read", "ls-tree", "--rev", "a" * 40) == (
+        0,
+        {"ok": True, "output": "", "truncated": False, "lossy": False},
+    )
     assert run_cli("hook", "stop", stdin=json.dumps({"session_id": ORCH})) == (0, None)
     pre = {"session_id": ORCH, "tool_name": "Bash", "tool_input": {"command": "gh pr merge 1"}}
     assert run_cli("hook", "pre-tool-use", stdin=json.dumps(pre)) == (0, None)

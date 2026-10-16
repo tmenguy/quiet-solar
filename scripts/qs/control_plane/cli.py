@@ -29,6 +29,7 @@ from . import (
     decisions,
     errors,
     export,
+    gitread,
     hooks,
     items,
     ledger,
@@ -953,6 +954,18 @@ def _ledger_show(args: argparse.Namespace, io: Io) -> dict[str, Any]:
             return ledger.show(conn, args.task, phase=args.phase, states=states, include_family=args.include_family)
 
 
+def _conf_review_read(p: argparse.ArgumentParser) -> None:
+    p.add_argument("op", choices=gitread.OPS)
+    for name in ("base", "head", "rev", "path", "pattern"):
+        p.add_argument(f"--{name}")
+
+
+def _review_read(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    """#407 D6a: a review session reads code through this fixed, read-only git argv (exempt: no DB, no token)."""
+    given = {n: getattr(args, n) for n in ("base", "head", "rev", "path", "pattern") if getattr(args, n) is not None}
+    return gitread.read(io.deps.runner, paths.main(), args.op, given)
+
+
 COMMANDS: dict[str, Command] = {
     c.name: c
     for c in (
@@ -979,6 +992,7 @@ COMMANDS: dict[str, Command] = {
         Command(
             "hooks-settings", "exempt", _hooks_settings, _conf_hooks_settings, help="print a hooks settings fragment"
         ),
+        Command("review read", "exempt", _review_read, _conf_review_read, help="a review's read-only git (fixed argv)"),
         Command("run open", "write", _run_open, _conf_run_open, help="open a run; returns its run token"),
         Command(
             "run claim", "write", _run_claim, _conf_run_claim, help="claim a run's lease (re-claim, take, take over)"

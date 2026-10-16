@@ -64,6 +64,7 @@ MODULES = (
     "export",
     "ledger",
     "alerts",
+    "gitread",
     "reviews",
     "snapshot",
     "ticks",

@@ -96,3 +96,31 @@ class TestProcessSetup:
         )
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.strip() == "True"
+
+
+class TestRunnerDecoding:
+    """#407 T6: ``Runner.run(decode_errors=…)`` — strict by default, surrogateescape or replace on request."""
+
+    CODE = "import sys; sys.stdout.buffer.write(b'a\\xffb')"
+
+    def test_strict_is_the_default(self) -> None:
+        with pytest.raises(UnicodeDecodeError):
+            runner.Runner().run([sys.executable, "-c", self.CODE])
+
+    def test_replace_and_surrogateescape(self) -> None:
+        assert runner.Runner().run([sys.executable, "-c", self.CODE], decode_errors="replace").stdout == "a�b"
+        out = runner.Runner().run([sys.executable, "-c", self.CODE], decode_errors="surrogateescape").stdout
+        assert out.encode("utf-8", "surrogateescape") == b"a\xffb"
+
+    def test_the_fake_records_it(self, fake_runner) -> None:
+        fake_runner.run(["x"], decode_errors="surrogateescape")
+        fake_runner.run(["y"])
+        assert [c.decode_errors for c in fake_runner.calls] == ["surrogateescape", "strict"]
+
+    def test_the_step_runner_forwards_it(self, fake_runner) -> None:
+        from control_plane import tools
+
+        step = tools._StepRunner(fake_runner, "run:R1.1." + "0" * 32)
+        step.run(["git"], decode_errors="surrogateescape")
+        [call] = fake_runner.calls
+        assert call.decode_errors == "surrogateescape" and call.env_remove == ("QS_CP_TOKEN",)
