@@ -64,6 +64,7 @@ MODULES = (
     "export",
     "ledger",
     "alerts",
+    "reviews",
     "snapshot",
     "ticks",
     "activeloop",
@@ -97,6 +98,7 @@ from control_plane import (  # noqa: E402
     migrations,
     paths,
     procsetup,
+    reviews,
     ticks,
     tools,
 )
@@ -401,6 +403,7 @@ def _cp_isolation(
     monkeypatch.setenv("QS_CP_DB", str(tmp_path / "state" / "test_state.db"))
     monkeypatch.setenv("QS_CP_BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setenv("QS_CP_MESSENGER_DIR", str(tmp_path / "messenger"))
+    monkeypatch.setenv("QS_CP_REVIEW_DIR", str(tmp_path / "reviews"))  # #407
     (tmp_path / "state").mkdir()
     # A fake main checkout, identical locally (a linked worktree) and in CI.
     fake_main = tmp_path / "main"
@@ -440,6 +443,7 @@ def _cp_isolation(
         merge_policy.reset()
         tools.reset()
         items.register_item_tools()
+        reviews.register_review_tool()  # #407: `tool review`, whole again for the next test
         export.LEDGER_SECTIONS.clear()
         ledger.register_export()  # #375: the sections cli registers at import, whole again for the next test
 

@@ -45,6 +45,7 @@ TOOL_ARGS: dict[str, dict[str, Any]] = {
     "integrate-start": {},
     "integrate-finish": {},
     "integrate-drop": {},
+    "review": {"kind": "global", "run": "R1"},  # #407: task-less (no --task)
 }
 
 

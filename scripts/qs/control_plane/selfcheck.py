@@ -61,8 +61,8 @@ def _module(name: str) -> Any:
 
 
 def _expected_tools() -> set[str]:
-    tools, items = _module("tools"), _module("items")
-    return set(tools.BUILTIN_NAMES) | {spec.name for spec in items.SPECS}
+    tools, items, reviews = _module("tools"), _module("items"), _module("reviews")
+    return set(tools.BUILTIN_NAMES) | {spec.name for spec in items.SPECS} | {reviews.TOOL_NAME}
 
 
 def _require_registries(tool_names: Any, hook_names: Any) -> None:

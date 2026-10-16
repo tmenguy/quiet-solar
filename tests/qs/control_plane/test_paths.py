@@ -160,13 +160,33 @@ class TestStateDir:
     def test_defaults_are_outside_every_checkout(self, monkeypatch, tmp_path: Path) -> None:
         monkeypatch.delenv("QS_CP_BACKUP_DIR")
         monkeypatch.delenv("QS_CP_MESSENGER_DIR", raising=False)
+        monkeypatch.delenv("QS_CP_REVIEW_DIR", raising=False)
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
         state = (tmp_path / "home" / ".local/state/quiet-solar").resolve()
         assert paths.backup_dir() == state / "cp-backups"
         assert paths.messenger_dir() == state / "cp-messenger"
+        assert paths.review_root() == state / "cp-reviews"  # #407
 
     def test_messenger_env(self, tmp_path: Path) -> None:
         assert paths.messenger_dir() == (tmp_path / "messenger").resolve()
+
+    def test_review_env(self, tmp_path: Path) -> None:
+        assert paths.review_root() == (tmp_path / "reviews").resolve()
+
+    @pytest.mark.parametrize("where", ["main", "code", "worktree"])
+    def test_review_root_inside_a_checkout_is_refused(
+        self, monkeypatch, tmp_path: Path, fake_main: Path, where: str
+    ) -> None:
+        code = tmp_path / "wt-code"
+        monkeypatch.setattr(paths, "code_root", lambda: code)
+        linked = tmp_path / "linked"
+        (fake_main / ".git" / "worktrees" / "QS_9").mkdir(parents=True)
+        (fake_main / ".git" / "worktrees" / "QS_9" / "gitdir").write_text(f"{linked}/.git\n")
+        target = {"main": fake_main / "r", "code": code / "r", "worktree": linked / "r"}[where]
+        monkeypatch.setenv("QS_CP_REVIEW_DIR", str(target))
+        with pytest.raises(errors.CpError) as exc:
+            paths.review_root()
+        assert exc.value.code == "POLICY_REFUSED" and "QS_CP_REVIEW_DIR" in exc.value.payload()["hint"]
 
     @pytest.mark.parametrize("where", ["main", "code", "worktree"])
     def test_refusals_name_the_variable(self, monkeypatch, tmp_path: Path, fake_main: Path, where: str) -> None:
