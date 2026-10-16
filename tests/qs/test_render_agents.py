@@ -1150,6 +1150,7 @@ def test_review_agents_pin_the_contract(tmp_path: Path, stem: str, source: str) 
     assert other not in text
     assert "Read the code only with `review read`, at the shas of your prompt" in text
     assert "`review read diff --base <base_sha> --head <head_sha>`" in text
+    assert "`review read grep --rev <head_sha> --pattern '<regex>'`" in text  # #421: quoted, as the rule says
     assert "Never edit, commit, push, post messages, or call another command or\n  tool" in text
     assert "`STALE_TOKEN`: stop at once" in text
     assert "`NOT_FOUND`: do not retry; drop that read (or the `relates_to`) and\n  continue." in text
@@ -1167,7 +1168,9 @@ def test_review_agents_pin_the_contract(tmp_path: Path, stem: str, source: str) 
             "with `\\` to match it. Pass the pattern in single quotes",
             "(`--pattern 'f(x)'`): unquoted, the shell eats a `\\`, globs a `*` and",
             "fails on a `(`; a pattern holding `'` cannot be single-quoted: pick",
-            "another one. A pattern git cannot compile comes back",
+            "another one. A pattern starting with `-`: use the `=` form,",
+            "`--pattern='--bg'` (with a space, argparse reads `--bg` as an option:",
+            "`USAGE`). A pattern git cannot compile comes back",
             "`NOT_FOUND` with git's message: fix the pattern and retry once (the one",
             "exception to the `NOT_FOUND` rule below).\n\n4. The lens:",
         )

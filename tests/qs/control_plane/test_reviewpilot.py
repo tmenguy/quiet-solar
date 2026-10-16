@@ -675,7 +675,8 @@ class TestCloseDead:
         """#421: a finished session stays listed (``idle`` / ``done``); it no longer keeps the review an hour."""
         review(pw, "running", launch_age=10, session="S-v1")
         call(pw, "succeeded")
-        pw["claude"].listing = [agent("S-v1", **{field: "done"})]  # `state` done, `status` idle: the T13 listing
+        # either field `done` ends it (T13 listed `state` done, `status` idle)
+        pw["claude"].listing = [agent("S-v1", **{field: "done"})]
         assert close(pw) == []
         assert close(pw) == ["V1"] and review_states(pw) == {"V1": "abandoned"}
         assert self._error(pw) == "the review session ended without finishing"

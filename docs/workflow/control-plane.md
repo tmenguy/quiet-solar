@@ -518,7 +518,7 @@ Exempt (no DB, no token), one fixed `git` invocation in the main checkout, on **
 |---|---|---|
 | `diff` | `--base SHA --head SHA [--path P]` | `git diff --no-ext-diff --no-textconv --no-color <base> <head> [-- P]` |
 | `show` | `--rev SHA --path P` | `git cat-file blob <rev>:<P>` |
-| `grep` | `--rev SHA --pattern X [--path P]` | `git -c grep.patternType=basic grep -n --no-color -e <X> <rev> [-- P]` (no match: empty): `<X>` is a basic regex (BRE) whatever the user's git config (#421); the agents pass it single-quoted (`--pattern 'f(x)'`), since it goes through the Bash tool's shell |
+| `grep` | `--rev SHA --pattern X [--path P]` | `git -c grep.patternType=basic grep -n --no-color -e <X> <rev> [-- P]` (no match: empty): `<X>` is a basic regex (BRE) whatever the user's git config (#421); the agents pass it single-quoted (`--pattern 'f(x)'`), since it goes through the Bash tool's shell, and a pattern starting with `-` in the `=` form (`--pattern='--bg'`: with a space, argparse reads it as an option, `USAGE`) |
 | `ls-tree` | `--rev SHA [--path P]` | `git ls-tree -r --name-only <rev> [-- P]` |
 | `files` | `--base SHA --head SHA [--path P]` | `git diff --no-ext-diff --no-textconv --no-color --name-status <base> <head> [-- P]` (the changed files, when a `diff` is `truncated`; a truncated `files` is narrowed with `--path <dir>`) |
 

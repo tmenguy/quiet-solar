@@ -231,7 +231,7 @@ outside `in/`.
 3. Read the code only with `review read`, at the shas of your prompt:
    `review read diff --base <base_sha> --head <head_sha>` for the task's
    own change, `review read show --rev <head_sha> --path <file>`,
-   `review read grep --rev <head_sha> --pattern <regex>`,
+   `review read grep --rev <head_sha> --pattern '<regex>'`,
    `review read ls-tree --rev <head_sha>`. If an answer has
    `truncated: true`, list the changed files with
    `review read files --base <base_sha> --head <head_sha>` and read them
@@ -247,7 +247,9 @@ outside `in/`.
    with `\` to match it. Pass the pattern in single quotes
    (`--pattern 'f(x)'`): unquoted, the shell eats a `\`, globs a `*` and
    fails on a `(`; a pattern holding `'` cannot be single-quoted: pick
-   another one. A pattern git cannot compile comes back
+   another one. A pattern starting with `-`: use the `=` form,
+   `--pattern='--bg'` (with a space, argparse reads `--bg` as an option:
+   `USAGE`). A pattern git cannot compile comes back
    `NOT_FOUND` with git's message: fix the pattern and retry once (the one
    exception to the `NOT_FOUND` rule below).
 

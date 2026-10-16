@@ -42,8 +42,8 @@ def bg_failure(res: runner.RunResult, trust_dir: Path, limit: int) -> str:
 
     The tail is stderr's, else stdout's: what the prefix and the hint leave room for. When the prefix and the hint
     alone exceed ``limit`` (an unusually long ``trust_dir``), the hint shows the folder's end after a leading ``…``:
-    the result is then exactly ``limit`` characters, with no tail. ``limit`` must hold the prefix and the hint's
-    fixed text.
+    the result is then exactly ``limit`` characters, with no tail. Never over ``limit``: when even the prefix and the
+    hint's fixed text do not fit (unreachable at ``ERROR_MAX``), the result is their start, cut at ``limit``.
     """
     head = f"claude --bg exited {res.returncode}"
     output = res.stderr.strip() or res.stdout.strip()
@@ -53,7 +53,7 @@ def bg_failure(res: runner.RunResult, trust_dir: Path, limit: int) -> str:
         hint = "; " + trust_hint("…" + str(trust_dir)[excess + 1 :])
     budget = limit - len(head) - len(": ") - len(hint)
     tail = output[-budget:] if budget > 0 else ""  # the guard matters: `output[-0:]` is the whole output
-    return head + (f": {tail}" if tail else "") + hint
+    return (head + (f": {tail}" if tail else "") + hint)[:limit]  # the head comes first: a last-resort cut keeps it
 
 
 @dataclass(frozen=True)
