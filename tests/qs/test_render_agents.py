@@ -1168,9 +1168,9 @@ def test_review_agents_pin_the_contract(tmp_path: Path, stem: str, source: str) 
             "with `\\` to match it. Pass the pattern in single quotes",
             "(`--pattern 'f(x)'`): unquoted, the shell eats a `\\`, globs a `*` and",
             "fails on a `(`; a pattern holding `'` cannot be single-quoted: pick",
-            "another one. A pattern starting with `-`: use the `=` form,",
-            "`--pattern='--bg'` (with a space, argparse reads `--bg` as an option:",
-            "`USAGE`). A pattern git cannot compile comes back",
+            "another one. A `--pattern` or `--path` value starting with `-`: use the",
+            "`=` form (`--pattern='--bg'`, `--path=-x`): with a space, argparse reads",
+            "it as an option (`USAGE`). A pattern git cannot compile comes back",
             "`NOT_FOUND` with git's message: fix the pattern and retry once (the one",
             "exception to the `NOT_FOUND` rule below).\n\n4. The lens:",
         )

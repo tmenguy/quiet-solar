@@ -827,7 +827,9 @@ class TestIdentifyAndFailures:
         assert code == 1 and out["detail"].endswith(row["error"])
 
     def test_a_failed_launch_untrusted_with_a_long_review_dir(self, rw, monkeypatch, tmp_path: Path) -> None:
-        monkeypatch.setenv("QS_CP_REVIEW_DIR", str(tmp_path / ("d" * 200) / ("e" * 200) / "reviews"))
+        tail = Path(*["d" * 200] * (reviews.ERROR_MAX // 200), "e" * 200, "reviews")  # components <= 255
+        assert len(str(tail)) > reviews.ERROR_MAX  # long enough whatever `tmp_path` is (CI's is short)
+        monkeypatch.setenv("QS_CP_REVIEW_DIR", str(tmp_path / tail))
         rw["launch"]["exit"] = 1
         rw["launch"]["stderr"] = "Workspace not trusted. Run claude in /x once and accept the trust prompt"
         code, out = global_r1(rw)

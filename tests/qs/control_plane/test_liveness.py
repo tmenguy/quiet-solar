@@ -147,13 +147,13 @@ class TestBgFailure:
             "claude --bg exited 1; " + liveness.trust_hint(self.D)
         )
 
-
     @pytest.mark.parametrize("limit", [40, 15])
     def test_never_over_a_tiny_limit(self, limit: int) -> None:
         """Under the prefix and the hint's fixed text (unreachable at ``ERROR_MAX``): the head, cut at ``limit``."""
         refused = liveness.bg_failure(self._res(err=self.REFUSAL + "tail"), self.D, limit)
         assert refused == ("claude --bg exited 1; the folder is not trusted")[:limit]
         assert liveness.bg_failure(self._res(err="boom"), self.D, 15) == "claude --bg exi"  # the prefix alone
+
 
 class TestClaudeCli:
     def test_agents_from_a_fake_executable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
