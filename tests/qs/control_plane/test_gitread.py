@@ -34,6 +34,12 @@ class TestArgv:
             ("grep", {"rev": A, "pattern": "x", "path": "d"}, ["grep", "-n", "--no-color", "-e", "x", A, "--", "d"]),
             ("ls-tree", {"rev": A}, ["ls-tree", "-r", "--name-only", A]),
             ("ls-tree", {"rev": A, "path": "-p"}, ["ls-tree", "-r", "--name-only", A, "--", "-p"]),
+            ("ls-tree", {"rev": "f" * 64}, ["ls-tree", "-r", "--name-only", "f" * 64]),  # a SHA-256 object name
+            (
+                "files",
+                {"base": A, "head": B},
+                ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--name-status", A, B],
+            ),
         ],
     )
     def test_each_op_is_one_fixed_argv(self, fake_main: Path, op: str, given: dict[str, str], tail: list[str]) -> None:
@@ -55,7 +61,10 @@ class TestArgv:
             ("ls-tree", {"rev": "-O"}),
             ("ls-tree", {"rev": "abc"}),  # too short
             ("ls-tree", {"rev": "A" * 40}),  # upper case
-            ("ls-tree", {"rev": "a" * 41}),
+            ("ls-tree", {"rev": "a" * 65}),
+            ("files", {"base": A}),  # missing --head
+            ("files", {"base": A, "head": B, "path": "x"}),  # not taken
+            ("files", {"base": "HEAD", "head": B}),
             ("ls-tree", {"rev": f"{A}\n"}),
             ("show", {"rev": A, "path": "../secret"}),
             ("show", {"rev": A, "path": "/etc/passwd"}),
@@ -79,16 +88,37 @@ class TestRead:
         [call] = fake_runner.calls
         assert call.cwd == str(fake_main) and call.timeout == gitread.READ_TIMEOUT_S
         assert call.env_extra == {"GIT_CONFIG_NOSYSTEM": "1", "GIT_PAGER": "cat"}
-        assert call.env_remove == ("GIT_EXTERNAL_DIFF",) and call.decode_errors == "surrogateescape"
+        assert call.env_remove == gitread.ENV_REMOVED and call.decode_errors == "surrogateescape"
+        assert set(call.env_remove) == {
+            "GIT_EXTERNAL_DIFF",
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_NAMESPACE",
+            "GIT_COMMON_DIR",
+        }
 
     def test_truncation_cuts_on_bytes(self, fake_runner, fake_main: Path, monkeypatch) -> None:
         monkeypatch.setattr(gitread, "READ_MAX_BYTES", 4)
         fake_runner.on(["cat-file"], RunResult(0, "ééé", ""))  # 6 bytes
         out = gitread.read(fake_runner, fake_main, "show", {"rev": A, "path": "f"})
         assert out == {"output": "éé", "truncated": True, "lossy": False}
-        fake_runner.on(["cat-file"], RunResult(0, "aéé", ""))  # the cut splits a character: replaced, not lossy
+        fake_runner.on(["cat-file"], RunResult(0, "aéé", ""))  # the cut splits a character: it backs off to it
         out = gitread.read(fake_runner, fake_main, "show", {"rev": A, "path": "f"})
-        assert out == {"output": "aé�", "truncated": True, "lossy": False}
+        assert out == {"output": "aé", "truncated": True, "lossy": False}
+        fake_runner.on(["cat-file"], RunResult(0, "ab€", ""))  # a 3-byte character split after 2 of its bytes
+        assert gitread.read(fake_runner, fake_main, "show", {"rev": A, "path": "f"})["output"] == "ab"
+
+    def test_lossy_only_over_the_bytes_kept(self, fake_runner, fake_main: Path, monkeypatch) -> None:
+        monkeypatch.setattr(gitread, "READ_MAX_BYTES", 4)
+        fake_runner.on(["cat-file"], RunResult(0, b"abcd\xff".decode("utf-8", "surrogateescape"), ""))
+        out = gitread.read(fake_runner, fake_main, "show", {"rev": A, "path": "f"})
+        assert out == {"output": "abcd", "truncated": True, "lossy": False}  # the bad byte is past the cut
+        fake_runner.on(["cat-file"], RunResult(0, b"a\xffcde".decode("utf-8", "surrogateescape"), ""))
+        out = gitread.read(fake_runner, fake_main, "show", {"rev": A, "path": "f"})
+        assert out == {"output": "a�cd", "truncated": True, "lossy": True}
 
     def test_lossy_on_a_byte_that_is_not_utf8(self, fake_runner, fake_main: Path) -> None:
         fake_runner.on(["cat-file"], RunResult(0, b"a\xffb".decode("utf-8", "surrogateescape"), ""))
@@ -118,6 +148,13 @@ class TestCommand:
         code, out = run_cli("review", "read", "show", "--rev", A, "--path", "src/a.py")
         assert code == 0 and out == {"ok": True, "output": "print(1)\n", "truncated": False, "lossy": False}
         assert fake_runner.calls[-1].argv == [*_git(fake_main), "cat-file", "blob", f"{A}:src/a.py"]
+
+    def test_files_through_the_cli(self, fake_runner, fake_main: Path) -> None:
+        fake_runner.on(["diff"], RunResult(0, "M\ta.py\n", ""))
+        code, out = run_cli("review", "read", "files", "--base", A, "--head", B)
+        assert code == 0 and out["output"] == "M\ta.py\n"
+        assert fake_runner.calls[-1].argv[-3:] == ["--name-status", A, B]
+        assert run_cli("review", "read", "files", "--base", A)[1]["error"] == "USAGE"
 
     def test_refusals_through_the_cli(self, fake_runner) -> None:
         assert run_cli("review", "read", "log", "--rev", A)[1]["error"] == "USAGE"  # not an op
@@ -150,6 +187,7 @@ class TestCommand:
         assert gitread.read(real, repo, "show", {"rev": head[:7], "path": "a.py"})["output"] == "x = 2\n"
         assert gitread.read(real, repo, "grep", {"rev": head, "pattern": "x ="})["output"] == f"{head}:a.py:1:x = 2\n"
         assert gitread.read(real, repo, "ls-tree", {"rev": head})["output"] == "a.py\nbin.dat\n"
+        assert gitread.read(real, repo, "files", {"base": base, "head": head})["output"] == "M\ta.py\nA\tbin.dat\n"
         binary = gitread.read(real, repo, "show", {"rev": head, "path": "bin.dat"})
         assert binary["lossy"] is True and binary["output"].endswith("z")
         with pytest.raises(errors.CpError) as exc:

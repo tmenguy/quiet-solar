@@ -267,6 +267,14 @@ class TestLauncher:
         )
         assert row["grant_nonce"] not in (directory / "launcher.log").read_text()
 
+    def test_a_relative_db_path_reaches_the_launcher_absolute(self, pw, monkeypatch) -> None:
+        monkeypatch.chdir(pw["db"].parent)
+        monkeypatch.setenv("QS_CP_DB", pw["db"].name)
+        cross(pw)
+        tick(pw)
+        [(_, kw)] = pw["popen"].calls
+        assert kw["env"]["QS_CP_DB"] == str(pw["db"].resolve())
+
     def test_the_venv_python(self, pw) -> None:
         venv = pw["main"] / "venv" / "bin"
         venv.mkdir(parents=True)
@@ -333,6 +341,46 @@ class TestRetry:
         tick(pw)
         assert [t[1:] for t in triggers(pw)] == [("created", "V1"), ("created", "V2")]
         assert len(pw["popen"].calls) == 2
+
+    def test_a_malformed_pilot_row_stops_nothing(self, pw) -> None:
+        for key, actor, outcome in (
+            ("pilot:foo", reviewpilot.ACTOR, "created"),  # no attempt number
+            ("pilot:bad:x", reviewpilot.ACTOR, "queued"),
+            ("PILOT:junk:1", "orchestrator", "queued"),  # not the pilot's: the scans are exact and case-sensitive
+        ):
+            sql(
+                pw["db"],
+                "INSERT INTO review_triggers (actor, \"trigger\", tool_key, outcome, at) VALUES (?, '{}', ?, ?, 'x')",
+                [actor, key, outcome],
+            )
+        cross(pw)
+        tick(pw)
+        assert review_states(pw) == {"V1": "requested"} and len(pw["popen"].calls) == 1
+        sql(pw["db"], "UPDATE reviews SET state = 'failed'")
+        tick(pw)
+        assert review_states(pw) == {"V1": "failed", "V2": "requested"} and len(pw["popen"].calls) == 2
+        assert [t[:2] for t in triggers(pw)][:3] == [
+            ("pilot:foo", "created"),
+            ("pilot:bad:x", "queued"),
+            ("PILOT:junk:1", "queued"),
+        ]
+
+    def test_a_bad_alert_payload_stops_nothing(self, pw) -> None:
+        for n, payload in enumerate(("[]", "x", "null")):
+            sql(
+                pw["db"],
+                "INSERT INTO alerts (run_id, kind, subject, fingerprint, payload, first_seen, last_seen)"
+                " VALUES ('R1', ?, ?, ?, ?, 'x', 'x')",
+                [alerts.OVERLAP_CROSS_RUN, f"bad{n}", f"bad{n}", payload],
+            )
+        cross(pw)
+        tick(pw)
+        assert review_states(pw) == {"V1": "requested"} and len(pw["popen"].calls) == 1
+        assert [t[1] for t in triggers(pw)].count("skipped") == 3  # the bad groups: no task, nothing to review
+
+    def test_payload_decoding(self) -> None:
+        assert reviewpilot._payload(None) == {} and reviewpilot._payload("[1]") == {}
+        assert reviewpilot._payload("{") == {} and reviewpilot._payload('{"tasks": ["T1"]}') == {"tasks": ["T1"]}
 
     def test_an_abandoned_review_is_not_retried(self, pw) -> None:
         cross(pw)
@@ -500,6 +548,44 @@ class TestCloseDead:
         pw["clock"].advance(30)
         assert close(pw) == ["V1"]
         assert sql(pw["db"], "SELECT error FROM reviews")[0][0] == "the launcher died"
+
+    def _dead_launcher_after_its_launch(self, pw) -> None:
+        review(pw, "launching", age=61, launch_age=61)
+        call(pw, "started")
+        pw["probe"].kill(4242)
+
+    def test_a_dead_launcher_whose_session_is_listed_is_adopted(self, pw) -> None:
+        self._dead_launcher_after_its_launch(pw)
+        pw["claude"].listing = [agent("S-n", "n", id="short-n")]
+        assert close(pw) == [] and review_states(pw) == {"V1": "running"} and failed_alerts(pw) == []
+        row = dict(sql(pw["db"], "SELECT session_id, short_id FROM reviews")[0])
+        assert row == {"session_id": "S-n", "short_id": "short-n"}
+
+    def test_a_dead_launcher_whose_session_is_not_listed_fails(self, pw) -> None:
+        self._dead_launcher_after_its_launch(pw)
+        pw["claude"].listing = [agent("S-other", "other")]
+        assert close(pw) == ["V1"] and review_states(pw) == {"V1": "failed"}
+
+    def test_a_dead_launcher_under_a_failed_listing_waits_for_the_ttl(self, pw) -> None:
+        self._dead_launcher_after_its_launch(pw)
+        pw["claude"].listing = None
+        assert close(pw) == [] and review_states(pw) == {"V1": "launching"}
+        pw["clock"].advance(schema_reviews.REQUEST_TTL_S)
+        assert close(pw) == ["V1"]
+        assert sql(pw["db"], "SELECT error FROM reviews")[0][0] == "the launch timed out"
+
+    def test_the_adoption_is_guarded(self, pw, monkeypatch) -> None:
+        self._dead_launcher_after_its_launch(pw)
+        pw["claude"].listing = [agent("S-n", "n", id="short-n")]
+        real = daemon.beat
+
+        def finish_meanwhile(conn: Any, clock: Any) -> None:
+            sql(pw["db"], "UPDATE reviews SET state = 'finished'")
+            real(conn, clock)
+
+        monkeypatch.setattr(daemon, "beat", finish_meanwhile)
+        assert close(pw) == [] and review_states(pw) == {"V1": "finished"}
+        assert sql(pw["db"], "SELECT session_id FROM reviews")[0][0] is None
 
     def test_a_live_holder_until_the_request_ttl(self, pw) -> None:
         review(pw, "launching", age=schema_reviews.REQUEST_TTL_S - 1)  # launch_at NULL: since = updated_at

@@ -205,12 +205,13 @@ launch prompt's `<python> <MAIN>/scripts/qs/cp.py`:
 | `snapshot --run <R>` | a run: its `global_plan`, decisions, reports, `alerts` |
 | `task show --task <T>` | one task: digest, criteria, ledger, convergence |
 | `ledger show --task <T> --family --state open,rejected,settled,deferred` | what was already raised |
-| `review read diff\|show\|grep\|ls-tree …` | the code, at the shas of your prompt |
+| `review read diff\|show\|grep\|ls-tree\|files …` | the code, at the shas of your prompt |
 | `finding open … --token <token>` | your findings, one call per task |
 | `review finish --input <file> --token <token>` | your hand-back, once |
 
-**The command form.** Your permissions are a pinned allowlist: anything
-else is denied without a prompt.
+**The command form.** Use only these six commands, and `Read` / `Write`
+inside your `in/` directory; never run anything else, never edit a file
+outside `in/`.
 
 - One command per Bash call: no pipe, no `&&`, no `;`, no redirect, no
   `$(…)` or backticks, no environment prefix, no heredoc.
@@ -223,15 +224,20 @@ else is denied without a prompt.
 
 1. Read `snapshot --run <R>` for each run of the scope (its
    `runs.global_plan`, decisions, reports, `alerts`), then
-   `task show --task <T>` for each scope task.
+   `task show --task <T>` for each scope task. A task whose run is `-`
+   has no run: skip `snapshot --run` for it.
 2. Read `ledger show --task <T> --family --state open,rejected,settled,deferred`
    and raise nothing already there: point at it with `relates_to` instead.
 3. Read the code only with `review read`, at the shas of your prompt:
    `review read diff --base <base_sha> --head <head_sha>` for the task's
    own change, `review read show --rev <head_sha> --path <file>`,
    `review read grep --rev <head_sha> --pattern <regex>`,
-   `review read ls-tree --rev <head_sha>`. Never assume a working tree:
-   you have none. A task with no head (`head_state` `plan` or
+   `review read ls-tree --rev <head_sha>`. If an answer has
+   `truncated: true`, list the changed files with
+   `review read files --base <base_sha> --head <head_sha>` and read them
+   one by one with `--path`. A task whose `base_sha` is `-` has no merge
+   base: read it with `ls-tree` / `show` at `head_sha`. Never assume a
+   working tree: you have none. A task with no head (`head_state` `plan` or
    `unresolved`) is reviewed from its plan (digest, criteria).
 4. The lens:
 [% if kind == "global" %]
@@ -277,6 +283,9 @@ else is denied without a prompt.
 - `USAGE` from `finding open` or `review finish`: fix the input and
   retry, at most twice.
 - `CONFLICT`: do not retry that item; mention it in your summary.
+- `NOT_FOUND`: do not retry; drop that read (or the `relates_to`) and
+  continue.
+- `INTERNAL`: retry once, then note it in your summary.
 - `STALE_TOKEN`: stop at once — the review is closed or superseded.
 
 ## Hard rules

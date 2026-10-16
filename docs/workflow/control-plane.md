@@ -79,7 +79,7 @@ Kinds:
 | `hook stop` / `hook pre-tool-use` | stdin: hook JSON | — | exempt |
 | `hook pre-push` | git's args and stdin | (`QS_CP_TOKEN`) | exempt |
 | `hooks-settings` | `--role node\|orchestrator` | — | exempt |
-| `review read` | `diff --base SHA --head SHA [--path P]` / `show --rev SHA --path P` / `grep --rev SHA --pattern X [--path P]` / `ls-tree --rev SHA [--path P]` (#407: a review's only code read, a fixed git argv on hex shas) | — | exempt |
+| `review read` | `diff --base SHA --head SHA [--path P]` / `show --rev SHA --path P` / `grep --rev SHA --pattern X [--path P]` / `ls-tree --rev SHA [--path P]` / `files --base SHA --head SHA` (#407: a review's only code read, a fixed git argv on hex shas) | — | exempt |
 | `session status` | `[--session-id]` | — | read |
 | `snapshot` | `[--run R]` | — | read |
 | `task show` | `--task T` (the task in full, its ledger and `convergence` included) | — | read |
@@ -461,7 +461,7 @@ Outside its valid states a token is `STALE_TOKEN`, with `instructions` "This rev
 | grant of V7, key `K` with `reviews.tool_key == "review/K"` | `{"review": "V7"}` | launch |
 | grant of V7 with another key or other args; a session or node token | | `CONFLICT` |
 
-A missing or unknown `kind`, a missing `run`, an unknown argument or a non-object `trigger` is `USAGE`. Every refusal comes from `authorize`, before the claim.
+A missing or unknown `kind`, a missing `run`, an unknown argument or a non-object `trigger` is `USAGE`, and so is a run token's key starting with `pilot:` in any case (`schema_reviews.PILOT_PREFIX`: reserved for the review pilot's queue). Every refusal comes from `authorize`, before the claim.
 
 **The scope** (`reviews.request_locked`, shared with the pilot):
 
@@ -480,7 +480,7 @@ So after a running review closes, **one** new review of the latest heads starts,
 1. `reserve` (one transaction). Run token: `request_locked` (skip, join, `BUSY`, or a new row `launching` with its session nonce). Grant: `requested → launching`, minting the session nonce; a row already `launching` under this key is a takeover and re-mints nothing.
 2. `prepare`: stamps `heads_at` first (guarded; from that instant a trigger defers), then captures each pending scope task's base and head **once**, in `<MAIN>` (see below), resolves `(model, effort)` through `Ctx.resolve_model(<agent>, None)` (the agent's own policy class: a review spans lanes), creates the private directory and copies `<MAIN>/.claude/agents/<agent>.md` into it (missing → "render the agents on main").
 3. `launch`: stamps `launch_at`, then `claude --bg --agent <agent> -n qs-review-<db tag>-V<n> --model M <permission args> --settings '<settings>' "<prompt>"`, its cwd the review directory, `QS_CP_TOKEN` and the session identity removed.
-4. `identify`: the listing by name, until `launch_at + LAUNCH_SETTLE_S`.
+4. `identify`: the listing by name, until `launch_at + LAUNCH_SETTLE_S`, re-reading the review on every poll: a review already `finished` (a quick session that exited before it was ever listed) ends the step successfully; `failed` / `abandoned` fails it.
 
 Steps 2–4 are noops after a skip or a join. **Any failure** of `prepare`, `launch` or `identify` (never listed included) first moves the review to `failed` (a guarded `UPDATE … WHERE state IN ('requested', 'launching')`, with `error`) and, when the row moved, posts `review_failed` to each open run of its scope; the call is then `TOOL_FAILED`: the key is spent, the coalesce key free, the session token void. A replayed key never launches again: the probe reports the launch done whenever `launch_at` is set, and a takeover of a dead holder only finishes `identify` against the original deadline. `on_success` moves `launching → running` and records the session; on a row already `finished` (the session finished while the launcher was identifying) it records only the session id and the answer carries that state. The answer: `{review_id, kind, name, session_id, state, tasks: [{task_id, run_id, base_sha, head_sha, head_state}]}`, never a token.
 
@@ -488,7 +488,7 @@ Steps 2–4 are noops after a skip or a join. **Any failure** of `prepare`, `lau
 
 | the task | `head_sha` | `base_sha` | `head_state` |
 |---|---|---|---|
-| `merge_sha` set (hex) and present locally | `merge_sha` | its first parent | `merged` |
+| `merge_sha` set (hex, lower-cased first) and present locally | `merge_sha` | its first parent | `merged` |
 | a branch that resolves | its tip | a work item: the merge base with its deliverable's branch, when that resolves; else the merge base with `<main base>` | `branch` |
 | a branch that does not resolve | `NULL` | `NULL` | `unresolved` |
 | no branch | `NULL` | `NULL` | `plan` (the review covers its plan) |
@@ -501,14 +501,14 @@ In a **private directory outside every checkout**: `QS_CP_REVIEW_DIR` (default `
 
 **Permissions** (`reviews.REVIEW_PERMISSION_MODE`, `dontAsk`; `auto` is the fallback, both built by `reviews.launch_args`):
 
-- `dontAsk`: `--permission-mode dontAsk --allowedTools=<list>` (one word), the list being `Read(/<dir>/in/**)`, `Write(/<dir>/in/**)` (the absolute-path form: `in` = `/x/V1/in` gives `Read(//x/V1/in/**)`) and `Bash(<python> <MAIN>/scripts/qs/cp.py <cmd>:*)` for exactly `snapshot`, `task show`, `ledger show`, `review read`, `finding open`, `review finish` (`<python>` is `<MAIN>/venv/bin/python`, else the launcher's interpreter). A path with whitespace or a shell metacharacter fails the review (`POLICY_REFUSED`): the unquoted pinned form would stop matching.
+- `dontAsk`: `--permission-mode dontAsk --allowedTools=<list>` (one word), the list being `Read(/<dir>/in/**)`, `Write(/<dir>/in/**)` (the absolute-path form: `in` = `/x/V1/in` gives `Read(//x/V1/in/**)`) and `Bash(<python> <MAIN>/scripts/qs/cp.py <cmd>:*)` for exactly `snapshot`, `task show`, `ledger show`, `review read`, `finding open`, `review finish` (`<python>` is `<MAIN>/venv/bin/python`, else the launcher's interpreter). A path with whitespace, a `,` (the rule separator) or a shell metacharacter fails the review (`POLICY_REFUSED`): the unquoted pinned form would stop matching. Any other character, non-ASCII included, is kept verbatim.
 - `auto`: `--permission-mode auto --disallowedTools=Edit,NotebookEdit`.
 
-`--settings` is the node hook fragment (its `PreToolUse` DB-access deny applies to any session), the policy's `effortLevel`, and `"env": {"QS_CP_DB": "<the launcher's DB, resolved>"}`, so the session's `cp.py` calls open the same DB as the launcher. The prompt carries the facts: review id and kind, the scope (task, run, title, branch, `base_sha`, `head_sha`, `head_state`), the exact `cp.py` prefix, the `in/` directory, the session token, the deadline (`launch_at + REVIEW_TTL_S`). The agents pin the command form: one command per Bash call, no pipe, `&&`, `;`, redirect, `$(…)`, environment prefix or heredoc; `--token` only on the two writes.
+`--settings` is the node hook fragment (its `PreToolUse` DB-access deny applies to any session), the policy's `effortLevel`, and `"env": {"QS_CP_DB": "<the launcher's DB, resolved>"}`, so the session's `cp.py` calls open the same DB as the launcher. The prompt carries the facts: review id and kind, the scope (task, run, title, branch, `base_sha`, `head_sha`, `head_state`), the exact `cp.py` prefix, the `in/` directory, the session token, the deadline (`launch_at + REVIEW_TTL_S`); a task with no run shows `-` as its run. The agents pin the command form: one command per Bash call, no pipe, `&&`, `;`, redirect, `$(…)`, environment prefix or heredoc; `--token` only on the two writes.
 
 ### Reading code: `review read`
 
-Exempt (no DB, no token), one fixed `git` invocation in the main checkout, on **hex shas only** (7 to 40 characters: a ref or a leading `-` is `USAGE`), with `-c core.pager=cat -c diff.external=`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_PAGER=cat`, `GIT_EXTERNAL_DIFF` unset and a timeout:
+Exempt (no DB, no token), one fixed `git` invocation in the main checkout, on **hex shas only** (lower case, 7 to 64 characters, `gitread.SHA_RE`, the same check as the capture's: a ref or a leading `-` is `USAGE`), with `-c core.pager=cat -c diff.external=`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_PAGER=cat`, `GIT_EXTERNAL_DIFF` and the inherited repository location (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_NAMESPACE`, `GIT_COMMON_DIR`; `gitread.ENV_REMOVED`, removed from the capture's git too) unset and a timeout:
 
 | op | arguments | runs |
 |---|---|---|
@@ -516,8 +516,9 @@ Exempt (no DB, no token), one fixed `git` invocation in the main checkout, on **
 | `show` | `--rev SHA --path P` | `git cat-file blob <rev>:<P>` |
 | `grep` | `--rev SHA --pattern X [--path P]` | `git grep -n --no-color -e <X> <rev> [-- P]` (no match: empty) |
 | `ls-tree` | `--rev SHA [--path P]` | `git ls-tree -r --name-only <rev> [-- P]` |
+| `files` | `--base SHA --head SHA` | `git diff --no-ext-diff --no-textconv --no-color --name-status <base> <head>` (the changed files, when a `diff` is `truncated`) |
 
-A missing or extra argument for the op is `USAGE`; `P` goes through the ledger's path normalisation. No other git option can be passed. The answer is `{"ok": true, "output", "truncated", "lossy"}`: the output is decoded with `surrogateescape` (`Runner.run(decode_errors=…)`), `lossy` when a byte was not UTF-8, cut at `READ_MAX_BYTES` (on bytes), and printed with `errors="replace"`. A failed git is `NOT_FOUND` (exit 128: a bad object or path) or `INTERNAL`.
+A missing or extra argument for the op is `USAGE`; `P` goes through the ledger's path normalisation. No other git option can be passed. The answer is `{"ok": true, "output", "truncated", "lossy"}`: the output is decoded with `surrogateescape` (`Runner.run(decode_errors=…)`), cut at `READ_MAX_BYTES` (on bytes, backing off to a UTF-8 boundary: a character the cut splits is dropped), and printed with `errors="replace"`; `lossy` when a byte kept was not UTF-8. A failed git is `NOT_FOUND` (exit 128: a bad object or path) or `INTERNAL`.
 
 ### `review finish`: the hand-back
 
@@ -539,7 +540,7 @@ The tick hook `review_pilot` (after `detectors`, before `hook_route`; every `PIL
 
 1. **Reap** the launcher processes that finished (`poll()`).
 2. **Close dead reviews** (read, probe, beat, write). Each move is a guarded `UPDATE … WHERE id = ? AND state = <the state read> AND <its condition, re-evaluated in SQL>`, and posts one `review_failed` one-shot alert (subject `review:V<n>:<state>`, payload `{review_id, kind, state, error, finding_ids}`) to each open run of the scope, only when the row moved. With `since = COALESCE(launch_at, updated_at)`:
-   - `requested` / `launching` whose launcher's call is `failed`, or `started` by a dead holder with `since` older than `LAUNCH_SETTLE_S`, or `requested` with no call row `PILOT_RETRY_S` after `created_at` (the launcher never started), or `since` older than `REQUEST_TTL_S` (a hung launcher) → `failed`;
+   - `requested` / `launching` whose launcher's call is `failed`, or `started` by a dead holder with `since` older than `LAUNCH_SETTLE_S`, or `requested` with no call row `PILOT_RETRY_S` after `created_at` (the launcher never started), or `since` older than `REQUEST_TTL_S` (a hung launcher) → `failed`. **Adoption:** a `launching` review with `launch_at` set (its `claude --bg` ran) whose session the listing shows by name is not failed but moved to `running` with its `session_id` / `short_id` (a guarded `UPDATE … WHERE state = 'launching' AND launch_at IS NOT NULL`, no alert): the launcher died after the launch, the session lives. The listing is taken for such a review too; under a failed listing a dead launcher does not fail it early, only `REQUEST_TTL_S` does;
    - `running` with `launch_at` older than `REVIEW_TTL_S`, or whose session is absent from `LIVENESS_CONFIRM` successful listings in a row → `abandoned`. The listing is taken only while a review runs; a failed listing changes nothing; the count lives in memory and starts cold.
 
    No `claude stop`: a dead or late session's token is void.
@@ -553,7 +554,7 @@ The tick hook `review_pilot` (after `detectors`, before `hook_route`; every `PIL
    <MAIN>/venv/bin/python <MAIN>/scripts/qs/cp.py tool review --key pilot:<event>:<n> --args-file <dir>/args.json --token review:V<n>.0.<grant>
    ```
 
-   (`start_new_session`, stdin closed, output to `launcher.log`, cwd `<MAIN>`, the environment through `daemon.strip_env`, so `QS_CP_DB` is kept). Any failure there moves the review to `failed`. With no `popen` seam the pilot requests nothing (logged once).
+   (`start_new_session`, stdin closed, output to `launcher.log`, cwd `<MAIN>`, the environment through `daemon.strip_env`, with `QS_CP_DB` set to the daemon's DB, resolved: a relative path would name another file from `<MAIN>`). Any failure there moves the review to `failed`. With no `popen` seam the pilot requests nothing (logged once).
 
 **The retry** (Q7, maintainer 2026-10-16): an event whose latest attempt's review ended **`failed`** (the launch failed: nothing ran) gets attempt `n + 1`, a new row, while `n < PILOT_ATTEMPTS`; merge events too, whatever the cursor. A review that ended **`abandoned`** (it ran, then died or expired) is not retried: its `review_failed` alert tells the orchestrators and the maintainer, who decide.
 
@@ -893,7 +894,8 @@ Most are overridable by a function argument. These are module-level only (tests 
 - **The inbox socket is unused.** The messaging socket and its token (`CLAUDE_CODE_MESSAGING_*`) are visible to Bash-tool commands and `SessionStart` hooks; the Control Plane never stores or reads them, and `ensure` strips them (with the session identity) from the daemon's environment, as the watchdog does from the messenger's.
 - **The self-check and a broken version.** A Control Plane version that cannot start the daemon keeps merges closed (`stuck` after `PENDING_ESCALATE_S`); if it also carries a migration, write commands answer `SCHEMA_PENDING`. Revert the code.
 - **A review's token is visible** (#407). The Control Plane writes no review token to a file of its own, but the session token is in the `claude --bg` argv (visible in `ps`, as a node's is) and in Claude Code's own session transcripts, and the launch grant is in the launcher's argv. The threat model is unchanged (agent mistakes, not adversarial sessions); a recorded error is redacted, `launcher.log` never holds a nonce, and `snapshot` strips both nonces.
-- **The `dontAsk` allowlist is a guard, not a sandbox.** It pins the six `cp.py` commands and `Read` / `Write` in `in/`; the bypass forms (`> file`, `;`, `$(…)`, backticks) are meant to be denied without a prompt, which the post-merge live check of #407 (T13) verifies. If `dontAsk` fails there, `REVIEW_PERMISSION_MODE = "auto"` is the built-in fallback.
-- **The DB a review talks to** is the launcher's: `--settings` carries `env.QS_CP_DB`, and the pilot's launcher inherits the daemon's environment (`strip_env` keeps `QS_CP_DB`).
+- **The `dontAsk` allowlist is a guard, not a sandbox.** It pins the six `cp.py` commands and `Read` / `Write` in `in/`; the bypass forms (`> file`, `;`, `$(…)`, backticks) are meant to be denied without a prompt, which the post-merge live check of #407 (T13) verifies. If `dontAsk` fails there, `REVIEW_PERMISSION_MODE = "auto"` is the built-in fallback. The agents' own rule ("use only these six commands …") holds in both modes.
+- **The allowlist's path limit.** The main checkout, the interpreter and the review directory are pinned unquoted: a path holding whitespace, a `,` (it separates the `--allowedTools` rules) or a shell metacharacter (a quote, `\`, `$`, a backtick, or one of `;&|<>(){}[]*?!#~`) cannot be pinned, and every review fails `POLICY_REFUSED` at launch. Move the checkout, or set `QS_CP_REVIEW_DIR` to a plain path. Non-ASCII letters are fine.
+- **The DB a review talks to** is the launcher's: `--settings` carries `env.QS_CP_DB`, and the pilot's launcher gets the daemon's DB as an absolute `QS_CP_DB`.
 - **The review pilot's merge rule** sees only overlaps the detector saw (an `overlap_cross_run` row, open or cleared).
 - **Review directories are kept** (they are small): delete old ones by hand, like the `v<N>` backups.

@@ -1,6 +1,6 @@
 """``cp.py review read`` (#407 D6a): a review session's only way to read code — git, read-only, fixed argv.
 
-Four ops, each one fixed ``git`` invocation in the main checkout, on hex shas only (the session's prompt
+Five ops, each one fixed ``git`` invocation in the main checkout, on hex shas only (the session's prompt
 gives every ``base_sha`` / ``head_sha``, so no moving ref is needed):
 
 ==========  ==========================================  =====================================================
@@ -10,38 +10,50 @@ op          arguments                                   runs
 ``show``    ``--rev SHA --path P``                      ``git cat-file blob <rev>:<P>``
 ``grep``    ``--rev SHA --pattern X [--path P]``        ``git grep -n --no-color -e <X> <rev> [-- P]``
 ``ls-tree`` ``--rev SHA [--path P]``                    ``git ls-tree -r --name-only <rev> [-- P]``
+``files``   ``--base SHA --head SHA``                   ``git diff … --name-status <base> <head>``
 ==========  ==========================================  =====================================================
 
 No other git option can be passed. Exempt: no DB, no token. The output is decoded with
-``surrogateescape`` (``lossy`` when a byte was not UTF-8), cut at ``READ_MAX_BYTES``, then printed with
-``errors="replace"``.
+``surrogateescape``, cut at ``READ_MAX_BYTES`` (backing off to a UTF-8 boundary), then printed with
+``errors="replace"``; ``lossy`` when a kept byte was not UTF-8.
 """
 
 from __future__ import annotations
 
+import codecs
 import re
 from pathlib import Path
 from typing import Any
 
 from . import errors, ledger, runner
 
-OPS = ("diff", "show", "grep", "ls-tree")
+OPS = ("diff", "show", "grep", "ls-tree", "files")
 READ_MAX_BYTES = 262144  # 256 KiB
 READ_TIMEOUT_S = 60.0
-_SHA = re.compile(r"[0-9a-f]{7,40}")
+SHA_RE = re.compile(r"[0-9a-f]{7,64}")  # the one sha check (``reviews`` uses it too): SHA-1 or SHA-256
 _NEEDS: dict[str, tuple[frozenset[str], frozenset[str]]] = {  # op → (required, optional) arguments
     "diff": (frozenset({"base", "head"}), frozenset({"path"})),
     "show": (frozenset({"rev", "path"}), frozenset()),
     "grep": (frozenset({"rev", "pattern"}), frozenset({"path"})),
     "ls-tree": (frozenset({"rev"}), frozenset({"path"})),
+    "files": (frozenset({"base", "head"}), frozenset()),
 }
 ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_PAGER": "cat"}
-ENV_REMOVED = ("GIT_EXTERNAL_DIFF",)
+ENV_REMOVED = (  # an inherited repository location would override `-C <main>`
+    "GIT_EXTERNAL_DIFF",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_COMMON_DIR",
+)
 
 
 def _sha(value: str, flag: str) -> str:
-    if not _SHA.fullmatch(value):
-        raise errors.CpError("USAGE", f"--{flag} must be a 7 to 40 character hex sha: {value!r}")
+    if not SHA_RE.fullmatch(value):
+        raise errors.CpError("USAGE", f"--{flag} must be a 7 to 64 character hex sha: {value!r}")
     return value
 
 
@@ -60,9 +72,10 @@ def argv(main: Path, op: str, given: dict[str, str]) -> list[str]:
         raise errors.CpError("USAGE", f"review read {op}: --path must name a file")
     tail = [] if path is None else ["--", path]
     git = ["git", "-C", str(main), "-c", "core.pager=cat", "-c", "diff.external="]
-    if op == "diff":
+    if op in ("diff", "files"):
         base, head = _sha(given["base"], "base"), _sha(given["head"], "head")
-        return [*git, "diff", "--no-ext-diff", "--no-textconv", "--no-color", base, head, *tail]
+        names = ["--name-status"] if op == "files" else []
+        return [*git, "diff", "--no-ext-diff", "--no-textconv", "--no-color", *names, base, head, *tail]
     rev = _sha(given["rev"], "rev")
     if op == "show":
         return [*git, "cat-file", "blob", f"{rev}:{path}"]
@@ -71,11 +84,21 @@ def argv(main: Path, op: str, given: dict[str, str]) -> list[str]:
     return [*git, "ls-tree", "-r", "--name-only", rev, *tail]
 
 
-def _lossy(text: str) -> bool:
+def _cut(raw: bytes) -> bytes:
+    """The first ``READ_MAX_BYTES``, never ending inside a multibyte character (the split one is dropped)."""
+    kept = raw[:READ_MAX_BYTES]
+    if len(raw) > READ_MAX_BYTES:
+        decoder = codecs.getincrementaldecoder("utf-8")("surrogateescape")
+        decoder.decode(kept, final=False)  # an incomplete last character stays pending
+        kept = kept[: len(kept) - len(decoder.getstate()[0])]
+    return kept
+
+
+def _lossy(kept: bytes) -> bool:
     try:
-        text.encode("utf-8")
-    except UnicodeEncodeError:
-        return True  # a lone surrogate: surrogateescape kept a byte that was not UTF-8
+        kept.decode("utf-8")
+    except UnicodeDecodeError:
+        return True  # a kept byte that was not UTF-8
     return False
 
 
@@ -95,8 +118,9 @@ def read(run: runner.Runner, main: Path, op: str, given: dict[str, str]) -> dict
         code = "NOT_FOUND" if res.returncode == 128 else "INTERNAL"
         raise errors.CpError(code, f"git {command[7]} exited {res.returncode}: {detail}")
     raw = res.stdout.encode("utf-8", "surrogateescape")
+    kept = _cut(raw)
     return {
-        "output": raw[:READ_MAX_BYTES].decode("utf-8", "replace"),
+        "output": kept.decode("utf-8", "replace"),
         "truncated": len(raw) > READ_MAX_BYTES,
-        "lossy": _lossy(res.stdout),
+        "lossy": _lossy(kept),
     }

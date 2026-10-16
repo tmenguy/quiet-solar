@@ -1123,6 +1123,18 @@ def test_review_agents_render_both_harnesses_bound_and_unbound(tmp_path: Path, s
             assert data["permission"]["edit"] == "deny" and data["permission"]["webfetch"] == "deny"
 
 
+@pytest.mark.parametrize("stem", sorted(_REVIEW_STEMS))
+@pytest.mark.parametrize("hdir", [".claude", ".opencode"])
+def test_review_agents_pin_the_command_rule_on_both_harnesses(tmp_path: Path, stem: str, hdir: str) -> None:
+    """The rule is mode-independent: true under `dontAsk` and under the `auto` fallback (#407 S7)."""
+    text = (_render_real(tmp_path, bound=False) / hdir / "agents" / f"{stem}.md").read_text()
+    assert (
+        "**The command form.** Use only these six commands, and `Read` / `Write`\n"
+        "inside your `in/` directory; never run anything else, never edit a file\n"
+        "outside `in/`."
+    ) in text
+
+
 @pytest.mark.parametrize(("stem", "source"), sorted(_REVIEW_STEMS.items()))
 def test_review_agents_pin_the_contract(tmp_path: Path, stem: str, source: str) -> None:
     text = (_render_real(tmp_path, bound=False) / ".claude" / "agents" / f"{stem}.md").read_text()
@@ -1140,6 +1152,13 @@ def test_review_agents_pin_the_contract(tmp_path: Path, stem: str, source: str) 
     assert "`review read diff --base <base_sha> --head <head_sha>`" in text
     assert "Never edit, commit, push, post messages, or call another command or\n  tool" in text
     assert "`STALE_TOKEN`: stop at once" in text
+    assert "`NOT_FOUND`: do not retry; drop that read (or the `relates_to`) and\n  continue." in text
+    assert "`INTERNAL`: retry once, then note it in your summary." in text
+    assert "A task whose `base_sha` is `-` has no merge\n   base: read it with `ls-tree` / `show` at `head_sha`." in text
+    assert "If an answer has\n   `truncated: true`, list the changed files with\n   `review read files --base" in text
+    assert "`review read diff\\|show\\|grep\\|ls-tree\\|files …`" in text
+    assert "A task whose run is `-`\n   has no run: skip `snapshot --run` for it." in text
+    assert "denied without a prompt" not in text
     assert "--family --state open,rejected,settled,deferred" in text
     if source == "global_review":
         assert "`blast_radius` is required for every deliverable with a `head_sha`" in text

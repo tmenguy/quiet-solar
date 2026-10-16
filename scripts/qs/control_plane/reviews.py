@@ -23,9 +23,9 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from . import alerts, daemon, db, errors, hooks, ledger, liveness, messages, nodes, paths, runs, tokens, tools
+from . import alerts, daemon, db, errors, gitread, hooks, ledger, liveness, messages, nodes, paths, runs, tokens, tools
 from . import clock as clock_mod
-from .schema_reviews import AGENTS, IN_FLIGHT, KINDS, REVIEW_TTL_S, SOURCES
+from .schema_reviews import AGENTS, IN_FLIGHT, KINDS, PILOT_PREFIX, REVIEW_TTL_S, SOURCES
 
 GLOBAL = "global"
 CROSS_RUN = "cross_run"
@@ -310,7 +310,9 @@ def close_locked(
 
 # --------------------------------------------------------------------------- the launch: permissions, settings, prompt (D6)
 
-_SAFE_PATH = re.compile(r"[A-Za-z0-9_./@%+=:,-]+")  # no whitespace, no shell metacharacter (C2-11)
+# No whitespace, no `,` (it separates the --allowedTools rules) and no shell metacharacter (C2-11); any other
+# character, non-ASCII included, is kept verbatim.
+_SAFE_PATH = re.compile(r"[^\s,'\"\\$`;&|<>(){}\[\]*?!#~]+")
 CP_COMMANDS = ("snapshot", "task show", "ledger show", "review read", "finding open", "review finish")
 
 
@@ -327,13 +329,15 @@ def cp_prefix(main: Path, python: str) -> str:
 def allowed_tools(main: Path, python: str, directory: Path) -> list[str]:
     """The pinned ``dontAsk`` allowlist: ``in/`` read and write, and exactly the six ``cp.py`` commands.
 
-    A path holding whitespace or a shell metacharacter is ``POLICY_REFUSED``: the unquoted pinned form would
-    stop matching.
+    A path holding whitespace, a ``,`` or a shell metacharacter is ``POLICY_REFUSED``: the unquoted pinned form
+    would stop matching (a ``,`` would split one rule in two).
     """
     in_dir = directory / "in"
     for what, value in (("the main checkout", str(main)), ("the interpreter", python), ("the review dir", str(in_dir))):
         if not _SAFE_PATH.fullmatch(value):
-            raise errors.CpError("POLICY_REFUSED", f"{what} path {value!r} holds whitespace or a shell metacharacter")
+            raise errors.CpError(
+                "POLICY_REFUSED", f"{what} path {value!r} holds whitespace, a comma or a shell metacharacter"
+            )
     prefix = cp_prefix(main, python)
     return [f"Read(/{in_dir}/**)", f"Write(/{in_dir}/**)", *(f"Bash({prefix} {cmd}:*)" for cmd in CP_COMMANDS)]
 
@@ -375,7 +379,7 @@ def prompt(row: sqlite3.Row, scope: Sequence[Mapping[str, Any]], *, prefix: str,
     ]
     for t in scope:
         lines.append(
-            f"- {t['task_id']} | {t['run_id']} | {json.dumps(t['title'], ensure_ascii=False)} | {t['branch'] or '-'}"
+            f"- {t['task_id']} | {t['run_id'] or '-'} | {json.dumps(t['title'], ensure_ascii=False)} | {t['branch'] or '-'}"
             f" | {t['base_sha'] or '-'} | {t['head_sha'] or '-'} | {t['head_state']}"
         )
     lines.append("Follow your agent instructions, call `review finish` once, then stop.")
@@ -386,7 +390,7 @@ def prompt(row: sqlite3.Row, scope: Sequence[Mapping[str, Any]], *, prefix: str,
 
 GIT_TIMEOUT_S = 60.0
 ABORT_CODES = frozenset({124, 127})  # the runner's timeout / exec failure: git is unusable, the step fails
-_HEX = re.compile(r"[0-9a-f]{7,64}")
+SHA_RE = gitread.SHA_RE  # one sha check for the capture and `review read`
 
 
 class _Git:
@@ -395,7 +399,12 @@ class _Git:
         self._main: tuple[str | None] | None = None
 
     def run(self, *args: str) -> tuple[int, str]:
-        res = self.ctx.runner.run(["git", "-C", str(self.ctx.main), *args], cwd=self.ctx.main, timeout=GIT_TIMEOUT_S)
+        res = self.ctx.runner.run(
+            ["git", "-C", str(self.ctx.main), *args],
+            cwd=self.ctx.main,
+            env_remove=gitread.ENV_REMOVED,
+            timeout=GIT_TIMEOUT_S,
+        )
         if res.returncode in ABORT_CODES:
             raise tools.StepFailed(f"git {' '.join(args[:2])} exited {res.returncode}: {res.stderr.strip()[-200:]}")
         return res.returncode, res.stdout.strip()
@@ -426,8 +435,8 @@ class _Git:
 
 def _heads(git: _Git, task: sqlite3.Row) -> tuple[str | None, str | None, str]:
     """``(base_sha, head_sha, head_state)`` of one task: the first row of D3's table that applies."""
-    merge = task["merge_sha"]
-    if merge and _HEX.fullmatch(merge) and git.run("cat-file", "-e", f"{merge}^{{commit}}")[0] == 0:
+    merge = (task["merge_sha"] or "").lower()
+    if merge and SHA_RE.fullmatch(merge) and git.run("cat-file", "-e", f"{merge}^{{commit}}")[0] == 0:
         return git.sha("rev-parse", "--verify", "--quiet", f"{merge}^1"), merge, "merged"
     if not task["branch"]:
         return None, None, "plan"
@@ -463,6 +472,8 @@ def _authorize(conn: sqlite3.Connection, who: tokens.Principal, args: Mapping[st
     """The token × args matrix (V21): a run token asks for its own run's global review; a launch grant launches
     its own review, under the key it was minted for (C2-9, D3-1)."""
     if who.kind == "run":
+        if key.lower().startswith(PILOT_PREFIX):
+            raise errors.CpError("USAGE", f"the {PILOT_PREFIX!r} key prefix is reserved for the review pilot: {key!r}")
         unknown = sorted(set(args) - {"kind", "run", "trigger", "review"})
         if unknown:
             raise errors.CpError("USAGE", f"unknown args: {', '.join(unknown)}")
@@ -621,16 +632,21 @@ def _launch(ctx: tools.StepCtx, rid: str) -> dict[str, Any]:
 
 
 def _identify(ctx: tools.StepCtx, rid: str) -> dict[str, Any]:
-    with ctx.write() as conn:
-        row = _row(conn, rid)
-    if row["state"] in ("failed", "abandoned"):
-        raise tools.StepFailed(f"review {rid} is {row['state']}")
-    deadline = clock_mod.parse(row["launch_at"]).timestamp() + nodes.LAUNCH_SETTLE_S
+    """The listing by name until the settle deadline; the row's state is re-read on every poll."""
+    deadline: float | None = None
     while True:
+        with ctx.write() as conn:
+            row = _row(conn, rid)
+        if row["state"] in ("failed", "abandoned"):
+            raise tools.StepFailed(f"review {rid} is {row['state']}")
+        if deadline is None:
+            deadline = clock_mod.parse(row["launch_at"]).timestamp() + nodes.LAUNCH_SETTLE_S
         listing = ctx.claude.try_agents()
         found = None if listing is None else liveness.find(listing, name=row["name"])
         if found is not None:
             return {"session_id": found.session_id, "short_id": found.id}
+        if row["state"] == "finished":  # a quick session finished and exited before it was ever listed
+            return {"session_id": row["session_id"], "short_id": row["short_id"]}
         if ctx.clock.now().timestamp() >= deadline:
             raise tools.StepFailed(f"review session {row['name']} was never listed")
         ctx.clock.sleep(tools.IDENTIFY_POLL_S)
@@ -795,11 +811,17 @@ def finish(conn: sqlite3.Connection, clock: clock_mod.Clock, *, token: str, data
         checked = _check_finish(data, who, scope)
         summary = _text(data, "summary", "summary") or ""
         now = db.now(clock)
-        conn.execute(
-            "UPDATE reviews SET state = 'finished', summary = ?, finished_at = ?, updated_at = ?"
-            " WHERE id = ? AND state IN ('launching', 'running')",
-            (summary, now, now, rid),
-        )
+        if (
+            conn.execute(
+                "UPDATE reviews SET state = 'finished', summary = ?, finished_at = ?, updated_at = ?"
+                " WHERE id = ? AND state IN ('launching', 'running')",
+                (summary, now, now, rid),
+            ).rowcount
+            != 1
+        ):  # rolled back with the transaction: no outcome, no `review_done`
+            raise errors.CpError(
+                "STALE_TOKEN", f"review {rid} is no longer open", instructions=tokens.REVIEW_INSTRUCTIONS
+            )
         for task_id, entry in checked.items():
             blast_id = None
             if entry["blast_radius"] is not None:

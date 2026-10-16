@@ -6,9 +6,9 @@ Every ``PILOT_EVERY_S`` (a ``ticks.Throttle``), after ``detectors`` and before `
 2. **Close dead reviews** (read, probe, beat, write — no subprocess in a ``db.write``): every move is a
    guarded ``UPDATE`` that re-evaluates its condition in SQL, and posts ``review_failed`` only when one row
    changed. ``requested`` / ``launching``: a launcher that never started, whose call failed, whose holder is
-   dead, or that is older than ``REQUEST_TTL_S`` → ``failed``. ``running``: unlisted on ``LIVENESS_CONFIRM``
-   successful listings in a row → ``abandoned``; ``launching`` / ``running`` past ``REVIEW_TTL_S`` →
-   ``abandoned``.
+   dead, or that is older than ``REQUEST_TTL_S`` → ``failed`` — except a ``launching`` review whose session is
+   listed by name, which is adopted (``running``). ``running``: unlisted on ``LIVENESS_CONFIRM`` successful
+   listings in a row, or past ``REVIEW_TTL_S`` → ``abandoned``.
 3. **The queue and the rules** (D11): every new event (an open ``overlap_cross_run`` /
    ``duplicate_task_cross_run`` occurrence, or a merge that touches another run) is written at first sight as
    a ``review_triggers`` row ``pilot:<event>:1`` (``queued``); each tick re-requests the queued rows through
@@ -31,7 +31,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from . import activeloop, alerts, daemon, db, errors, liveness, nodes, reviews, ticks, tokens
+from . import activeloop, alerts, daemon, db, errors, liveness, nodes, paths, reviews, ticks, tokens
 from . import clock as clock_mod
 from .schema_reviews import CURSOR_KEY, PILOT_PREFIX, REQUEST_TTL_S, REVIEW_TTL_S
 
@@ -105,11 +105,16 @@ _CALL = "SELECT 1 FROM tool_calls t WHERE (t.tool || '/' || t.key) = reviews.too
 
 def _open_reviews(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT r.id, r.state, r.session_id, r.created_at, r.launch_at, COALESCE(r.launch_at, r.updated_at) AS since,"
+        "SELECT r.id, r.state, r.name, r.session_id, r.created_at, r.launch_at, COALESCE(r.launch_at, r.updated_at) AS since,"
         " t.state AS call_state, t.holder_pid, t.holder_pid_start, t.holder_pgid FROM reviews r"
         " LEFT JOIN tool_calls t ON (t.tool || '/' || t.key) = r.tool_key"
         " WHERE r.state IN ('requested', 'launching', 'running') ORDER BY r.created_at, r.id"
     ).fetchall()
+
+
+def _launched(row: sqlite3.Row) -> bool:
+    """A ``launching`` review whose ``claude --bg`` already ran (its session may be listed)."""
+    return bool(row["state"] == "launching" and row["launch_at"] is not None)
 
 
 def _launch_move(row: sqlite3.Row, clock: clock_mod.Clock, dead_holder: bool) -> _Move | None:
@@ -177,7 +182,7 @@ def close_dead(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) -
         _state.unlisted.clear()
         return []
     listing = None
-    if any(r["state"] == "running" for r in rows):
+    if any(r["state"] == "running" or _launched(r) for r in rows):
         listing = seams.claude.try_agents(timeout=ticks.HOOK_SUBPROCESS_S)
     dead = {
         r["id"]: not seams.probe.holder_alive(r["holder_pid"], r["holder_pid_start"], r["holder_pgid"])
@@ -186,18 +191,33 @@ def close_dead(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) -
     }
     daemon.beat(conn, clock)
     moves: list[_Move] = []
+    adopted: list[tuple[str, liveness.Agent]] = []
     for row in rows:
         if row["state"] == "running":
             move = _session_move(row, clock, listing)
         else:  # a launch that is over without its review: failed (so the event is retried once)
-            move = _launch_move(row, clock, dead.get(row["id"], False))
+            # A launched review under an unknown listing is not failed early for a dead launcher: only the TTL.
+            dead_holder = dead.get(row["id"], False) and not (_launched(row) and listing is None)
+            move = _launch_move(row, clock, dead_holder)
+            if move is not None and _launched(row) and listing is not None:  # the session may run without it
+                found = liveness.find(listing, name=row["name"])
+                if found is not None:
+                    adopted.append((row["id"], found))
+                    continue
         if move is not None:
             moves.append(move)
     live = {r["id"] for r in rows if r["state"] == "running"}
     _state.unlisted = {k: v for k, v in _state.unlisted.items() if k in live}
     moved: list[str] = []
-    if moves:
+    if moves or adopted:
         with db.write(conn):
+            now = db.now(clock)
+            for rid, found in adopted:  # guarded: a row that moved meanwhile is left alone
+                conn.execute(
+                    "UPDATE reviews SET state = 'running', session_id = ?, short_id = ?, updated_at = ?"
+                    " WHERE id = ? AND state = 'launching' AND launch_at IS NOT NULL",
+                    (found.session_id, found.id, now, rid),
+                )
             for m in moves:
                 if reviews.close_locked(
                     conn, clock, m.review_id, to=m.to, error=m.error, where=m.where, params=m.params
@@ -223,13 +243,29 @@ def _queue_locked(
     )
 
 
+def _pilot_rows(table: str = "review_triggers") -> str:
+    """The pilot's own rows: an exact, case-sensitive prefix (never ``LIKE``, which ignores case), its actor."""
+    return f"substr({table}.tool_key, 1, length(?)) = ? AND {table}.actor = ?"
+
+
+def _pilot_params(prefix: str) -> tuple[str, str, str]:
+    return (prefix, prefix, ACTOR)
+
+
+def _payload(raw: str | None) -> dict[str, Any]:
+    """An alert payload as an object; ``NULL``, non-JSON or a non-object is ``{}`` (no tasks)."""
+    try:
+        value = json.loads(raw) if raw is not None else None
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def _event_rows(conn: sqlite3.Connection, prefix: str) -> list[sqlite3.Row]:
     """Every pilot trigger row of events whose key starts with ``prefix`` (attempts included)."""
-    like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return conn.execute(
-        "SELECT id, \"trigger\", tool_key, outcome, review_id FROM review_triggers WHERE tool_key LIKE ? ESCAPE '\\'"
-        " ORDER BY id",
-        (f"{PILOT_PREFIX}{like}%",),
+        f'SELECT id, "trigger", tool_key, outcome, review_id FROM review_triggers WHERE {_pilot_rows()} ORDER BY id',
+        _pilot_params(f"{PILOT_PREFIX}{prefix}"),
     ).fetchall()
 
 
@@ -242,7 +278,7 @@ def _alert_events(conn: sqlite3.Connection, clock: clock_mod.Clock) -> None:
     ).fetchall():
         group = groups.setdefault((r["kind"], r["subject"]), {"ids": [], "tasks": set()})
         group["ids"].append(r["id"])
-        payload = json.loads(r["payload"])
+        payload = _payload(r["payload"])
         group["tasks"].update(str(t) for t in payload.get("tasks", ()) if isinstance(t, str))
     for (kind, subject), group in groups.items():
         family = f"alert:{kind}:{hashlib.sha256(subject.encode()).hexdigest()[:16]}:"
@@ -276,8 +312,8 @@ def _overlap_partners(conn: sqlite3.Connection, task_id: str, own_run: str | Non
     """Tasks an ``overlap_cross_run`` row (open or cleared) names with ``task_id``, still non-terminal in another open run."""
     named: set[str] = set()
     for (payload,) in conn.execute("SELECT payload FROM alerts WHERE kind = ?", (alerts.OVERLAP_CROSS_RUN,)).fetchall():
-        found = json.loads(payload).get("tasks", ())
-        if task_id in found:
+        found = _payload(payload).get("tasks", ())
+        if isinstance(found, list) and task_id in found:
             named.update(str(t) for t in found if isinstance(t, str) and t != task_id)
     if not named:
         return []
@@ -327,23 +363,28 @@ def discover(conn: sqlite3.Connection, clock: clock_mod.Clock) -> None:
 # --------------------------------------------------------------------------- 3b. the retry of a failed launch (Q7)
 
 
-def _split(tool_key: str) -> tuple[str, int]:
+def _split(tool_key: str) -> tuple[str, int] | None:
+    """``pilot:<event>:<n>`` → ``(event, n)``; ``None`` for a key of any other shape (the row is skipped)."""
     event, _, attempt = tool_key[len(PILOT_PREFIX) :].rpartition(":")
+    if not event or not (attempt.isascii() and attempt.isdigit()):
+        return None
     return event, int(attempt)
 
 
 def retry_failed(conn: sqlite3.Connection, clock: clock_mod.Clock) -> None:
     """An event whose latest attempt's review ended ``failed`` gets attempt ``n + 1`` (a new row), while ``n < PILOT_ATTEMPTS``."""
-    latest: dict[str, sqlite3.Row] = {}
+    latest: dict[str, tuple[int, sqlite3.Row]] = {}
     for row in conn.execute(
         'SELECT tr.id, tr."trigger", tr.tool_key, r.state AS review_state FROM review_triggers tr'
-        " LEFT JOIN reviews r ON r.id = tr.review_id WHERE tr.tool_key LIKE ? ORDER BY tr.id",
-        (f"{PILOT_PREFIX}%",),
+        f" LEFT JOIN reviews r ON r.id = tr.review_id WHERE {_pilot_rows('tr')}"
+        " ORDER BY tr.id",
+        _pilot_params(PILOT_PREFIX),
     ).fetchall():
-        latest[_split(row["tool_key"])[0]] = row
+        split = _split(row["tool_key"])
+        if split is not None:
+            latest[split[0]] = (split[1], row)
     with db.write(conn):
-        for event, row in latest.items():
-            attempt = _split(row["tool_key"])[1]
+        for event, (attempt, row) in latest.items():
             if row["review_state"] == "failed" and attempt < PILOT_ATTEMPTS:
                 _queue_locked(conn, clock, event, attempt + 1, json.loads(row["trigger"]))
 
@@ -366,10 +407,12 @@ def drain(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) -> lis
     """Re-request every queued row; start one launcher per review created → the created review ids."""
     created: list[str] = []
     queued = conn.execute(
-        "SELECT id, \"trigger\", tool_key FROM review_triggers WHERE outcome = 'queued' AND tool_key LIKE ? ORDER BY id",
-        (f"{PILOT_PREFIX}%",),
+        f"SELECT id, \"trigger\", tool_key FROM review_triggers WHERE outcome = 'queued' AND {_pilot_rows()} ORDER BY id",
+        _pilot_params(PILOT_PREFIX),
     ).fetchall()
     for row in queued:
+        if _split(row["tool_key"]) is None:
+            continue  # not a pilot attempt key: never requested
         trigger = json.loads(row["trigger"])
         with db.write(conn):  # the daemon is a singleton: no other writer moves a pilot row meanwhile
             if trigger.get("source") == "alert" and not _alerts_open(conn, trigger.get("alert_ids", [])):
@@ -422,6 +465,8 @@ def start_launcher(
     """
     assert seams.popen is not None
     try:
+        env = daemon.strip_env(os.environ)
+        env["QS_CP_DB"] = str(paths.select_db().resolve())  # the daemon's DB, absolute: the launcher's cwd differs
         directory = reviews.review_dir(review_id, create=True)
         args_file = directory / "args.json"
         args_file.write_text(json.dumps({"review": review_id}))
@@ -433,7 +478,7 @@ def start_launcher(
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=log,
-                env=daemon.strip_env(os.environ),
+                env=env,
             )
     except (errors.CpError, OSError, ValueError, subprocess.SubprocessError) as exc:
         with db.write(conn):

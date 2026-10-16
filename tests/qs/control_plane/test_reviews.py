@@ -534,10 +534,38 @@ class TestLaunch:
             (Path("/m"), "/p;x", d),
             (Path("/m"), "/p", Path("/x/$(y)")),
             (Path("/m"), "/p`", d),
+            (Path("/m,x"), "/p", d),  # `,` separates the --allowedTools rules
+            (Path("/m"), "/p", Path("/x/a,b")),
+            (Path("/m\u00a0x"), "/p", d),  # a non-ASCII whitespace
         ):
             with pytest.raises(errors.CpError) as exc:
                 reviews.allowed_tools(main, python, directory)
             assert exc.value.code == "POLICY_REFUSED"
+
+    def test_a_non_ascii_path_is_accepted_verbatim(self) -> None:
+        main, d = Path("/Users/José/m"), Path("/Users/José/r/V1")
+        assert reviews.allowed_tools(main, "/Users/José/m/venv/bin/python", d) == [
+            "Read(//Users/José/r/V1/in/**)",
+            "Write(//Users/José/r/V1/in/**)",
+            *(
+                f"Bash(/Users/José/m/venv/bin/python /Users/José/m/scripts/qs/cp.py {cmd}:*)"
+                for cmd in reviews.CP_COMMANDS
+            ),
+        ]
+
+    def test_the_prompt_prints_a_dash_for_a_task_with_no_run(self) -> None:
+        row = {"id": "V1", "kind": "cross_run", "dir": "/r/V1", "nonce": "0" * 32}
+        task = {
+            "task_id": "T9",
+            "run_id": None,
+            "title": "t",
+            "branch": None,
+            "base_sha": None,
+            "head_sha": None,
+            "head_state": "plan",
+        }
+        text = reviews.prompt(row, [task], prefix="p", deadline="d")  # type: ignore[arg-type]
+        assert '- T9 | - | "t" | - | - | - | plan' in text and "None" not in text
 
     def test_a_path_with_whitespace_fails_the_review(self, rw, monkeypatch) -> None:
         monkeypatch.setattr(reviews, "python_for", lambda main: "/a b/python")
@@ -589,6 +617,24 @@ class TestHeads:
         token = grant_request(rw, tasks=["T1", "T6"])
         assert tool_review(rw, "pilot:alert:ev:1", token, review="V1")[0] == 0
         assert heads(rw["db"])["T6"] == (B6, H6, "branch")
+
+    def test_an_upper_case_merge_sha_is_captured_lower_cased(self, rw) -> None:
+        sql(rw["db"], "UPDATE tasks SET merge_sha = ? WHERE id = 'T6'", [MS.upper()])
+        token = grant_request(rw, tasks=["T1", "T6"])
+        assert tool_review(rw, "pilot:alert:ev:1", token, review="V1")[0] == 0
+        assert heads(rw["db"])["T6"] == (P6, MS, "merged")
+
+    def test_the_capture_runs_git_without_an_inherited_repository(self, rw) -> None:
+        from control_plane import gitread
+
+        assert global_r1(rw)[0] == 0
+        captures = rw["runner"].matching("git", "-C")
+        assert captures and all(set(gitread.ENV_REMOVED) <= set(c.env_remove) for c in captures)
+
+    def test_the_sha_check_is_gitreads(self) -> None:
+        from control_plane import gitread
+
+        assert reviews.SHA_RE is gitread.SHA_RE
 
     def test_a_malformed_merge_sha_is_never_passed_to_git(self, rw) -> None:
         sql(rw["db"], "UPDATE tasks SET merge_sha = '--output=/tmp/x' WHERE id = 'T6'")
@@ -741,6 +787,27 @@ class TestIdentifyAndFailures:
         assert out["result"]["state"] == "finished"
         row = review_row(rw["db"], "V1")
         assert row["state"] == "finished" and row["session_id"] and row["short_id"] == "short-1"
+
+    def test_identify_of_a_review_finished_before_it_was_listed(self, rw) -> None:
+        rw["launch"]["list"] = False
+        rw["claude"].listing = None  # every listing fails meanwhile
+        rw["launch"]["on_launch"] = lambda call: setattr(
+            rw["claude"], "before_list", lambda: sql(rw["db"], "UPDATE reviews SET state = 'finished'")
+        )
+        code, out = global_r1(rw)
+        assert code == 0, out
+        assert out["result"]["state"] == "finished" and out["result"]["session_id"] is None
+        assert review_row(rw["db"], "V1")["state"] == "finished" and review_alerts(rw["db"]) == []
+
+    def test_identify_stops_when_the_review_is_abandoned_meanwhile(self, rw) -> None:
+        rw["launch"]["list"] = False
+        rw["launch"]["on_launch"] = lambda call: setattr(
+            rw["claude"], "before_list", lambda: sql(rw["db"], "UPDATE reviews SET state = 'abandoned'")
+        )
+        code, out = global_r1(rw)
+        assert code == 1 and "review V1 is abandoned" in out["detail"]
+        assert review_row(rw["db"], "V1")["state"] == "abandoned" and review_alerts(rw["db"]) == []
+        assert sum(rw["deps"].clock.sleeps) < 60  # it stopped at once, not at the settle deadline
 
     def test_identify_on_a_review_the_pilot_closed(self, rw) -> None:
         rw["launch"]["on_launch"] = lambda call: sql(rw["db"], "UPDATE reviews SET state = 'abandoned'")
@@ -901,6 +968,14 @@ class TestMatrix:
         got, out = tool_review(rw, "k1", rw["tok2"], **args)
         assert (got, out["error"]) == (code, error), out
         assert sql(rw["db"], "SELECT count(*) FROM tool_calls")[0][0] == 0
+
+    @pytest.mark.parametrize("key", ["pilot:g1", "PILOT:x", "Pilot:alert:e:1"])
+    def test_a_run_token_may_not_use_the_pilot_key_prefix(self, rw, key: str) -> None:
+        code, out = tool_review(rw, key, rw["tok1"], kind="global", run="R1")
+        assert (code, out["error"]) == (2, "USAGE") and "reserved for the review pilot" in out["detail"]
+        assert sql(rw["db"], "SELECT count(*) FROM tool_calls")[0][0] == 0
+        assert sql(rw["db"], "SELECT count(*) FROM review_triggers")[0][0] == 0
+        assert sql(rw["db"], "SELECT count(*) FROM reviews")[0][0] == 0
 
     def test_a_run_token_may_name_its_run(self, rw) -> None:
         code, out = tool_review(rw, "k1", rw["tok2"], kind="global", run="r2")
@@ -1125,6 +1200,24 @@ class TestFinish:
         assert out["error"] == error and detail in out["detail"], out
         assert review_row(rw["db"], "V1")["state"] == "running"
         assert sql(rw["db"], "SELECT count(*) FROM blast_radius")[0][0] == 0
+
+    def test_a_review_closed_under_the_finish_is_stale(self, rw, monkeypatch) -> None:
+        from control_plane import tokens
+
+        assert global_r1(rw)[0] == 0
+        real = tokens.require
+
+        def close_after_the_check(conn: sqlite3.Connection, token: str, **kw: Any) -> Any:
+            who = real(conn, token, **kw)
+            conn.execute("UPDATE reviews SET state = 'abandoned' WHERE id = ?", (who.review_id,))
+            return who
+
+        monkeypatch.setattr(tokens, "require", close_after_the_check)
+        code, out = finish_cli(rw, session(rw), GOOD)
+        assert (code, out["error"]) == (3, "STALE_TOKEN") and "no longer open" in out["detail"]
+        assert out["instructions"] == tokens.REVIEW_INSTRUCTIONS
+        assert {r[0] for r in sql(rw["db"], "SELECT outcome FROM review_tasks")} == {None}
+        assert messages_of(rw["db"]) == [] and sql(rw["db"], "SELECT count(*) FROM blast_radius")[0][0] == 0
 
     def test_an_item_blast_radius_is_optional(self, rw) -> None:
         import copy
