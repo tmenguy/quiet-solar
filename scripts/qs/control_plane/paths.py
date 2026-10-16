@@ -15,6 +15,7 @@ from . import errors
 DB_NAME = "harness_state.db"
 DEFAULT_BACKUP_DIR = Path("~/.local/state/quiet-solar/cp-backups")
 DEFAULT_MESSENGER_DIR = Path("~/.local/state/quiet-solar/cp-messenger")
+DEFAULT_REVIEW_DIR = Path("~/.local/state/quiet-solar/cp-reviews")
 
 
 def code_root() -> Path:
@@ -148,6 +149,11 @@ def backup_dir() -> Path:
 def messenger_dir() -> Path:
     """The watchdog messenger's working directory: ``QS_CP_MESSENGER_DIR``, never inside a checkout."""
     return state_dir("QS_CP_MESSENGER_DIR", DEFAULT_MESSENGER_DIR)
+
+
+def review_root() -> Path:
+    """Where review sessions run (#407 D5): ``QS_CP_REVIEW_DIR``, never inside a checkout."""
+    return state_dir("QS_CP_REVIEW_DIR", DEFAULT_REVIEW_DIR)
 
 
 def ensure_private_dir(d: Path) -> Path:

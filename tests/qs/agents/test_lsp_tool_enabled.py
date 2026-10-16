@@ -76,6 +76,8 @@ LSP_EXCLUDE_AGENTS: tuple[str, ...] = (
     "qs-release",
     "qs-diag-fix-minimalist",
     "qs-review-regression-proof",
+    "qs-global-review",  # #407: reads code only through `cp.py review read`, at fixed shas
+    "qs-cross-run-review",
 )
 
 PYRIGHT_PLUGIN_ID = "pyright-lsp@claude-plugins-official"

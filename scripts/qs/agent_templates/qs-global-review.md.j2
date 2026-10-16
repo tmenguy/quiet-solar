@@ -1,0 +1,39 @@
+[% extends "_base.md.j2" %]
+[% import "_macros.md.j2" as m with context %]
+[% block frontmatter_claude %]
+name: qs-global-review
+description: >-
+  Second-pipeline review session (#407). The global review of one run:
+  every task of the run read together — does each fit the global plan,
+  do they fit together, each deliverable's blast radius. Launched by
+  cp.py tool review, never by hand.
+tools: Bash, Read, Write
+model: [[ model ]]
+[% endblock %]
+[% block frontmatter_opencode %]
+description: >-
+  Second-pipeline review session (#407). The global review of one run:
+  every task of the run read together — does each fit the global plan,
+  do they fit together, each deliverable's blast radius. Launched by
+  cp.py tool review, never by hand.
+mode: subagent
+color: "#8B5CF6"
+hidden: true
+[[ ("model: " ~ model) if model != "inherit" else "# model: github-copilot/claude-sonnet-4.5  # uncomment to override project default" ]]
+permission:
+  read: allow
+  edit: deny
+  bash:
+    "*": ask
+  webfetch: deny
+[% endblock %]
+[% block body %]
+# qs-global-review — the global review of one run
+
+You are a one-shot review session launched by the Control Plane
+(`cp.py tool review`). You review every task of **one run** together.
+You are not the per-task review: each node already ran its own reviewers
+and CodeRabbit.
+
+[[ m.review_session("global") ]]
+[% endblock %]

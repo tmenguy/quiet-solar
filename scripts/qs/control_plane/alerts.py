@@ -42,6 +42,7 @@ ORCHESTRATOR_DEAD = "orchestrator_dead"
 ORCHESTRATOR_NOT_LISTENING = "orchestrator_not_listening"
 SELFCHECK_FAILED = "selfcheck_failed"
 BACKUP_FAILED = "backup_failed"
+REVIEW_FAILED = "review_failed"  # #407: a review whose launch failed, or that died or expired (daemon-owned)
 HOOK_ALERT = "hook_alert"  # a routed hook event whose own kind is unusable
 ROUTED_HOOK_KINDS = frozenset({"queue_not_draining", "idle_without_wait", "merge_state_conflict"})
 
@@ -65,6 +66,7 @@ KINDS = frozenset(
         ORCHESTRATOR_NOT_LISTENING,
         SELFCHECK_FAILED,
         BACKUP_FAILED,
+        REVIEW_FAILED,
         HOOK_ALERT,
         *ROUTED_HOOK_KINDS,
         *CROSS_RUN_KINDS,

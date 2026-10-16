@@ -27,6 +27,7 @@ EXEMPT = {
     "hook pre-tool-use",
     "hook pre-push",
     "hooks-settings",
+    "review read",  # #407: no DB, no token
 }
 READ = {"session status", "snapshot", "task show", "export-summary", "ledger show"}
 NO_TOKEN_WRITES = {"run open", "run claim"}
@@ -45,6 +46,7 @@ TOOL_ARGS: dict[str, dict[str, Any]] = {
     "integrate-start": {},
     "integrate-finish": {},
     "integrate-drop": {},
+    "review": {"kind": "global", "run": "R1"},  # #407: task-less (no --task)
 }
 
 
@@ -107,6 +109,7 @@ def samples(f: dict[str, str]) -> dict[str, list[str]]:
             "--input",
             f["finding"],
         ],
+        "review finish": ["review", "finish", "--input", f["json"]],  # #407: `{}`
         "finding classify": ["finding", "classify", "1", "--class", "nice_to_have"],
         "finding state": ["finding", "state", "1", "--to", "rejected", "--reason", "r"],
         "blast-radius set": [
@@ -122,11 +125,14 @@ def samples(f: dict[str, str]) -> dict[str, list[str]]:
             "R",
         ],
     }
-    for name in tools.REGISTRY:
-        out[f"tool {name}"] = ["tool", name, "--task", "T1", "--key", "k", "--args-file", f[f"tool:{name}"]]
+    for name, spec in tools.REGISTRY.items():
+        task = ["--task", "T1"] if spec.task_bound else []  # #407: a task-less tool takes no --task
+        out[f"tool {name}"] = ["tool", name, *task, "--key", "k", "--args-file", f[f"tool:{name}"]]
     return out
 
 
+# #407: commands a run token never reaches the stale check of (a run token is not accepted at all).
+RUN_TOKEN_REFUSED = {"review finish"}
 # Commands a node token may call (on its own task / queue).
 NODE_OK = {
     "task state",
@@ -234,7 +240,11 @@ def _stale(world: dict[str, Any], fake_runner, fake_popen) -> str:
 
 
 @pytest.mark.parametrize(
-    "name", sorted(samples(dict.fromkeys(["text", "json", "finding"] + [f"tool:{t}" for t in TOOL_ARGS], "x")))
+    "name",
+    sorted(
+        set(samples(dict.fromkeys(["text", "json", "finding"] + [f"tool:{t}" for t in TOOL_ARGS], "x")))
+        - RUN_TOKEN_REFUSED
+    ),
 )
 def test_stale_run_token_changes_nothing(world, name: str, fake_runner, fake_popen) -> None:
     stale = _stale(world, fake_runner, fake_popen)
@@ -321,6 +331,10 @@ def test_exempt_commands_under_a_newer_db(world, fake_popen, fake_clock) -> None
     sql(world["db"], f"PRAGMA user_version = {NEXT}")
     assert run_cli("version")[0] == 0
     assert run_cli("hooks-settings", "--role", "node")[0] == 0
+    assert run_cli("review", "read", "ls-tree", "--rev", "a" * 40) == (
+        0,
+        {"ok": True, "output": "", "truncated": False, "lossy": False},
+    )
     assert run_cli("hook", "stop", stdin=json.dumps({"session_id": ORCH})) == (0, None)
     pre = {"session_id": ORCH, "tool_name": "Bash", "tool_input": {"command": "gh pr merge 1"}}
     assert run_cli("hook", "pre-tool-use", stdin=json.dumps(pre)) == (0, None)
@@ -354,3 +368,66 @@ def test_the_seeded_findings_never_tie_with_a_new_decision(world) -> None:
     assert code == 0 and out == {"ok": True, "ids": [3]}
     seqs = dict(sql(world["db"], "SELECT id, decided_seq FROM findings"))
     assert seqs == {1: 1, 2: 2, 3: 3}
+
+
+# --------------------------------------------------------------------------- #407: review tokens across the table
+
+SESSION, GRANT = "6" * 32, "7" * 32
+SESSION_OK = {"finding open", "review finish"}  # the session token's two writes
+GRANT_OK = {"tool review"}  # the launch grant's one call
+
+
+def _review(world: dict[str, Any], state: str = "running") -> dict[str, str]:
+    sql(
+        world["db"],
+        "INSERT INTO reviews (id, kind, coalesce_key, home_run_id, state, agent, nonce, grant_nonce, name, tool_key,"
+        " requested_by, created_at, updated_at) VALUES ('V1', 'global', 'global:R1', 'R1', ?, 'qs-global-review', ?,"
+        " ?, 'n', 'review/k', 'x', 'x', 'x')",
+        [state, SESSION, GRANT],
+    )
+    for task in ("T1", "T2"):
+        sql(world["db"], "INSERT INTO review_tasks (review_id, task_id, run_id) VALUES ('V1', ?, 'R1')", [task])
+    return {"session": f"review:V1.1.{SESSION}", "grant": f"review:V1.0.{GRANT}"}
+
+
+ALL_SAMPLES = sorted(samples(dict.fromkeys(["text", "json", "finding"] + [f"tool:{t}" for t in TOOL_ARGS], "x")))
+
+
+@pytest.mark.parametrize("name", ALL_SAMPLES)
+def test_a_review_token_is_refused_by_every_other_command(world, name: str, fake_runner, fake_popen) -> None:
+    toks = _review(world)
+    for form, accepted in (("session", SESSION_OK), ("grant", GRANT_OK)):
+        if name in accepted:
+            continue
+        before = counts(world["db"])
+        code, out = run_cli(*samples(world["f"])[name], "--token", toks[form])
+        assert code == 8 and out["error"] == "CONFLICT", (form, out)
+        assert counts(world["db"]) == before
+    assert fake_runner.calls == [] and fake_popen.calls == []
+
+
+@pytest.mark.parametrize(
+    ("form", "state", "argv", "tail"),
+    [
+        (
+            "session",
+            "finished",
+            ["finding", "open", "--task", "T1", "--phase", "build", "--source", "global_review"],
+            ("--input", "finding"),
+        ),
+        ("session", "failed", ["review", "finish"], ("--input", "json")),
+        ("session", "requested", ["review", "finish"], ("--input", "json")),
+        ("grant", "failed", ["tool", "review", "--key", "k"], ("--args-file", "grant")),
+        ("grant", "abandoned", ["tool", "review", "--key", "k"], ("--args-file", "grant")),
+    ],
+)
+def test_a_stale_review_token_changes_nothing(world, form, state, argv, tail, fake_runner, fake_popen) -> None:
+    toks = _review(world, state)
+    grant_args = Path(world["f"]["json"]).with_name("grant-args.json")
+    grant_args.write_text(json.dumps({"review": "V1"}))
+    files = {**world["f"], "grant": str(grant_args)}
+    before = counts(world["db"])
+    code, out = run_cli(*argv, tail[0], files[tail[1]], "--token", toks[form])
+    assert code == 3 and out["error"] == "STALE_TOKEN", out
+    assert out["instructions"] == "This review is closed or superseded: stop now, take no further action."
+    assert counts(world["db"]) == before and fake_runner.calls == [] and fake_popen.calls == []

@@ -43,6 +43,7 @@ MODULES = (
     "schema_v1",
     "schema_ledger",
     "schema_v3",
+    "schema_reviews",
     "migrations",
     "db",
     "daemon",
@@ -63,6 +64,9 @@ MODULES = (
     "export",
     "ledger",
     "alerts",
+    "gitread",
+    "reviews",
+    "reviewpilot",
     "snapshot",
     "ticks",
     "activeloop",
@@ -96,6 +100,7 @@ from control_plane import (  # noqa: E402
     migrations,
     paths,
     procsetup,
+    reviews,
     ticks,
     tools,
 )
@@ -145,6 +150,7 @@ class Call:
     env_remove: tuple[str, ...]
     detach: bool
     timeout: float | None
+    decode_errors: str = "strict"
 
 
 def argv_matches(argv: Sequence[str], pattern: Sequence[str]) -> bool:
@@ -181,9 +187,16 @@ class FakeRunner:
         env_remove: Sequence[str] = (),
         timeout: float | None = None,
         detach: bool = False,
+        decode_errors: str = "strict",
     ) -> RunResult:
         call = Call(
-            list(argv), None if cwd is None else str(cwd), dict(env_extra or {}), tuple(env_remove), detach, timeout
+            list(argv),
+            None if cwd is None else str(cwd),
+            dict(env_extra or {}),
+            tuple(env_remove),
+            detach,
+            timeout,
+            decode_errors,
         )
         with self._lock:
             self.calls.append(call)
@@ -286,15 +299,31 @@ class FakeClaude(liveness.ClaudeCli):
 
 
 @dataclass
+class FakeProc:
+    """What ``FakePopen`` returns: a scriptable ``poll()`` / ``returncode`` and a ``pid`` (#407)."""
+
+    pid: int
+    returncode: int | None = None
+    polls: int = 0
+
+    def poll(self) -> int | None:
+        self.polls += 1
+        return self.returncode
+
+
+@dataclass
 class FakePopen:
     calls: list[tuple[list[str], dict[str, Any]]] = field(default_factory=list)
     on_call: Callable[[list[str], dict[str, Any]], None] | None = None
+    procs: list[FakeProc] = field(default_factory=list)
 
-    def __call__(self, argv: list[str], **kwargs: Any) -> object:
+    def __call__(self, argv: list[str], **kwargs: Any) -> FakeProc:
         self.calls.append((list(argv), kwargs))
         if self.on_call is not None:
             self.on_call(list(argv), kwargs)
-        return object()
+        proc = FakeProc(pid=70_000 + len(self.procs))
+        self.procs.append(proc)
+        return proc
 
 
 @dataclass
@@ -392,6 +421,7 @@ def _cp_isolation(
     monkeypatch.setenv("QS_CP_DB", str(tmp_path / "state" / "test_state.db"))
     monkeypatch.setenv("QS_CP_BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setenv("QS_CP_MESSENGER_DIR", str(tmp_path / "messenger"))
+    monkeypatch.setenv("QS_CP_REVIEW_DIR", str(tmp_path / "reviews"))  # #407
     (tmp_path / "state").mkdir()
     # A fake main checkout, identical locally (a linked worktree) and in CI.
     fake_main = tmp_path / "main"
@@ -411,7 +441,12 @@ def _cp_isolation(
         activeloop,
         "make_seams",
         lambda: activeloop.Seams(
-            runner=deps.runner, probe=deps.probe, claude=deps.claude, main=fake_main, github=fake_github
+            runner=deps.runner,
+            probe=deps.probe,
+            claude=deps.claude,
+            main=fake_main,
+            github=fake_github,
+            popen=deps.popen,  # #407: the review pilot's launcher, a FakePopen (no real subprocess)
         ),
     )
     faults.reset()
@@ -431,6 +466,7 @@ def _cp_isolation(
         merge_policy.reset()
         tools.reset()
         items.register_item_tools()
+        reviews.register_review_tool()  # #407: `tool review`, whole again for the next test
         export.LEDGER_SECTIONS.clear()
         ledger.register_export()  # #375: the sections cli registers at import, whole again for the next test
 

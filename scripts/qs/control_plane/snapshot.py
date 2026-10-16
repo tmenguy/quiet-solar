@@ -13,7 +13,7 @@ from typing import Any
 from . import alerts, daemon, db, errors, ledger, migrations, tasks
 from . import clock as clock_mod
 
-SECRET_COLUMNS = frozenset({"nonce"})
+SECRET_COLUMNS = frozenset({"nonce", "grant_nonce"})  # #407: a review's session nonce and launch grant
 
 KEYS = (
     "schema_version",
@@ -41,6 +41,9 @@ KEYS = (
     "daemon",
     "alerts",
     "hook_alerts",
+    "reviews",
+    "review_tasks",
+    "review_triggers",
 )
 
 
@@ -48,7 +51,7 @@ def _rows(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> l
     out = []
     for row in conn.execute(sql, params).fetchall():
         item = {k: row[k] for k in row.keys() if k not in SECRET_COLUMNS}  # noqa: SIM118 — sqlite3.Row
-        for key in ("payload", "fields", "detail", "flags"):
+        for key in ("payload", "fields", "detail", "flags", "trigger"):
             if isinstance(item.get(key), str):
                 try:
                     item[key] = json.loads(item[key])
@@ -106,6 +109,9 @@ def snapshot(conn: sqlite3.Connection | None, clock: clock_mod.Clock, run_id: st
         " (SELECT id FROM tasks WHERE run_id = ?))"
     )
     pp: tuple[Any, ...] = () if run_id is None else (run_id, run_id)
+    # #407: a review shows in each run it has a task in; a pilot trigger with no review yet only unfiltered.
+    review_flt = "" if run_id is None else "AND id IN (SELECT review_id FROM review_tasks WHERE run_id = ?)"
+    trigger_flt = "" if run_id is None else "AND review_id IN (SELECT review_id FROM review_tasks WHERE run_id = ?)"
     with db.read(conn):
         runs = _rows(conn, f"SELECT * FROM runs WHERE 1 = 1 {flt.replace('run_id', 'id')} ORDER BY rowid", p)
         leases = {r["run_id"]: r for r in _rows(conn, "SELECT * FROM run_leases")}
@@ -173,6 +179,9 @@ def snapshot(conn: sqlite3.Connection | None, clock: clock_mod.Clock, run_id: st
                 "SELECT * FROM hook_events WHERE decision = 'alert' ORDER BY id DESC LIMIT ?",
                 (alerts.ALERTS_LIMIT,),
             ),
+            "reviews": _rows(conn, f"SELECT * FROM reviews WHERE 1 = 1 {review_flt} ORDER BY created_at, id", p),
+            "review_tasks": _rows(conn, f"SELECT * FROM review_tasks WHERE 1 = 1 {flt} ORDER BY review_id, task_id", p),
+            "review_triggers": _rows(conn, f"SELECT * FROM review_triggers WHERE 1 = 1 {trigger_flt} ORDER BY id", p),
         }
 
 

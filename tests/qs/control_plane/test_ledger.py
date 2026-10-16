@@ -677,6 +677,11 @@ class TestBlastRadius:
         by_sha = ledger.blast_radius(lw.conn, "T1", "h1")
         assert by_sha is not None and by_sha["value"] == "ok"
         assert ledger.blast_radius(lw.conn, "T1", "h9") is None
+        upper = ledger.blast_radius(lw.conn, "T1", " H1 ")  # the sha is matched case-insensitively
+        assert upper is not None and upper["value"] == "ok"
+        put("ok", "AB3", "G3")
+        mixed = ledger.blast_radius(lw.conn, "T1", "ab3")
+        assert mixed is not None and mixed["review"] == "G3"
         assert code_of(put, "huge", "h", "G") == "USAGE"
         assert code_of(put, "ok", " ", "G") == "USAGE"
 
@@ -1166,3 +1171,120 @@ def export_sections() -> list[Any]:
     from control_plane import export
 
     return list(export.LEDGER_SECTIONS)
+
+
+# --------------------------------------------------------------------------- #407: the review writer (D2)
+
+SESSION = "4" * 32
+
+
+def _review(lw: L, rid: str, kind: str, scope: list[str], *, state: str = "running") -> str:
+    sql(
+        lw.db,
+        "INSERT INTO reviews (id, kind, coalesce_key, state, agent, nonce, name, requested_by, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, 'a', ?, ?, 'x', 'x', 'x')",
+        [rid, kind, f"k-{rid}", state, SESSION, f"n-{rid}"],
+    )
+    for task in scope:
+        sql(
+            lw.db,
+            "INSERT INTO review_tasks (review_id, task_id, run_id) SELECT ?, id, run_id FROM tasks WHERE id = ?",
+            [rid, task],
+        )
+    return f"review:{rid}.1.{SESSION}"
+
+
+class TestReviewWriter:
+    def test_opens_on_its_scope_across_runs_with_its_source_and_id(self, lw: L) -> None:
+        tok = _review(lw, "V1", "cross_run", ["T1", "T6"])
+        [a] = lw.open("T1", item(reviewer="someone"), source="cross_run_review", token=tok)
+        [b] = lw.open("T6", item(), source="cross_run_review", token=tok)
+        for fid, run in ((a, "R1"), (b, "R2")):
+            row = lw.row(fid)
+            assert (row["run_id"], row["source"], row["reviewer"], row["actor"]) == (
+                run,
+                "cross_run_review",
+                "review:V1",
+                "review:V1",
+            )
+
+    def test_the_forced_source(self, lw: L) -> None:
+        tok = _review(lw, "V1", "global", ["T1"])
+        assert lw.open("T1", item(), source="global_review", token=tok)
+        for source in ("reviewer", "cross_run_review", "orchestrator"):
+            assert code_of(lw.open, "T1", item(), source=source, token=tok) == "CONFLICT"
+        assert code_of(lw.open, "T1", item(), source="nope", token=tok) == "USAGE"
+
+    def test_out_of_scope_and_a_closed_review(self, lw: L) -> None:
+        tok = _review(lw, "V1", "global", ["T1"])
+        assert code_of(lw.open, "T4", item(), source="global_review", token=tok) == "CONFLICT"
+        sql(lw.db, "UPDATE reviews SET state = 'finished'")
+        assert code_of(lw.open, "T1", item(), source="global_review", token=tok) == "STALE_TOKEN"
+
+    def test_a_merged_scope_task_is_accepted(self, lw: L) -> None:
+        sql(lw.db, "UPDATE tasks SET state = 'merged' WHERE id = 'T4'")
+        tok = _review(lw, "V1", "cross_run", ["T4", "T6"])
+        assert lw.open("T4", item(), source="cross_run_review", token=tok)
+
+    def test_an_exact_reraise_across_reviews_is_a_new_row_flagged(self, lw: L) -> None:
+        first = _review(lw, "V1", "global", ["T1"], state="finished")
+        sql(lw.db, "UPDATE reviews SET state = 'running' WHERE id = 'V1'")
+        [a] = lw.open("T1", item(), source="global_review", token=first)
+        sql(lw.db, "UPDATE reviews SET state = 'finished' WHERE id = 'V1'")
+        second = _review(lw, "V2", "global", ["T1"])
+        [b] = lw.open("T1", item(), source="global_review", token=second)
+        assert a != b and lw.row(b)["matched_id"] == a
+        assert [f["kind"] for f in lw.row(b)["flags"]] == ["matches"]
+        assert lw.open("T1", item(), source="global_review", token=second) == [b]  # its own replay
+
+    def test_relates_to_stays_in_the_tasks_run(self, lw: L) -> None:
+        own = lw.one("T6", token=lw.token2, title="R2 finding")
+        tok = _review(lw, "V1", "cross_run", ["T1", "T6"])
+        assert lw.open("T6", item(title="x", relates_to=[own]), source="cross_run_review", token=tok)
+        assert code_of(lw.open, "T1", item(title="y", relates_to=[own]), source="cross_run_review", token=tok) == (
+            "NOT_FOUND"
+        )
+
+    def test_refused_everywhere_else_in_the_ledger(self, lw: L) -> None:
+        tok = _review(lw, "V1", "global", ["T1"])
+        [fid] = lw.open("T1", item(), source="global_review", token=tok)
+        assert code_of(lw.state, fid, "rejected", reason="r", token=tok) == "CONFLICT"
+        assert code_of(lw.classify, fid, "nice_to_have", token=tok) == "CONFLICT"
+        assert code_of(lw.round, "T1", token=tok) == "CONFLICT"
+        assert (
+            code_of(
+                ledger.set_blast_radius,
+                lw.conn,
+                lw.clock,
+                token=tok,
+                task_id="T1",
+                value="ok",
+                head_sha="h",
+                review="V1",
+                reason=None,
+            )
+            == "CONFLICT"
+        )
+        grant = "review:V1.0." + "5" * 32
+        assert code_of(lw.open, "T1", item(), source="global_review", token=grant) == "CONFLICT"
+
+    def test_append_blast_radius_locked(self, lw: L) -> None:
+        with db.write(lw.conn):
+            rid = ledger.append_blast_radius_locked(
+                lw.conn,
+                lw.clock,
+                task_id="T1",
+                value="doubt",
+                head_sha="h9",
+                review="V3",
+                reason="r",
+                actor="review:V3",
+            )
+        row = db.as_dict(lw.conn.execute("SELECT * FROM blast_radius WHERE id = ?", (rid,)).fetchone())
+        assert row is not None and (row["value"], row["head_sha"], row["review"], row["actor"]) == (
+            "doubt",
+            "h9",
+            "V3",
+            "review:V3",
+        )
+        assert ledger.blast_radius(lw.conn, "T1", "h9")["id"] == rid

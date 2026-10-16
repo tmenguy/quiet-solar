@@ -25,7 +25,9 @@ class Runner:
 
     Its children stay in the caller's process group, except with
     ``detach=True`` (``start_new_session``), used for every ``claude --bg``
-    launch so no long-lived descendant keeps a tool's claim alive.
+    launch so no long-lived descendant keeps a tool's claim alive. The output
+    is decoded as UTF-8 with ``decode_errors`` (``"strict"`` by default;
+    ``review read`` passes ``"surrogateescape"``, #407).
     """
 
     def run(
@@ -37,6 +39,7 @@ class Runner:
         env_remove: Iterable[str] = (),
         timeout: float | None = None,
         detach: bool = False,
+        decode_errors: str = "strict",
     ) -> RunResult:
         env = dict(os.environ)
         env.update(env_extra or {})
@@ -48,6 +51,8 @@ class Runner:
                 cwd=cwd,
                 env=env,
                 text=True,
+                encoding="utf-8",
+                errors=decode_errors,
                 capture_output=True,
                 stdin=subprocess.DEVNULL,
                 timeout=timeout,

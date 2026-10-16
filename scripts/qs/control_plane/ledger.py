@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import clock as clock_mod
-from . import db, errors, export, tasks, tokens
+from . import db, errors, export, schema_reviews, tasks, tokens
 from .schema_ledger import (
     BLAST_VALUES,
     CATEGORIES,
@@ -87,11 +87,12 @@ def writer(
 ) -> Writer:
     """Inside ``db.write``. A node token writes on its own task, a run token on any task of its run (D13).
 
-    The one point child 15 extends (a reviewer-scoped token, cross-run writes).
+    A review session token (#407, only where ``kinds`` names ``review``) writes on any task of its scope, any
+    run; its rows record the task's run.
     """
     who = tokens.require(conn, token, kinds=kinds, task_id=task_id)
     task = tasks.get(conn, task_id)
-    return Writer(who, who.actor, task["run_id"] if task["run_id"] is not None else who.run_id)
+    return Writer(who, who.actor, task["run_id"] if task["run_id"] is not None else (who.run_id or None))
 
 
 def norm(text: str) -> str:
@@ -414,7 +415,12 @@ def open_findings(
         raise errors.CpError("USAGE", "--round must be >= 1 (round 0 is only the default before any round)")
     ids: list[int] = []
     with db.write(conn):
-        w = writer(conn, token, task_id)
+        w = writer(conn, token, task_id, kinds={"run", "node", tokens.REVIEW})
+        if w.principal.kind == tokens.REVIEW:  # #407: its own source; every item carries its id as reviewer
+            own = schema_reviews.SOURCES[str(w.principal.review_kind)]
+            if source != own:
+                raise errors.CpError("CONFLICT", f"review {w.principal.review_id} writes only --source {own}")
+            batch = [{**item, "reviewer": w.actor} for item in batch]
         if round_ is None:
             number = latest_round(conn, task_id, phase)
         elif conn.execute(
@@ -663,21 +669,43 @@ def set_blast_radius(
         raise errors.CpError("USAGE", "--head-sha and --review must not be empty")
     with db.write(conn):
         w = writer(conn, token, task_id, kinds={"run"})
-        cur = conn.execute(
-            "INSERT INTO blast_radius (task_id, value, head_sha, review, reason, actor, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (task_id, value, sha, rev, reason, w.actor, db.now(clock)),
+        row_id = append_blast_radius_locked(
+            conn, clock, task_id=task_id, value=value, head_sha=sha, review=rev, reason=reason, actor=w.actor
         )
-    return {"id": cur.lastrowid, "task_id": task_id, "value": value, "head_sha": sha}
+    return {"id": row_id, "task_id": task_id, "value": value, "head_sha": sha}
+
+
+def append_blast_radius_locked(
+    conn: sqlite3.Connection,
+    clock: clock_mod.Clock,
+    *,
+    task_id: str,
+    value: str,
+    head_sha: str,
+    review: str,
+    reason: str | None,
+    actor: str,
+) -> int:
+    """Append one rating inside the caller's transaction → its id (``blast-radius set`` and ``review finish``)."""
+    cur = conn.execute(
+        "INSERT INTO blast_radius (task_id, value, head_sha, review, reason, actor, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (task_id, value, head_sha, review, reason, actor, db.now(clock)),
+    )
+    return int(cur.lastrowid or 0)
 
 
 def blast_radius(conn: sqlite3.Connection, task_id: str, head_sha: str | None = None) -> dict[str, Any] | None:
-    """Child 7's reader: the latest rating, or the latest for ``head_sha``; ``None`` when there is none."""
+    """Child 7's reader: the latest rating, or the latest for ``head_sha``; ``None`` when there is none.
+
+    ``head_sha`` is the full sha (``review finish`` stores the capture's full sha), matched stripped and
+    case-insensitively, as ``reviews.outcome`` does; an abbreviated sha matches nothing.
+    """
     if head_sha is not None:
         head_sha = _text(head_sha)
         if head_sha is None:  # given but blank: no rating, never another head's
             return None
-    sql = "SELECT * FROM blast_radius WHERE task_id = ?" + ("" if head_sha is None else " AND head_sha = ?")
-    params = (task_id,) if head_sha is None else (task_id, head_sha)
+    sql = "SELECT * FROM blast_radius WHERE task_id = ?" + ("" if head_sha is None else " AND lower(head_sha) = ?")
+    params = (task_id,) if head_sha is None else (task_id, head_sha.lower())
     return db.as_dict(conn.execute(sql + " ORDER BY id DESC LIMIT 1", params).fetchone())
 
 

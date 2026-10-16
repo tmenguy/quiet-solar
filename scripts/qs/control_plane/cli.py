@@ -29,6 +29,7 @@ from . import (
     decisions,
     errors,
     export,
+    gitread,
     hooks,
     items,
     ledger,
@@ -43,6 +44,7 @@ from . import (
     questions,
     reports,
     restore,
+    reviews,
     runner,
     runs,
     schema_ledger,
@@ -57,6 +59,7 @@ from . import clock as clock_mod
 items.register_item_tools()  # #400's tools: the parser and the parametrized tests read REGISTRY at import
 ledger.register_export()  # #375's summary sections; the export is reachable only through this module
 activeloop.register_builtin()  # QS-406: the daemon's tick hooks (idempotent; main() calls it again)
+reviews.register_review_tool()  # #407: `tool review` (idempotent; main() calls it again)
 
 
 @dataclass(frozen=True)
@@ -951,6 +954,29 @@ def _ledger_show(args: argparse.Namespace, io: Io) -> dict[str, Any]:
             return ledger.show(conn, args.task, phase=args.phase, states=states, include_family=args.include_family)
 
 
+def _conf_review_read(p: argparse.ArgumentParser) -> None:
+    p.add_argument("op", choices=gitread.OPS)
+    for name in ("base", "head", "rev", "path", "pattern"):
+        p.add_argument(f"--{name}")
+
+
+def _review_read(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    """#407 D6a: a review session reads code through this fixed, read-only git argv (exempt: no DB, no token)."""
+    given = {n: getattr(args, n) for n in ("base", "head", "rev", "path", "pattern") if getattr(args, n) is not None}
+    return gitread.read(io.deps.runner, paths.main(), args.op, given)
+
+
+def _conf_review_finish(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--input", required=True, help="the finish JSON file")
+    _token(p)
+
+
+def _review_finish(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    """#407 D4: a review session hands its outcomes back, once (the JSON is read and parsed before the token)."""
+    data = reviews.parse_finish(read_file(args.input))
+    return _write(io, reviews.finish, io.deps.clock, token=args.token, data=data)
+
+
 COMMANDS: dict[str, Command] = {
     c.name: c
     for c in (
@@ -977,6 +1003,7 @@ COMMANDS: dict[str, Command] = {
         Command(
             "hooks-settings", "exempt", _hooks_settings, _conf_hooks_settings, help="print a hooks settings fragment"
         ),
+        Command("review read", "exempt", _review_read, _conf_review_read, help="a review's read-only git (fixed argv)"),
         Command("run open", "write", _run_open, _conf_run_open, help="open a run; returns its run token"),
         Command(
             "run claim", "write", _run_claim, _conf_run_claim, help="claim a run's lease (re-claim, take, take over)"
@@ -996,6 +1023,9 @@ COMMANDS: dict[str, Command] = {
         Command("finding state", "write", _finding_state, _conf_finding_state, help="move a finding to a state"),
         Command(
             "blast-radius set", "write", _blast_radius_set, _conf_blast_radius_set, help="rate a task's blast radius"
+        ),
+        Command(
+            "review finish", "write", _review_finish, _conf_review_finish, help="a review session hands its review back"
         ),
         Command("msg post", "write", _msg_post, _conf_msg_post, help="post a message to a queue"),
         Command("msg pop", "write", _msg_pop, _conf_msg_pop, help="pop the next visible message (with a receipt)"),
@@ -1028,7 +1058,7 @@ COMMANDS: dict[str, Command] = {
 
 
 def _conf_tool(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--task", required=True)
+    p.add_argument("--task", help="the task (required by a task-bound tool, refused by a task-less one)")
     p.add_argument("--key", required=True)
     p.add_argument("--args-file")
     _token(p)
@@ -1100,6 +1130,7 @@ def _emit(out: TextIO, payload: dict[str, Any]) -> None:
 
 def main(argv: Sequence[str] | None = None, *, stdin: TextIO | None = None, stdout: TextIO | None = None) -> int:
     items.register_item_tools()  # cheap, and keeps a reset registry whole before build_parser()
+    reviews.register_review_tool()
     activeloop.register_builtin()  # likewise for the tick hooks
     io = Io(stdin=stdin or sys.stdin, stdout=stdout or sys.stdout, deps=make_deps())
     argv = list(sys.argv[1:] if argv is None else argv)

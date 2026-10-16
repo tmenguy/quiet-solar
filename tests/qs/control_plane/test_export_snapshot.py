@@ -258,7 +258,35 @@ def busy_world(world, fake_clock) -> dict[str, Any]:
     assert ok("finding", "classify", "1", "--class", "must_fix")[0] == 0
     blast = ("blast-radius", "set", "--task", "T1", "--value", "ok", "--head-sha", "h1", "--review", "G1")
     assert ok(*blast)[0] == 0
+    # #407: one row of each review table, so _shape pins their columns (and both nonces are present to hide).
+    _review(w["db"], "V1", w["run"], ["T1"])
     return w
+
+
+SESSION_NONCE, GRANT_NONCE = "cd" * 16, "ef" * 16
+
+
+def _review(path: Path, rid: str, home: str | None, task_ids: list[str], *, kind: str = "global") -> None:
+    sql(
+        path,
+        "INSERT INTO reviews (id, kind, coalesce_key, home_run_id, state, agent, nonce, grant_nonce, name,"
+        " requested_by, created_at, updated_at) VALUES (?, ?, ?, ?, 'running', 'qs-global-review', ?, ?, ?, 'x',"
+        " 'x', 'x')",
+        [rid, kind, f"{kind}:{rid}", home, SESSION_NONCE, GRANT_NONCE, f"qs-review-{rid}"],
+    )
+    for task_id in task_ids:
+        sql(
+            path,
+            "INSERT INTO review_tasks (review_id, task_id, run_id, head_state)"
+            " SELECT ?, id, run_id, 'plan' FROM tasks WHERE id = ?",
+            [rid, task_id],
+        )
+    sql(
+        path,
+        'INSERT INTO review_triggers (review_id, actor, "trigger", tool_key, outcome, at)'
+        " VALUES (?, 'orchestrator', '{\"why\": \"merge\"}', ?, 'created', 'x')",
+        [rid, f"key-{rid}"],
+    )
 
 
 class TestSnapshot:
@@ -270,10 +298,34 @@ class TestSnapshot:
         assert _shape(snap) == json.loads((GOLDEN / "snapshot_keys.json").read_text())
 
     def test_no_nonce_ever(self, busy_world) -> None:
-        blob = json.dumps(run_cli("snapshot")[1])
-        for (nonce,) in sql(busy_world["db"], "SELECT nonce FROM run_leases UNION SELECT nonce FROM nodes"):
-            assert nonce not in blob
-        assert '"nonce"' not in blob
+        for argv in (("snapshot",), ("snapshot", "--run", "R1")):
+            blob = json.dumps(run_cli(*argv)[1])
+            for (nonce,) in sql(busy_world["db"], "SELECT nonce FROM run_leases UNION SELECT nonce FROM nodes"):
+                assert nonce not in blob
+            assert '"nonce"' not in blob
+            assert SESSION_NONCE not in blob and GRANT_NONCE not in blob and '"grant_nonce"' not in blob  # #407
+
+    def test_the_review_tables_and_their_run_filter(self, busy_world) -> None:
+        """#407 D13: a review shows in each run it has a task in; a pilot trigger with no review only unfiltered."""
+        from .conftest import insert_task
+
+        w = busy_world
+        run2, _ = open_run("r2", "S-2")
+        insert_task(w["db"], "T8", run2)
+        _review(w["db"], "V2", None, ["T2", "T8"], kind="cross_run")
+        sql(
+            w["db"],
+            'INSERT INTO review_triggers (review_id, actor, "trigger", tool_key, outcome, at)'
+            " VALUES (NULL, 'cp:review_pilot', '{}', 'pilot:e:1', 'queued', 'x')",
+        )
+        r1, r2, everything = (run_cli("snapshot", *a)[1] for a in (("--run", "R1"), ("--run", "R2"), ()))
+        assert [r["id"] for r in r1["reviews"]] == ["V1", "V2"] and [r["id"] for r in r2["reviews"]] == ["V2"]
+        assert [(t["review_id"], t["task_id"]) for t in r1["review_tasks"]] == [("V1", "T1"), ("V2", "T2")]
+        assert [(t["review_id"], t["task_id"]) for t in r2["review_tasks"]] == [("V2", "T8")]
+        assert [t["review_id"] for t in r1["review_triggers"]] == ["V1", "V2"]
+        assert [t["review_id"] for t in r2["review_triggers"]] == ["V2"]
+        assert [t["review_id"] for t in everything["review_triggers"]] == ["V1", "V2", None]
+        assert everything["review_triggers"][0]["trigger"] == {"why": "merge"}  # JSON-parsed
 
     def test_values(self, busy_world) -> None:
         snap = run_cli("snapshot", "--run", "r1")[1]

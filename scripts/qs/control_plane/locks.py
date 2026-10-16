@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import sys
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -196,6 +196,7 @@ class Held:
     locks: list[str] = field(default_factory=list)
     coheld: list[str] = field(default_factory=list)
     slots: list[tuple[str, int]] = field(default_factory=list)
+    kinds: frozenset[str] = frozenset({"run", "node"})  # the token kinds the holding tool accepts (#407)
 
 
 def _deadline(clock: clock_mod.Clock, timeout: float) -> float:
@@ -231,7 +232,7 @@ def _take_lock(
                 restamp = None if start is None else (agent.pid, start)
         blocker: sqlite3.Row | None = None
         with db.write(conn):
-            who = tokens.require(conn, held.token, kinds={"run", "node"}, allow_stopped=held.allow_stopped)
+            who = tokens.require(conn, held.token, kinds=held.kinds, allow_stopped=held.allow_stopped)
             _check_session_order(conn, who, name)
             current = conn.execute("SELECT * FROM locks WHERE name = ?", (name,)).fetchone()
             if _ident(current) != _ident(row):
@@ -291,7 +292,7 @@ def _take_slot(
             if not probe.holder_alive(r["holder_pid"], r["holder_pid_start"], r["holder_pgid"])
         }
         with db.write(conn):
-            tokens.require(conn, held.token, kinds={"run", "node"}, allow_stopped=held.allow_stopped)
+            tokens.require(conn, held.token, kinds=held.kinds, allow_stopped=held.allow_stopped)
             current = {r["slot"]: r for r in conn.execute("SELECT * FROM cap_slots WHERE cap = ?", (cap,))}
             live = {slot for slot, r in current.items() if dead.get(slot) != r["holder_pid"]}
             if len(live) < limit:
@@ -347,10 +348,14 @@ def hold(
     holder: liveness.Holder | None = None,
     allow_stopped: bool = False,
     poll: float = POLL_S,
+    kinds: Collection[str] = frozenset({"run", "node"}),
 ) -> Iterator[Held]:
-    """Take ``names`` (sorted by ``LOCK_ORDER``, asserted), then a ``cap`` slot; free them on exit."""
+    """Take ``names`` (sorted by ``LOCK_ORDER``, asserted), then a ``cap`` slot; free them on exit.
+
+    ``kinds`` are the token kinds the token is checked against at every take and ``recheck`` (#407).
+    """
     assert_sorted(names)
-    held = Held(holder or probe.me(), token, actor, allow_stopped)
+    held = Held(holder or probe.me(), token, actor, allow_stopped, kinds=frozenset(kinds))
     conn = conn_factory()
     try:
         for name in names:
@@ -373,7 +378,7 @@ def recheck(conn: sqlite3.Connection, held: Held) -> None:
     """Before each step: the token is still valid and every lock / slot is still this call's."""
     me = held.holder
     with db.write(conn):
-        tokens.require(conn, held.token, kinds={"run", "node"}, allow_stopped=held.allow_stopped)
+        tokens.require(conn, held.token, kinds=held.kinds, allow_stopped=held.allow_stopped)
         for name in held.locks:
             row = conn.execute(
                 "SELECT holder_kind, holder_pid, holder_pgid FROM locks WHERE name = ?", (name,)

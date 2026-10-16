@@ -1003,6 +1003,8 @@ class TestApi:
             "on_success",
             "refuse_when_stopped",
             "token_kinds",
+            "task_bound",  # #407: appended last, in this order
+            "authorize",
         ]
         assert {"task", "args", "outputs", "runner", "claude", "main"} <= {
             f.name for f in dataclasses.fields(tools.StepCtx)
@@ -1869,3 +1871,136 @@ def test_a_deliverable_only_tool_refuses_a_work_item(w: W, name: str) -> None:
     assert call_row(w, name, "k1") is None
     assert t.effect(w) == 0
     assert w.runner.calls == []  # no probe ran (`issue-create` / `pr-create` probes call gh)
+
+
+# --------------------------------------------------------------------------- #407: task-less tools (D7)
+
+GRANT_NONCE = "9" * 32
+
+
+def _review(w: W, rid: str = "V1", state: str = "requested", tool_key: str | None = "review/t1") -> str:
+    sql(
+        w.db,
+        "INSERT INTO reviews (id, kind, coalesce_key, state, agent, grant_nonce, name, tool_key, requested_by,"
+        " created_at, updated_at) VALUES (?, 'cross_run', ?, ?, 'a', ?, ?, ?, 'x', 'x', 'x')",
+        [rid, f"k-{rid}", state, GRANT_NONCE, f"n-{rid}", tool_key],
+    )
+    return f"review:{rid}.0.{GRANT_NONCE}"
+
+
+@pytest.fixture
+def unbound(w: W):
+    """A throwaway task-less spec (removed by ``tools.reset()``) that runs two steps under a launch grant."""
+    effects: list[str] = []
+    seen: dict[str, Any] = {}
+
+    def first(ctx: tools.StepCtx) -> dict[str, Any]:
+        effects.append("first")
+        seen["task"] = ctx.task
+        return {"n": 1}
+
+    def second(ctx: tools.StepCtx) -> dict[str, Any]:
+        effects.append("second")
+        if ctx.args.get("fail"):
+            raise tools.StepFailed(f"cannot use {ctx.args['fail']}", {"token": ctx.args["fail"]})
+        return {"n": 2}
+
+    def authorize(conn, who, args, key) -> None:
+        seen["who"] = (who.kind, who.review_id, key)
+        if args.get("refuse"):
+            raise tools.errors.CpError("CONFLICT", "refused by authorize")
+
+    spec = tools.ToolSpec(
+        "unbound",
+        lambda task, args: (tools.Step("first", first), tools.Step("second", second)),
+        on_success=lambda conn, ctx: {"task": ctx.task, "outputs": dict(ctx.outputs)},
+        token_kinds=frozenset({"review_grant"}),
+        task_bound=False,
+        authorize=authorize,
+    )
+    tools.register(spec)
+    return effects, seen
+
+
+def _unbound(w: W, key: str, token: str, *extra: str, **args: Any) -> tuple[int, Any]:
+    f = w.tmp / f"unbound-{key}.json"
+    f.write_text(json.dumps(args))
+    return run_cli("tool", "unbound", "--key", key, "--args-file", str(f), "--token", token, *extra)
+
+
+class TestTaskLess:
+    def test_runs_its_steps_under_a_grant_with_no_task_and_no_run(self, w: W, unbound) -> None:
+        effects, seen = unbound
+        token = _review(w)
+        code, out = _unbound(w, "t1", token)
+        assert code == 0, out
+        assert out["result"] == {"task": None, "outputs": {"first": {"n": 1}, "second": {"n": 2}}}
+        assert effects == ["first", "second"] and seen["task"] is None
+        assert seen["who"] == ("review", "V1", "t1")
+        row = call_row(w, "unbound", "t1")
+        assert row is not None and (row["task_id"], row["run_id"], row["state"]) == (None, None, "succeeded")
+        assert row["actor"] == "review:V1"
+        code, again = _unbound(w, "t1", token)  # a task-less, run-less key replays by its primary key
+        assert code == 0 and again["replayed"] is True and again["result"] == out["result"]
+        assert effects == ["first", "second"] and len(sql(w.db, "SELECT * FROM tool_calls WHERE tool = 'unbound'")) == 1
+
+    def test_task_is_refused_for_an_unbound_tool_and_required_for_a_bound_one(self, w: W, unbound) -> None:
+        token = _review(w)
+        code, out = _unbound(w, "t1", token, "--task", "T1")
+        assert code == 2 and out["error"] == "USAGE" and "takes no --task" in out["detail"]
+        code, out = run_cli("tool", "push", "--key", "k", "--token", w.token)
+        assert code == 2 and out["error"] == "USAGE" and "needs --task" in out["detail"]
+        assert sql(w.db, "SELECT count(*) FROM tool_calls")[0][0] == 0
+
+    def test_an_authorize_refusal_is_a_clean_conflict(self, w: W, unbound) -> None:
+        effects, _ = unbound
+        code, out = _unbound(w, "t1", _review(w), refuse=True)
+        assert code == 8 and out["error"] == "CONFLICT" and out["detail"] == "refused by authorize"
+        assert effects == [] and call_row(w, "unbound", "t1") is None
+
+    def test_other_token_kinds_are_refused(self, w: W, unbound) -> None:
+        _review(w)
+        node = insert_node(w.db, "N1", w.run, "T1")
+        for token in (w.token, node, f"review:V1.1.{'8' * 32}"):  # run, node, a review session token
+            code, out = _unbound(w, "t1", token)
+            assert code == 8 and out["error"] == "CONFLICT", out
+        assert call_row(w, "unbound", "t1") is None
+
+    def test_the_grant_is_rechecked_before_every_step(self, w: W, unbound) -> None:
+        effects, _ = unbound
+        token = _review(w)
+
+        def void(ctx: tools.StepCtx) -> dict[str, Any]:
+            sql(w.db, "UPDATE reviews SET state = 'failed'")
+            effects.append("void")
+            return {"n": 1}
+
+        tools.REGISTRY["unbound"] = dataclasses_replace(
+            tools.REGISTRY["unbound"],
+            steps=lambda task, args: (tools.Step("first", void), tools.Step("second", lambda ctx: effects.append("2"))),
+        )
+        code, out = _unbound(w, "t1", token)
+        assert code == 3 and out["error"] == "STALE_TOKEN", out
+        assert effects == ["void"]  # the second step never ran
+
+    def test_a_recorded_error_never_holds_a_review_nonce(self, w: W, unbound) -> None:
+        token = _review(w)
+        secret_session, secret_grant = f"review:V1.1.{'a' * 32}", f"review:V12.0.{'b' * 32}"
+        code, out = _unbound(w, "t1", token, fail=f"{secret_session} and {secret_grant}")
+        assert code == 1 and out["error"] == "TOOL_FAILED"
+        row = call_row(w, "unbound", "t1")
+        assert row is not None and row["state"] == "failed"
+        for blob in (row["result"], json.dumps(out)):
+            assert "a" * 32 not in blob and "b" * 32 not in blob
+            assert "review:V1.1.<redacted>" in blob and "review:V12.0.<redacted>" in blob
+
+    def test_redact(self) -> None:
+        assert tools.redact(f"x review:V3.1.{'c' * 32} y run:R1.1.{'d' * 32}") == (
+            f"x review:V3.1.<redacted> y run:R1.1.{'d' * 32}"
+        )
+
+
+def dataclasses_replace(spec: tools.ToolSpec, **changes: Any) -> tools.ToolSpec:
+    import dataclasses
+
+    return dataclasses.replace(spec, **changes)

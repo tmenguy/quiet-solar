@@ -10,12 +10,16 @@ It is Python with no LLM, and there is one of it for all runs. It holds:
 - the tools layer;
 - the hooks;
 - the **active loop** (child 14, [#406](https://github.com/tmenguy/quiet-solar/issues/406)):
-  the daemon's tick hooks, which watch every run and alert, but never decide.
+  the daemon's tick hooks, which watch every run and alert, but never decide;
+- the **review sessions** (child 15, [#407](https://github.com/tmenguy/quiet-solar/issues/407)):
+  the global review of a run and the cross-run coherence review, one-shot LLM
+  sessions it launches and records ([Review sessions](#review-sessions-407)).
 
 Code: [`scripts/qs/control_plane/`](../../scripts/qs/control_plane/), behind the
 entry shim [`scripts/qs/cp.py`](../../scripts/qs/cp.py). Design and decisions:
 [`docs/stories/QS-399.story.md`](../stories/QS-399.story.md) and, for the active
-loop, [`docs/stories/QS-406.story.md`](../stories/QS-406.story.md).
+loop, [`docs/stories/QS-406.story.md`](../stories/QS-406.story.md); for the review sessions,
+[`docs/stories/QS-407.story.md`](../stories/QS-407.story.md).
 
 ## Invocation
 
@@ -41,7 +45,7 @@ The hooks print the Claude Code hook protocol instead, or nothing.
 | 0 | — | ok. For a hook: allow, or its JSON decision |
 | 1 | `INTERNAL`, `TOOL_FAILED` | unexpected error, or a tool step failed (recorded) |
 | 2 | `USAGE` | bad arguments, or no session id |
-| 3 | `STALE_TOKEN` | the token is superseded. The payload carries `superseded_by`, `at` and the self-end `instructions` |
+| 3 | `STALE_TOKEN` | the token is superseded. The payload carries `superseded_by`, `at` and the self-end `instructions` (a review token: `review_id`, `state` and the review's own `instructions`) |
 | 4 | `STOPPED` | the caller's node is stopped |
 | 5 | `SCHEMA_TOO_NEW`, `SCHEMA_PENDING` | the code is older than the DB, or a migration did not finish in time (`restart_wait` from `wait`) |
 | 6 | `BUSY` | a lock, a cap, an in-flight call of the same tool and key, the node cap, or an unknown liveness |
@@ -49,10 +53,10 @@ The hooks print the Claude Code hook protocol instead, or nothing.
 | 8 | `NOT_FOUND`, `CONFLICT`, `INVALID_STATE` | unknown id; uniqueness, argument or receipt mismatch, a token used out of bounds (a task of another run included), or a tool call's claim taken over by another process (`claim_taken_over`); forbidden transition |
 | 9 | `POLICY_REFUSED` | merge policy, a foreign or `core.hooksPath` hook, a write into the main checkout, a live DB outside `main`, … |
 
-**Tokens.** A token is `run:R<n>.<epoch>.<nonce>` or `node:N<n>.<generation>.<nonce>`.
+**Tokens.** A token is `run:R<n>.<epoch>.<nonce>`, `node:N<n>.<generation>.<nonce>`, or a review token `review:V<n>.<0|1>.<nonce>` (#407: `1` the review session's token, `0` the review pilot's launch grant; see [Review sessions](#review-sessions-407)).
 
 - Every effectful command takes `--token`. The CLI never reads the token from the environment.
-- Tokens appear only in the responses of `run open`, `run claim`, `tool spawn` and `tool resume`.
+- Tokens appear only in the responses of `run open`, `run claim`, `tool spawn` and `tool resume`. A review token appears in no response: the session token is in the review's launch prompt, the grant in the pilot's launcher argv.
 - No read command ever outputs a nonce.
 
 **Session ids.** `--session-id` defaults to `$CLAUDE_CODE_SESSION_ID`. If neither is set, the command fails with `USAGE`.
@@ -75,6 +79,7 @@ Kinds:
 | `hook stop` / `hook pre-tool-use` | stdin: hook JSON | — | exempt |
 | `hook pre-push` | git's args and stdin | (`QS_CP_TOKEN`) | exempt |
 | `hooks-settings` | `--role node\|orchestrator` | — | exempt |
+| `review read` | `diff --base SHA --head SHA [--path P]` / `show --rev SHA --path P` / `grep --rev SHA --pattern X [--path P]` / `ls-tree --rev SHA [--path P]` / `files --base SHA --head SHA [--path P]` (#407: a review's only code read, a fixed git argv on hex shas) | — | exempt |
 | `session status` | `[--session-id]` | — | read |
 | `snapshot` | `[--run R]` | — | read |
 | `task show` | `--task T` (the task in full, its ledger and `convergence` included) | — | read |
@@ -103,11 +108,12 @@ Kinds:
 | `node hand-back` | `--task T --summary-file F` | run, or node (own task) | write |
 | `lock acquire` / `lock release` | `--name integration:<branch> [--purpose] [--session-id] [--timeout S]` | run, or node (own deliverable, own session) | write |
 | `round start` | `--task T --phase plan\|build [--head SHA] [--base SHA]` (`--head` required for `build`) | run, or node (own task) | write |
-| `finding open` | `--task T --phase P --source S [--round R] --input F\|-` | run, or node (own task) | write |
+| `finding open` | `--task T --phase P --source S [--round R] --input F\|-` | run, or node (own task), or review session (a task of its scope, its own source) | write |
 | `finding classify` | `ID --class must_fix\|should_fix\|nice_to_have\|out_of_scope [--note]` | run, or node (own task) | write |
 | `finding state` | `ID --to open\|resolved\|rejected\|deferred\|settled [--reason] [--commit] [--cause ID]` | run, or node (own task) | write |
 | `blast-radius set` | `--task T --value ok\|doubt\|too_large --head-sha S --review R [--reason]` | run | write |
-| `tool <name>` | `--task T --key K [--args-file F]` | per tool | write |
+| `review finish` | `--input F` (#407: the review session's hand-back, once) | review session | write |
+| `tool <name>` | `[--task T] --key K [--args-file F]` (`--task` required by a task-bound tool, refused by a task-less one such as `review`: `USAGE`) | per tool | write |
 
 Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 and at most 86400 seconds; `lock acquire --timeout` may be 0 (try once). `wait --poll` must also be at least 0.05 and, when both are given, no more than `--timeout`. Anything else is `USAGE`.
 
@@ -117,6 +123,7 @@ Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 
 
 - **The hooks.** On a schema mismatch or an internal error they fail open at once. The exceptions are DB-free: `pre-push`'s refusal of work-item refs, and `PreToolUse`'s DB-access rule, which denies even while the DB is missing, migrating or contended.
 - **`hooks-settings` and `version`.** No DB at all.
+- **`review read`** (#407). No DB, no token: one fixed `git` invocation in the main checkout (see [Reading code](#reading-code-review-read)).
 - **`daemon`.** It migrates.
 - **`ensure`.** It reads the daemon lease defensively.
 - **`halt clear` and `restore`** (#406). The maintainer's commands: no token, since the DB may have no open run, or be lost. A newer DB is `SCHEMA_TOO_NEW` before anything else; see [The merge gate](#the-merge-gate-and-the-self-check) and [Backups and restore](#backups-and-restore).
@@ -129,7 +136,7 @@ Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 
 
 ### Tables
 
-`harness_state.db` holds, at schema v3 (v1: the tables below except the ledger and `alerts`; v2: the finding ledger of #375; v3: the active loop's `alerts`, #406):
+`harness_state.db` holds, at schema v4 (v1: the tables below except the ledger, `alerts` and the review tables; v2: the finding ledger of #375; v3: the active loop's `alerts`, #406; v4: the review sessions, #407):
 
 | group | tables |
 |---|---|
@@ -141,8 +148,9 @@ Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 
 | active loop (v3, #406) | `alerts`: one row per (run, occurrence) |
 | bookkeeping | `meta`, `counters` |
 | the ledger (v2) | `rounds`, `findings`, `finding_events`, `blast_radius` (see [The ledger](#the-ledger-375)) |
+| review sessions (v4, #407) | `reviews`, `review_tasks`, `review_triggers` (see [Review sessions](#review-sessions-407)) |
 
-Migration v3 (#406) adds `alerts` and seeds `meta.hook_events_cursor` past the existing `hook_events` (so history is never replayed). The active loop also keeps these `meta` keys, written at runtime: `selfcheck`, `selfcheck_override`, `selfcheck_pending`, `last_backup_at`, `last_backup_error`.
+Migration v3 (#406) adds `alerts` and seeds `meta.hook_events_cursor` past the existing `hook_events` (so history is never replayed). Migration v4 (#407) adds the review tables and seeds `meta.review_pilot_cursor` past the existing `task_history`. The active loop also keeps these `meta` keys, written at runtime: `selfcheck`, `selfcheck_override`, `selfcheck_pending`, `last_backup_at`, `last_backup_error`.
 
 The schema version is `PRAGMA user_version`.
 
@@ -204,6 +212,7 @@ The daemon is the active loop: one Python process for every run. Each tick (`TIC
 | `code_version` | every tick | restart on new Control Plane code ([Restart on new code](#restart-on-new-code)) |
 | `selfcheck` | every tick, deciding from `meta.selfcheck` | the post-merge self-check that opens the merge gate |
 | `detectors` | `DETECT_EVERY_S`; overlap every `OVERLAP_EVERY_S` | overlap, stalled nodes, rounds, state anomalies, cycles, duplicates ([Detectors](#detectors)) |
+| `review_pilot` | `PILOT_EVERY_S` | closes dead reviews; launches the cross-run review (#407, [The review pilot](#the-review-pilot)) |
 | `hook_route` | every tick | routes `hook_events` alerts to their run's orchestrator queue |
 | `ci_watch` | its own schedule | `tasks.ci_state` / `ci_sha` for every open PR; `ci_red` |
 | `liveness_watchdog` | `LIVENESS_EVERY_S` | `node_dead`, `orchestrator_dead`, and the wake-up ladder |
@@ -211,7 +220,7 @@ The daemon is the active loop: one Python process for every run. Each tick (`TIC
 
 ### Registering a tick hook
 
-`ticks.register(name, fn)` (`ValueError` on a duplicate name); `fn(conn, clock)` gets the daemon's single long-lived connection. The built-in hooks are listed in `activeloop.register_builtin()` and `activeloop.BUILTIN_NAMES`; `cli` calls `register_builtin()` at import and in `main`, so a later child (child 15's cross-run pilot) adds its hook to that list and to `BUILTIN_NAMES`, and the self-check sees a missing one. A hook takes its side effects from `activeloop.seams()` (`Seams`: `runner`, `probe`, `claude`, `main`, `github`), built once per daemon. **The contract:**
+`ticks.register(name, fn)` (`ValueError` on a duplicate name); `fn(conn, clock)` gets the daemon's single long-lived connection. The built-in hooks are listed in `activeloop.register_builtin()` and `activeloop.BUILTIN_NAMES`; `cli` calls `register_builtin()` at import and in `main`, so a later child adds its hook to that list and to `BUILTIN_NAMES` (child 15 added `review_pilot`), and the self-check sees a missing one. A hook takes its side effects from `activeloop.seams()` (`Seams`: `runner`, `probe`, `claude`, `main`, `github`, and `popen`, the review pilot's detached launcher, `None` when absent), built once per daemon. **The contract:**
 
 - never let `STALE_AFTER_S` pass without a beat;
 - give every subprocess a timeout of at most `HOOK_SUBPROCESS_S`, and call `daemon.beat(conn, clock)` after it;
@@ -224,7 +233,7 @@ A hook that raises is logged and skipped. A SIGTERM is honoured after the curren
 
 An alert is raised **once per occurrence**: `alerts.sync_locked(conn, clock, kinds=…, active=[Condition(kind, subject, run_ids, payload)])` inserts one `alerts` row per (open run, kind, subject) and posts one orchestrator message whose `dedupe_key` is the fingerprint `<kind>:<sha256(subject)[:16]>:<n>`. While the condition holds, later syncs refresh the row (`last_seen`, `payload`) and post nothing; when it stops holding, the row is cleared, silently; a recurrence is a new occurrence (`n + 1`). A condition raised again per value carries the value in its subject (a CI sha, a round, a lock's `acquired_at`). A hook syncs only the kinds whose input it knows this tick, so an unknown input clears nothing; **cold in-memory state counts as unknown**, so a daemon restart is never a recurrence. `alerts.event_locked` records a one-shot alert (cleared at once, posted once).
 
-Kinds (`alerts.KINDS`, each 1–32 characters; `CROSS_RUN_KINDS` for child 15): `overlap` / `overlap_cross_run`, `node_stalled`, `too_many_rounds`, `task_without_node`, `dependency_violated`, `lock_held_long`, `gate_slot_held_long`, `leftover_item`, `leftover_scratch`, `dependency_cycle` / `dependency_cycle_cross_run`, `duplicate_task` / `duplicate_task_cross_run`, `ci_red` (severity `must-fix`; every other kind is `alert`), `node_dead`, `orchestrator_dead`, `orchestrator_not_listening`, `selfcheck_failed`, `backup_failed`, and the routed hook kinds (`queue_not_draining`, `idle_without_wait`, `merge_state_conflict`, any other 1–32-character kind that is not daemon-owned, else `hook_alert`). `ROUNDS_ALERT` is 5.
+Kinds (`alerts.KINDS`, each 1–32 characters; `CROSS_RUN_KINDS` for child 15): `overlap` / `overlap_cross_run`, `node_stalled`, `too_many_rounds`, `task_without_node`, `dependency_violated`, `lock_held_long`, `gate_slot_held_long`, `leftover_item`, `leftover_scratch`, `dependency_cycle` / `dependency_cycle_cross_run`, `duplicate_task` / `duplicate_task_cross_run`, `ci_red` (severity `must-fix`; every other kind is `alert`), `node_dead`, `orchestrator_dead`, `orchestrator_not_listening`, `selfcheck_failed`, `backup_failed`, `review_failed` (#407), and the routed hook kinds (`queue_not_draining`, `idle_without_wait`, `merge_state_conflict`, any other 1–32-character kind that is not daemon-owned, else `hook_alert`). `ROUNDS_ALERT` is 5.
 
 **The read path.** `snapshot["alerts"]` lists every open alert row, then the `ALERTS_LIMIT` newest cleared ones (after the `--run` filter). The raw `hook_events` alerts are in `snapshot["hook_alerts"]`, so an unroutable one stays visible. `hook_alerts` is global: `--run` does not filter it, because `hook_events` has no run column and a raw event may name no run at all.
 
@@ -364,7 +373,7 @@ An unknown key, a wrong type, a value off its vocabulary, `line_start > line_end
 
 ### Who writes
 
-`ledger.writer(conn, token, task_id, *, kinds)` is the one check, the point child 15 extends: a node token writes on its own task, a run token on any task of its run (another run's task is `CONFLICT`). The arguments are validated first (`USAGE`); then the ID-taking commands check the token, then the finding (`NOT_FOUND`), then its task's scope, so a stale token is `STALE_TOKEN`, never `NOT_FOUND`. `relates_to` and `--cause` read only findings of the writer's run (`NOT_FOUND` otherwise). The CLI flags (`--head`, `--base`, `--commit`, `--reason`, `--note`, `--head-sha`, `--review`) are stripped; a blank optional one is absent, but a blank `--commit` on another target than `resolved` is still `USAGE`. A task with no run is written with a run token and records the principal's `run_id`. Every row and event records its `actor` (`orchestrator` for a run token, `node:<task>` for a node token); `source` is recorded as given. `blast-radius set` takes a run token only: a node never rates its own blast radius, which feeds the merge's second human gate. Cross-run writes wait on child 15.
+`ledger.writer(conn, token, task_id, *, kinds)` is the one check, the point child 15 extends: a node token writes on its own task, a run token on any task of its run (another run's task is `CONFLICT`). The arguments are validated first (`USAGE`); then the ID-taking commands check the token, then the finding (`NOT_FOUND`), then its task's scope, so a stale token is `STALE_TOKEN`, never `NOT_FOUND`. `relates_to` and `--cause` read only findings of the writer's run (`NOT_FOUND` otherwise). The CLI flags (`--head`, `--base`, `--commit`, `--reason`, `--note`, `--head-sha`, `--review`) are stripped; a blank optional one is absent, but a blank `--commit` on another target than `resolved` is still `USAGE`. A task with no run is written with a run token and records the principal's `run_id`. Every row and event records its `actor` (`orchestrator` for a run token, `node:<task>` for a node token); `source` is recorded as given. `blast-radius set` takes a run token only: a node never rates its own blast radius, which feeds the merge's second human gate. A **review session token** (#407) writes `finding open` only, on a task of its scope in any run, with its own source (`global_review` / `cross_run_review`, another is `CONFLICT`); each item's `reviewer` is the review's id (a given one is replaced), the actor `review:V<n>`, and `relates_to` stays in the task's run. Its blast-radius ratings come through `review finish` (`ledger.append_blast_radius_locked`, shared with `blast-radius set`).
 
 ### Convergence
 
@@ -413,6 +422,145 @@ An unknown key, a wrong type, a value off its vocabulary, `line_start > line_end
 ### What child 17 reads
 
 From the tables alone: the rounds; the findings per round with `source` and `reviewer`; `unchanged_lines`; the classification and its changes (`classify` events); the reopenings (`state` events to `open`, with `cause_id`); the convergence declarations (`consistent` is computed live, so the node's `converged` report carries its `blocking` ids); the flip-flops (`overlaps_fix` / `relates_to` flags, `matches` on a resolved row, `settled` rows and their rationale).
+
+## Review sessions (#407)
+
+Two **one-shot LLM sessions**, launched and recorded by the Control Plane, replace a permanent coherence checker (maintainer, 2026-10-02): the **global review of a run** (every task of one run read together: does each fit the global plan, do they fit together, each deliverable's blast radius) and the **cross-run coherence review** (tasks of several runs that collide: the same code, the same task twice). The per-task review is not one of them: it is the node's own build loop (6b). Code: [`reviews.py`](../../scripts/qs/control_plane/reviews.py), [`reviewpilot.py`](../../scripts/qs/control_plane/reviewpilot.py), [`gitread.py`](../../scripts/qs/control_plane/gitread.py), schema [`schema_reviews.py`](../../scripts/qs/control_plane/schema_reviews.py); agents `qs-global-review` and `qs-cross-run-review` (templates in [`scripts/qs/agent_templates/`](../../scripts/qs/agent_templates/)).
+
+**No ceiling** (maintainer, 2026-10-13: the only ceilings are CodeRabbit's, 6b's): no cap on review sessions, no per-run budget, and a review never counts against the node cap (`locks.admit_node` counts only `nodes` rows). Coalescing, deferral and the pilot's one review per event are the only bounds. **No global review for a run with fewer than 2 tasks.**
+
+### The tables
+
+| table | holds |
+|---|---|
+| `reviews` | one row per review: `id` (`V<n>`), `kind` (`global` / `cross_run`, checked in Python: `schema_reviews.KINDS`), `coalesce_key`, `home_run_id` (`NULL` cross-run), `state` (`requested → launching → running → finished`, or `failed` / `abandoned`), the agent, model, effort and permission mode, `nonce` / `grant_nonce`, the launch `name`, `session_id` / `short_id`, `dir`, `tool_key` (`review/<call key>`), `requested_by`, `summary`, `error`, `heads_at` (the capture marker), the times. A partial unique index allows one in-flight review (`requested`, `launching`, `running`) per `coalesce_key` |
+| `review_tasks` | its scope: one row per task, with its `run_id`, the `base_sha` / `head_sha` / `head_state` it reviewed, and its `outcome` (`pass` / `fail`), `reason`, `blast_radius_id`, `recorded_at` |
+| `review_triggers` | every trigger: `review_id` (`NULL` while queued or skipped), `actor`, `trigger` (JSON), the raw call `tool_key`, `outcome` (`queued`, `created`, `joined`, `skipped`). One row per pilot attempt (`UNIQUE (tool_key) WHERE tool_key LIKE 'pilot:%'`): the pilot's queue |
+
+`snapshot` shows the three tables; with `--run R`, `review_tasks` of R and the `reviews` / `review_triggers` of a review with a task in R (a queued pilot row, with no review yet, only unfiltered). Neither `nonce` nor `grant_nonce` ever leaves the DB. A cross-run launcher in flight has `tool_calls.run_id NULL`, so a run-filtered `tool_calls_in_flight` does not show it; its `reviews` row does (an accepted limit).
+
+### The two token forms
+
+`review:V<n>.<e>.<nonce>`, `V[1-9][0-9]*`, `e` in `{0, 1}`, 32 hex digits (a full match: anything else, a trailing newline included, is `USAGE`). `tokens.require` maps `e = 1` to the effective kind `review` and `e = 0` to `review_grant`, and checks it against the command's `kinds`; every command but three has neither (`CONFLICT`). Expiry is **by state**, never by clock: the pilot closes dead and expired reviews.
+
+| form | minted | valid while | accepted by |
+|---|---|---|---|
+| session (`e = 1`, `reviews.nonce`) | when the row becomes `launching` (the run-token path inserts it so; the grant path's `requested → launching`) | `launching` or `running` | `finding open` (a task of its scope, any run, its own source) and `review finish` |
+| launch grant (`e = 0`, `reviews.grant_nonce`) | by the pilot's request | not `failed` / `abandoned` | `tool review`, for its own review under the key it was minted for (`reviews.tool_key == "review/" + key`) |
+
+Outside its valid states a token is `STALE_TOKEN`, with `instructions` "This review is closed or superseded: stop now, take no further action." A `NULL` or empty stored nonce is `STALE_TOKEN` before any comparison; nonces are compared with `hmac.compare_digest`. A review's `Principal` carries `review_id`, `review_kind` and its `scope`; its `run_id` is the home run, or `""` cross-run; its actor is `review:V<n>`. With `task_id`, the task must be in the scope (`CONFLICT` otherwise), whatever its run. The reads (`snapshot`, `task show`, `ledger show`, `review read`) take no token.
+
+### `tool review`: one review session
+
+`cp.py tool review --key K --args-file F --token T` (task-less: no `--task`):
+
+| token | args | answer |
+|---|---|---|
+| run of R | `{"kind": "global", "run": "R", "trigger"?: {…}}` (`run` by id or name) | launch, join, `BUSY` (deferred) or skip |
+| run of another run, or `{"kind": "cross_run"}`, or `{"review": …}` | | `CONFLICT` |
+| grant of V7, key `K` with `reviews.tool_key == "review/K"` | `{"review": "V7"}` | launch |
+| grant of V7 with another key or other args; a session or node token | | `CONFLICT` |
+
+A missing or unknown `kind`, a missing `run`, an unknown argument or a non-object `trigger` is `USAGE`, and so is a run token's key starting with `pilot:` in any case (`schema_reviews.PILOT_PREFIX`: reserved for the review pilot's queue). Every refusal comes from `authorize`, before the claim.
+
+**The scope** (`reviews.request_locked`, shared with the pilot):
+
+- **global:** every task of the run that is a deliverable or a work item and is not terminal (`dropped`, `merged`, `validated`). Fewer than 2 (work items count: a deliverable split into 3 items is 4 tasks) → `{"skipped": "single_task", "tasks": […]}`, a success with no review row and no trigger row; a replayed key answers the same.
+- **cross-run** (the pilot only): the event's tasks, re-filtered at every request: tasks of closed runs (or of no run) are dropped, except a merge event's merged task. Skipped when nothing left is non-terminal (`no_open_task`), when an alert event spans fewer than 2 open runs (`single_run`), or when a merge event has no open run other than the merged task's (`no_other_run`).
+
+**Coalescing and deferral** (Q6, maintainer 2026-10-16). The coalesce key is `global:<run>` or `cross_run:<sorted kept task ids joined by "|">`. When the key has a review in flight:
+
+- its heads are not captured yet (`heads_at IS NULL`) and, for a global review, the scope is the same → the request **joins** it: a `joined` trigger row, no launch, `{"coalesced_into": "V<n>"}`;
+- otherwise the request is **deferred**, since it would be absorbed by a review that never sees the new commits: `tool review` answers `BUSY` with `review_id`, "replay this key after it closes" (released: nothing written, the same key works later); the pilot keeps the event queued.
+
+So after a running review closes, **one** new review of the latest heads starts, and the triggers of its first seconds join it. A key whose call ended (a launch, a join, a failure) is spent: after a `review_failed` for its own review or one it joined, a caller uses a new key.
+
+**The steps.** Each re-reads the review and checks its own precondition.
+
+1. `reserve` (one transaction). Run token: `request_locked` (skip, join, `BUSY`, or a new row `launching` with its session nonce). Grant: `requested → launching`, minting the session nonce; a row already `launching` under this key is a takeover and re-mints nothing.
+2. `prepare`: stamps `heads_at` first (guarded; from that instant a trigger defers), then captures each pending scope task's base and head **once**, in `<MAIN>` (see below), resolves `(model, effort)` through `Ctx.resolve_model(<agent>, None)` (the agent's own policy class: a review spans lanes), creates the private directory and copies `<MAIN>/.claude/agents/<agent>.md` into it (missing → "render the agents on main").
+3. `launch`: stamps `launch_at`, then `claude --bg --agent <agent> -n qs-review-<db tag>-V<n> --model M <permission args> --settings '<settings>' "<prompt>"`, its cwd the review directory, `QS_CP_TOKEN` and the session identity removed.
+4. `identify`: the listing by name, until `launch_at + LAUNCH_SETTLE_S`, re-reading the review on every poll (a read transaction): a review already `finished` (a quick session that exited before it was ever listed), or `running` once the pilot adopted it, ends the step successfully; `failed` / `abandoned` fails it.
+
+**The unknown-listing rule** (one rule, for `identify` and the pilot's closing of dead reviews): **a launched review (`launch_at` set) fails early only when a known listing does not show it; under an unknown listing (`try_agents()` is `None`) only `REQUEST_TTL_S` fails it.** The latest poll's listing decides, not an earlier one: so an `identify` whose listing is unknown at its deadline fails the call (`TOOL_FAILED`, `reviews.Unidentified`, its output `{review_id, state: "launching", listing: "unknown"}`) but leaves the review `launching`, its session token valid, for the pilot to adopt by name on a later known listing (or to fail at `REQUEST_TTL_S`); and a `claude --bg` that timed out (the runner's exit 124: the session may have forked) is not a launch failure: `launch` answers `{launched, timeout}` and `identify` decides by name, its deadline then at least one `LAUNCH_SETTLE_S` past its first poll (a genuine exit 124 costs the same one settle window).
+
+Steps 2–4 are noops after a skip or a join. **Any other failure** of `prepare`, `launch` or `identify` (never listed under a known listing included) first moves the review to `failed` (a guarded `UPDATE … WHERE state IN ('requested', 'launching')`, with `error`) and, when the row moved, posts `review_failed` to each open run of its scope; the call is then `TOOL_FAILED`: the key is spent, the coalesce key free, the session token void. A replayed key never launches again: the probe reports the launch done whenever `launch_at` is set, and a takeover of a dead holder only finishes `identify` against the original deadline. `on_success` moves `launching → running` and records the session; on a row already `finished` (the session finished while the launcher was identifying) it records only the session id and the answer carries that state. The answer: `{review_id, kind, name, session_id, state, tasks: [{task_id, run_id, base_sha, head_sha, head_state}]}`, never a token.
+
+**The base and head reviewed**, per task, the first row that applies (a git timeout or exec failure, exit 124 / 127, fails the step; any other non-zero exit means absent; only 0 means found):
+
+| the task | `head_sha` | `base_sha` | `head_state` |
+|---|---|---|---|
+| `merge_sha` set (hex, lower-cased first) and present locally | `merge_sha` | its first parent | `merged` |
+| a branch that resolves | its tip | a work item: the merge base with its deliverable's branch, when that resolves; else the merge base with `<main base>` | `branch` |
+| a branch that does not resolve | `NULL` | `NULL` | `unresolved` |
+| no branch | `NULL` | `NULL` | `plan` (the review covers its plan) |
+
+`<main base>` is the overlap detector's rule: the newer of `refs/heads/main` and `refs/remotes/origin/main`, `origin/main` when they diverged. `base_sha..head_sha` is the task's own change. Outcomes on a `NULL` head are advisory.
+
+### Where a review runs
+
+In a **private directory outside every checkout**: `QS_CP_REVIEW_DIR` (default `~/.local/state/quiet-solar/cp-reviews/`), then `<sha256(<DB path>)[:8]>/V<n>/`, each level 0700 (`reviews.review_dir`; a directory inside a checkout or a linked worktree is `POLICY_REFUSED`). It holds `in/` (the session's own files, the only place it reads or writes), `.claude/agents/<agent>.md` (the copied agent), `args.json` and `launcher.log` (the pilot's). The session gets no `--add-dir`: it reads code only through `review read`, and state through `snapshot`, `task show` and `ledger show`.
+
+**Permissions** (`reviews.REVIEW_PERMISSION_MODE`, `dontAsk`; `auto` is the fallback, both built by `reviews.launch_args`):
+
+- `dontAsk`: `--permission-mode dontAsk --allowedTools=<list>` (one word), the list being `Read(/<dir>/in/**)`, `Write(/<dir>/in/**)` (the absolute-path form: `in` = `/x/V1/in` gives `Read(//x/V1/in/**)`) and `Bash(<python> <MAIN>/scripts/qs/cp.py <cmd>:*)` for exactly `snapshot`, `task show`, `ledger show`, `review read`, `finding open`, `review finish` (`<python>` is `<MAIN>/venv/bin/python`, else the launcher's interpreter). A path with whitespace, a control character, a `,` (the rule separator) or a shell metacharacter fails the review (`POLICY_REFUSED`): the unquoted pinned form would stop matching. Any other character, non-ASCII included, is kept verbatim.
+- `auto`: `--permission-mode auto --disallowedTools=Edit,NotebookEdit`.
+
+`--settings` is the node hook fragment (its `PreToolUse` DB-access deny applies to any session), the policy's `effortLevel`, and `"env": {"QS_CP_DB": "<the launcher's DB, resolved>"}`, so the session's `cp.py` calls open the same DB as the launcher. The prompt carries the facts: review id and kind, the scope (task, run, title, branch, `base_sha`, `head_sha`, `head_state`), the exact `cp.py` prefix, the `in/` directory, the session token, the deadline (`launch_at + REVIEW_TTL_S`); a task with no run shows `-` as its run. The agents pin the command form: one command per Bash call, no pipe, `&&`, `;`, redirect, `$(…)`, environment prefix or heredoc; `--token` only on the two writes.
+
+### Reading code: `review read`
+
+Exempt (no DB, no token), one fixed `git` invocation in the main checkout, on **hex shas only** (lower case, 7 to 64 characters, `gitread.SHA_RE`, the same check as the capture's: a ref or a leading `-` is `USAGE`), with `-c core.pager=cat -c diff.external=`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_PAGER=cat`, `GIT_EXTERNAL_DIFF` and the inherited repository location (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_NAMESPACE`, `GIT_COMMON_DIR`; `gitread.ENV_REMOVED`) and every other inherited `GIT_*` variable but those set here (`gitread.env_removed()`, applied to the capture's git too) unset, `-c core.quotePath=false` (non-ASCII bytes are not quoted, so an ordinary name printed by `files` / `ls-tree` is a valid `--path`; a name holding `"`, `\`, a tab or a newline is still C-quoted, and `grep` prints `<rev>:<path>:<line>:`, not a bare path) and a timeout:
+
+| op | arguments | runs |
+|---|---|---|
+| `diff` | `--base SHA --head SHA [--path P]` | `git diff --no-ext-diff --no-textconv --no-color <base> <head> [-- P]` |
+| `show` | `--rev SHA --path P` | `git cat-file blob <rev>:<P>` |
+| `grep` | `--rev SHA --pattern X [--path P]` | `git grep -n --no-color -e <X> <rev> [-- P]` (no match: empty) |
+| `ls-tree` | `--rev SHA [--path P]` | `git ls-tree -r --name-only <rev> [-- P]` |
+| `files` | `--base SHA --head SHA [--path P]` | `git diff --no-ext-diff --no-textconv --no-color --name-status <base> <head> [-- P]` (the changed files, when a `diff` is `truncated`; a truncated `files` is narrowed with `--path <dir>`) |
+
+A missing or extra argument for the op is `USAGE`; `P` goes through the ledger's path normalisation. No other git option can be passed. The answer is `{"ok": true, "output", "truncated", "lossy"}`: the output is decoded with `surrogateescape` (`Runner.run(decode_errors=…)`), cut at `READ_MAX_BYTES` (on bytes, backing off to a UTF-8 boundary: a character the cut splits is dropped), and printed with `errors="replace"`; `lossy` when a byte kept was not UTF-8. A failed git is `NOT_FOUND` (exit 128: a bad object or path) or `INTERNAL`.
+
+### `review finish`: the hand-back
+
+`cp.py review finish --input F --token <session>`, once:
+
+```json
+{"summary": "…",
+ "tasks": {"T3": {"outcome": "pass", "blast_radius": "ok", "reason": "…"},
+           "T7": {"outcome": "fail", "reason": "…"}}}
+```
+
+The file is read and parsed first (non-JSON or a duplicate key is `USAGE`), then the token (`CONFLICT` / `STALE_TOKEN`), then the shape: every scope task exactly once (a task outside the scope is `CONFLICT`, a missing one `USAGE`), `outcome` `pass` or `fail`, a `reason` for `fail`; `blast_radius` (`ok`, `doubt`, `too_large`) only in a global review, required for every deliverable with a head and refused on a `NULL` head. Nothing cross-checks the outcome against the findings. In one transaction: the review `finished` (from `launching` or `running`), each task's outcome, the blast-radius rows (`head_sha` the reviewed head, `review` `V<n>`, actor `review:V<n>`), and one **`review_done`** message per **open** run of the scope (recipient `orchestrator`, sender `review:V<n>`, `dedupe_key` `review:V<n>`), its payload `{review_id, kind, summary, tasks: [{task_id, base_sha, head_sha, head_state, outcome, reason, blast_radius, finding_ids}], other_runs}` for that run's tasks. Afterwards the session token is void: a second call is `STALE_TOKEN`.
+
+**The reader** (child 7): `reviews.outcome(conn, task_id, *, kind, head_sha)` → the latest **finished** outcome of that task, kind and head (`{review_id, outcome, reason, base_sha, head_sha, finished_at}`), else `None`; a `None` or blank `head_sha` is `None` (an outcome on no head is advisory). `ledger.blast_radius(conn, task, head_sha)` reads the global review's rating (`review = V<n>`). Both readers take the **full** `head_sha` (the capture stores the resolved full sha), matched stripped and case-insensitively; an abbreviated sha matches nothing.
+
+### The review pilot
+
+The tick hook `review_pilot` (after `detectors`, before `hook_route`; every `PILOT_EVERY_S`). The daemon holds no token: the **launch grant** is the launcher's only authority.
+
+1. **Reap** the launcher processes that finished (`poll()`).
+2. **Close dead reviews** (read, probe, beat, write). Each move is a guarded `UPDATE … WHERE id = ? AND state = <the state read> AND <its condition, re-evaluated in SQL>`, and posts one `review_failed` one-shot alert (subject `review:V<n>:<state>`, payload `{review_id, kind, state, error, finding_ids}`) to each open run of the scope, only when the row moved. With `since = COALESCE(launch_at, updated_at)`:
+   - `requested` / `launching` whose launcher's call is `failed`, or `started` by a dead holder with `since` older than `LAUNCH_SETTLE_S`, or `requested` with no call row `PILOT_RETRY_S` after `created_at` (the launcher never started), or `since` older than `REQUEST_TTL_S` (a hung launcher) → `failed`. **Adoption:** a `launching` review with `launch_at` set (its `claude --bg` ran) whose session the listing shows by name is not failed but moved to `running` with its `session_id` / `short_id` (a guarded `UPDATE … WHERE state = 'launching' AND launch_at IS NOT NULL`, no alert): the launcher died after the launch, the session lives. The listing is taken for such a review too; under a failed listing neither a failed call nor a dead launcher fails it early, only `REQUEST_TTL_S` does (the unknown-listing rule, above);
+   - `running` with `launch_at` older than `REVIEW_TTL_S`, or whose session is absent from `LIVENESS_CONFIRM` successful listings in a row → `abandoned`. The listing is taken only while a review runs; a failed listing changes nothing; the count lives in memory and starts cold.
+
+   No `claude stop`: a dead or late session's token is void.
+3. **The queue and the rules.** Every new event is written at first sight as a `review_triggers` row `pilot:<event>:1`, `queued`:
+   - **alerts** (`PILOT_KINDS`: `overlap_cross_run`, `duplicate_task_cross_run` — not `dependency_cycle_cross_run`, already alerted to every run): the open rows grouped by `(kind, subject)`, scope the payload's `tasks`. One occurrence, one event: a group whose alert ids meet the ids stored by an earlier row of that `(kind, subject)` is that event (newly raised ids join it); a group with none is a new event `alert:<kind>:<sha256(subject)[:16]>:<lowest id>`;
+   - **a merge that touches another run:** a task that reached `merged` in `task_history` after `meta.review_pilot_cursor`, named by any `overlap_cross_run` row (open or cleared) with a task still non-terminal in another open run; scope the merged task plus those; event `merge:<task>:<history id>`. The rows and the cursor move in one transaction (at most `MERGES_PER_TICK` merges per tick).
+
+   Then each queued row is re-requested through `request_locked` (the same scope, coalescing and deferral as `tool review`), which marks it `created`, `joined` or `skipped`, or leaves it `queued` when deferred; a queued alert event none of whose alerts is still open is `skipped`. A `skipped` row leaves the queue for good. On `created`, outside the transaction, the pilot writes `args.json` and starts, detached and never waited on:
+
+   ```text
+   <MAIN>/venv/bin/python <MAIN>/scripts/qs/cp.py tool review --key pilot:<event>:<n> --args-file <dir>/args.json --token review:V<n>.0.<grant>
+   ```
+
+   (`start_new_session`, stdin closed, output to `launcher.log`, cwd `<MAIN>`, the environment through `daemon.strip_env`, with `QS_CP_DB` set to the daemon's DB, resolved: a relative path would name another file from `<MAIN>`). Any failure there moves the review to `failed`. With no `popen` seam the pilot requests nothing (logged once).
+
+**The retry** (Q7, maintainer 2026-10-16): an event whose latest attempt's review ended **`failed`** (the launch failed: nothing ran) gets attempt `n + 1`, a new row, while `n < PILOT_ATTEMPTS`; merge events too, whatever the cursor. A review that ended **`abandoned`** (it ran, then died or expired) is not retried: its `review_failed` alert tells the orchestrators and the maintainer, who decide.
+
+**The merge rule's limit:** an overlap the detector never saw is not caught; the node's catch-up with `main` still meets it.
 
 ## Locks and caps
 
@@ -481,6 +629,7 @@ A probe that cannot tell (a failed or unparseable `gh` listing or `gh pr view`) 
 | `integrate-start` (#400) | run, or node (own task) | `<MAIN>` | `integration:QS_<N>` (co-held: the caller's **session** must hold it), `main-checkout` | the session check only (`POLICY_REFUSED` otherwise, before any wait) |
 | `integrate-finish` (#400) | run, or node (own task) | `<MAIN>` | `integration:QS_<N>` (co-held), `gates` slot | the session check only |
 | `integrate-drop` (#400) | run, or node (own task) | `<MAIN>` | `integration:QS_<N>` (co-held), `main-checkout` | the session check only; any state |
+| `review` (`kind`, `run`, `trigger?` / `review`) (#407) | run (its own run's global review), or a review's launch grant | the review's private directory | none: no lock, no slot, no node cap | `launch_at` set: the launch is never repeated, a takeover only finishes `identify`. Task-less (no `--task`); see [Review sessions](#review-sessions-407) |
 
 Notes:
 
@@ -611,7 +760,9 @@ class ToolSpec:
     guard: Callable[[StepCtx], None] | None = None               # raise INVALID_STATE on drift
     on_success: Callable[[sqlite3.Connection, StepCtx], dict[str, Any]] | None = None
     refuse_when_stopped: bool = True
-    token_kinds: frozenset[str] = frozenset({"run"})
+    token_kinds: frozenset[str] = frozenset({"run"})            # effective kinds: run, node, review, review_grant
+    task_bound: bool = True                                      # #407: False → no --task, StepCtx.task is None
+    authorize: Callable[[Connection, Principal, Mapping, str], None] | None = None   # #407: after the token, before the claim
 
 def register(spec: ToolSpec) -> None   # CONFLICT if the name exists
 def invoke(name, *, key, task_id, args, token, actor, ctx=None) -> dict
@@ -620,7 +771,9 @@ def invoke(name, *, key, task_id, args, token, actor, ctx=None) -> dict
 - `invoke(ctx=None)` builds `default_ctx()`, which has **no model-policy resolver** (QS-405): a `spawn` through it with no caller `model` is `USAGE`. Pass a `Ctx` with `resolve_model` set (the CLI passes `Deps.resolve_model`).
 
 - `argv_step(...)`, `task_state_guard(...)` and `compose(...)` are helpers. They are not frozen.
-- Every registered tool is reachable as `cp.py tool <name> --task T --key K [--args-file F] --token …`.
+- Every registered tool is reachable as `cp.py tool <name> --task T --key K [--args-file F] --token …` (no `--task` for a task-less tool).
+- **A task-less tool** (`task_bound=False`, #407) runs with `task_id` and, for a cross-run caller, `run_id` `NULL` in `tool_calls`; it replays by its key like any other. Its `authorize(conn, principal, args, key)` runs in the first transaction, right after the token check and before the replay: a refusal there (`CONFLICT`, `USAGE`) claims nothing. `locks.hold` re-checks the token against the spec's `token_kinds` (`Held.kinds`) before every step.
+- **Recorded errors** never hold a review token's nonce: `tools.redact` rewrites `review:V<n>.<e>.<nonce>` as `review:V<n>.<e>.<redacted>` in a failed call's `result` and detail.
 
 ## Hooks
 
@@ -648,6 +801,7 @@ The shim and the settings commands run `<MAIN>/venv/bin/python`. Without it they
 | `QS_CP_DB` | `<MAIN>/harness_state.db` | a temporary DB (tests, experiments). Never a live DB from another checkout |
 | `QS_CP_BACKUP_DIR` | `~/.local/state/quiet-solar/cp-backups/` | every backup, in a per-DB subdirectory. Never inside a checkout or a linked worktree (`POLICY_REFUSED`, naming the variable) |
 | `QS_CP_MESSENGER_DIR` | `~/.local/state/quiet-solar/cp-messenger/` | the watchdog messenger's working directory (0700). Never inside a checkout |
+| `QS_CP_REVIEW_DIR` | `~/.local/state/quiet-solar/cp-reviews/` | where review sessions run, one 0700 directory per DB and review (#407). Never inside a checkout or a linked worktree |
 | `QS_CP_MAX_GATES` | 2 | gate slots |
 | `QS_CP_MAX_NODES` | 4 | node sessions across all runs |
 | `QS_CP_TOKEN` | — | **git only**: injected by the tools into the steps that may push, so `pre-push` accepts them. Every `claude` launch removes it |
@@ -690,23 +844,28 @@ Most are overridable by a function argument. These are module-level only (tests 
 | `WATCHDOG_S` / `WAKE_RETRY_S` / `MESSENGER_TTL_S` | 120 / 300 / 300 | `watchdog` |
 | `BACKUP_EVERY_S` / `BACKUP_KEEP_ALL_S` / `BACKUP_KEEP_DAYS` | 900 / 86400 / 7 | `backups` |
 | `RESTORE_LOCK_WAIT_S` | 60 | `restore` |
+| `REVIEW_TTL_S` / `REQUEST_TTL_S` | 3600 / 600 | `schema_reviews` |
+| `REVIEW_PERMISSION_MODE` / `GIT_TIMEOUT_S` | `"dontAsk"` (`"auto"` the fallback) / 60 | `reviews` |
+| `READ_MAX_BYTES` / `READ_TIMEOUT_S` | 256 KiB / 60 | `gitread` |
+| `PILOT_EVERY_S` / `PILOT_RETRY_S` / `PILOT_ATTEMPTS` / `LIVENESS_CONFIRM` / `MERGES_PER_TICK` | 30 / 60 / 2 / 2 / 100 | `reviewpilot` |
+| `PILOT_KINDS` | `overlap_cross_run`, `duplicate_task_cross_run` | `reviewpilot` |
 
 ## Seams
 
 | seam | real | in tests |
 |---|---|---|
 | `Clock` | `SystemClock` | `FakeClock`: `sleep` advances time |
-| `Runner` | `subprocess.run` with an environment delta | `FakeRunner`: records argv, cwd, environment delta and `detach` |
+| `Runner` | `subprocess.run` with an environment delta, its output decoded with `decode_errors` (`strict` by default; `review read` passes `surrogateescape`) | `FakeRunner`: records argv, cwd, environment delta, `detach` and `decode_errors` |
 | `ProcessProbe` | `kill(pid, 0)` plus `ps -o lstart=` (UTC, C locale; a failed `ps` is unknown), and `killpg` | `FakeProbe`: a fresh pid per call, reaped when the CLI call returns |
 | `ClaudeCli` | `claude agents --json`, `claude --bg …`, `claude stop <id>` | `FakeClaude`: a scripted listing |
 | `ProcessSetup` | `setpgid`, `signal.signal` | a recorder: pytest's own process never changes group or gets a handler |
-| `Popen` | `subprocess.Popen`, for `ensure` | a recorder |
+| `Popen` | `subprocess.Popen`, for `ensure`, and `Seams.popen` for the review pilot's launcher (`make_seams` passes it at call time; `None` launches nothing) | a recorder returning a `FakeProc` (a scriptable `poll()` / `returncode`, a `pid`) |
 | `faults.hit(name)` | no-op | `faults.arm(name, exc, skip=n)` |
 | `merge_policy` | refuses | `install(fn)` |
 | `Deps.resolve_model` → `Ctx.resolve_model` (QS-405) | `cli._policy_resolver`: `models.spawn_policy`, imported at call time — the Control Plane's one import outside the standard library (a test pins it) | the same resolver, or a stand-in; child 15 reuses the seam |
 | `export.LEDGER_SECTIONS` | the ledger's three sections (`Rounds`, `Findings`, `Blast radius`), registered by `cli` at import (`ledger.register_export()`); an empty registry renders "No ledger recorded." | the conftest teardown clears it and registers it again |
 | the daemon's `tick_hooks` | `ticks.hooks()`: the built-in hooks of [The active loop](#the-active-loop-406) | `ticks.hooks` returns `[]` (a hook-less daemon); the `active_loop` fixture restores it. A tick hook must return within `STALE_AFTER_S` or beat the lease itself; `ensure` SIGKILLs only a daemon whose heartbeat is at least `STALE_AFTER_S` old |
-| `activeloop.make_seams` | `Seams(Runner, ProcessProbe, ClaudeCli, paths.main(), ciwatch.GitHub)` | the test `Deps`, the fake main checkout and a `FakeGitHub` |
+| `activeloop.make_seams` | `Seams(Runner, ProcessProbe, ClaudeCli, paths.main(), ciwatch.GitHub, subprocess.Popen)` | the test `Deps` (its `FakePopen` too), the fake main checkout and a `FakeGitHub` |
 | `codever.loaded_version` | the hash at `cli._daemon` entry | the fake main checkout's `code_version`; the `real_loaded_version` fixture restores it |
 | `mergegate.merge_allowed` | the gate | `open`; the `real_gate` fixture restores it |
 
@@ -736,3 +895,9 @@ Most are overridable by a function argument. These are module-level only (tests 
 - **The `ask` guard is matched per Bash segment.** A wrapper (`bash -c '…'`, `env`, a script) is not caught; the guard covers agent mistakes, like the other matchers. In `plan` / `dontAsk` mode the command is denied instead.
 - **The inbox socket is unused.** The messaging socket and its token (`CLAUDE_CODE_MESSAGING_*`) are visible to Bash-tool commands and `SessionStart` hooks; the Control Plane never stores or reads them, and `ensure` strips them (with the session identity) from the daemon's environment, as the watchdog does from the messenger's.
 - **The self-check and a broken version.** A Control Plane version that cannot start the daemon keeps merges closed (`stuck` after `PENDING_ESCALATE_S`); if it also carries a migration, write commands answer `SCHEMA_PENDING`. Revert the code.
+- **A review's token is visible** (#407). The Control Plane writes no review token to a file of its own, but the session token is in the `claude --bg` argv (visible in `ps`, as a node's is) and in Claude Code's own session transcripts, and the launch grant is in the launcher's argv. The threat model is unchanged (agent mistakes, not adversarial sessions); a recorded error is redacted, `launcher.log` never holds a nonce, and `snapshot` strips both nonces.
+- **The `dontAsk` allowlist is a guard, not a sandbox.** It pins the six `cp.py` commands and `Read` / `Write` in `in/`; the bypass forms (`> file`, `;`, `$(…)`, backticks) are meant to be denied without a prompt, which the post-merge live check of #407 (T13) verifies. If `dontAsk` fails there, `REVIEW_PERMISSION_MODE = "auto"` is the built-in fallback. The agents' own rule ("use only these six commands …") holds in both modes.
+- **The allowlist's path limit.** The main checkout, the interpreter and the review directory are pinned unquoted: a path holding whitespace, a `,` (it separates the `--allowedTools` rules) or a shell metacharacter (a quote, `\`, `$`, a backtick, or one of `;&|<>(){}[]*?!#~`) cannot be pinned, and every review fails `POLICY_REFUSED` at launch. Move the checkout, or set `QS_CP_REVIEW_DIR` to a plain path. Non-ASCII letters are fine.
+- **The DB a review talks to** is the launcher's: `--settings` carries `env.QS_CP_DB`, and the pilot's launcher gets the daemon's DB as an absolute `QS_CP_DB`.
+- **The review pilot's merge rule** sees only overlaps the detector saw (an `overlap_cross_run` row, open or cleared).
+- **Review directories are kept** (they are small): delete old ones by hand, like the `v<N>` backups.
