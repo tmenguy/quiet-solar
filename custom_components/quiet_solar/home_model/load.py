@@ -481,6 +481,7 @@ class AbstractDevice:
             self._acknowledge_lost_control("the user changed the device's enabled state")
             self.reset()
             self._enabled = enabled
+            self._on_qs_enable_device_changed(enabled)
             if self.home is not None:
                 if enabled is False:
                     self.home.remove_device(self)
@@ -495,6 +496,9 @@ class AbstractDevice:
                 time = datetime.now(pytz.utc)
                 for ha_object in self._exposed_entities:
                     ha_object.async_update_callback(time)
+
+    def _on_qs_enable_device_changed(self, enabled: bool) -> None:
+        """Override in subclasses to react to an enable / disable edge (after `reset()`)."""
 
     def prepare_slots_for_amps_budget(
         self,

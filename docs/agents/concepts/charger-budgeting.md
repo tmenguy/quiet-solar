@@ -154,7 +154,13 @@ refuses too). Only the **live** floor of the attached car is ever saved,
 stamped with the save `time` (`update_to_be_saved_extra_device_info(data,
 time)`); a pending restored value is never re-written — it lives in memory
 until the matching attach, so saves before that attach do not lose it, but
-a 2nd restart inside the boot window does (accepted risk).
+a 2nd restart inside the boot window does (accepted risk). The same
+positive-proof check (`_car_unplugged_since`) guards a persisted **user
+car pin** during the boot window (`STORAGE_KEY_USER_PIN_SAVED_AT`,
+`_lift_boot_user_pin_if_car_unplugged` at the top of `_compute_best_car`;
+see `user-override.md`). `_compute_best_car` skips a car pinned on an
+enabled, inactive charger that still holds it, and never takes such a car
+as its boot car.
 
 **Known limitations:**
 

@@ -29,7 +29,9 @@ from .home_model.load import AbstractDevice, AbstractLoad
 
 async def _async_set_bump_solar_priority(device: AbstractDevice, value: bool, for_init: bool) -> None:
     """Solar-bump switch setter; threads `for_init` so a restore replay never pins (QS-416)."""
-    assert isinstance(device, QSChargerGeneric | QSCar)
+    # explicit check, not an `assert` (stripped under `python -O`)
+    if not isinstance(device, QSChargerGeneric | QSCar):
+        raise TypeError(f"solar bump switch on a {type(device).__name__}, expected a charger or a car")
     device.set_qs_bump_solar_charge_priority(value, for_init=for_init)
 
 

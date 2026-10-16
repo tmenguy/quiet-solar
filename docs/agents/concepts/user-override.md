@@ -193,17 +193,38 @@ command state.
   attribute writes), an action on a non-attached car (nothing is replayed
   at attach), system actions and storage restore. The pin is lifted by the
   physical unplug (always — even when the pinned car was already taken by
-  another charger), the car's or the charger's clean-and-reset, and by
-  choosing another charger (or "no charger") from the car card, which
-  clears the pin of **every** charger pinned to that car except the new
-  choice (attached there or not). A car pinned on another enabled charger
-  that is not active (e.g. unavailable for more than the 15 s window) is
-  skipped by `_compute_best_car`, so no other charger wins it meanwhile.
+  another charger; and a charger choice of "no car connected" is cleared
+  by the unplug too: a charger choice lives until unplug, like the pin),
+  the car's or the charger's clean-and-reset, disabling the charger
+  (`_on_qs_enable_device_changed`: a disabled charger leaves the home's
+  charger list, out of reach of the clean-ups below), and by choosing
+  another charger (or "no charger") from the car card, which clears the
+  pin of **every** charger pinned to that car except the new choice
+  (attached there or not). Its mirror: choosing a **real** car from a
+  charger card clears that car's pin on every other charger (not for the
+  generic car nor "no car connected"). A car pinned on another enabled
+  charger that is not active (e.g. unavailable for more than the 15 s
+  window) **and still holds it** is skipped by `_compute_best_car`
+  (INFO line, once per episode), and is never taken as a boot car either,
+  so no other charger wins it meanwhile; a pin on a charger that does not
+  hold the car protects nothing. **Restart:** the pin is persisted with the
+  charger's user-originated data, stamped with its save time
+  (`STORAGE_KEY_USER_PIN_SAVED_AT`). During the boot window, a valid `off`
+  of the pinned car's plug sensor recorded since that time (positive proof
+  of an unplug while HA was down — the same rule as the persisted score
+  floor, `_car_unplugged_since`) lifts it: the charger pin, the car's
+  charger choice naming that charger and the boot car are dropped, and
+  the normal rules apply. No proof (`on`, holes, no sensor, no or invalid
+  saved time) keeps it; an `off` reported only after the boot window does
+  not lift it; a pin the user sets after the restart is never lifted.
   The generic car is pinned like any other. **Entity restore replay:** the
   charge-target select and the bump switches (car and charger) thread
-  `for_init` down to the hook (`_user_replay_for_init`), and a replay never
-  pins the charger — only the pin is skipped, the car's own user-originated
-  snapshot still runs.
+  `for_init` down to the hook through a per-task `ContextVar`
+  (`_USER_REPLAY_FOR_INIT` in `ha_model/car.py`, set with a token and
+  reset in `finally` — never a car attribute held across the replay's
+  awaits, which would hide a concurrent user action or stay stuck), and a
+  replay never pins the charger — only the pin is skipped, the car's own
+  user-originated snapshot still runs.
 - Storing `None` under a target key (`charge_target_percent` /
   `charge_target_energy`). The freeze stamps only the key matching the
   car's percent capability and never a `None` value (QS-353 B); a

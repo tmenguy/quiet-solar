@@ -1,6 +1,7 @@
 import bisect
 import logging
 import math
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from datetime import time as dt_time
 from operator import itemgetter
@@ -64,6 +65,13 @@ if TYPE_CHECKING:
 
 
 _LOGGER = logging.getLogger(__name__)
+
+# QS-416: True while an entity restore replays a user setter (`for_init`): the replay
+# must not pin the car <-> charger association. A ContextVar (per asyncio task, reset
+# with its token) and NOT a car attribute: the replay awaits, and an attribute held
+# across those awaits would hide a concurrent genuine user action on the same car, or
+# be left stuck at True by two interleaved calls restoring in the wrong order.
+_USER_REPLAY_FOR_INIT: ContextVar[bool] = ContextVar("qs_user_replay_for_init", default=False)
 
 MIN_CHARGE_POWER_W = 70
 
@@ -209,9 +217,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._dampening_deltas_graph = {}
 
         self.charger = None
-        # QS-416: True while an entity restore replays a user setter (`for_init`):
-        # the replay must not pin the car <-> charger association.
-        self._user_replay_for_init = False
 
         self.do_force_next_charge = False
         self.do_next_charge_time: datetime | None = None
@@ -360,9 +365,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         # association until unplug (a system action never reaches this hook — QS-353
         # user != system). The charger-choice key is excluded: picking a charger from
         # the car card already pins the NEW charger via `user_set_selected_car_by_name`.
-        # An entity restore replay (`for_init`, `_user_replay_for_init`) is no user
+        # An entity restore replay (`for_init`, `_USER_REPLAY_FOR_INIT`) is no user
         # action: it skips this pin (only — the car's own snapshot above still runs).
-        if self.charger is not None and key != USER_ORIGINATED_CHARGER_NAME and not self._user_replay_for_init:
+        if self.charger is not None and key != USER_ORIGINATED_CHARGER_NAME and not _USER_REPLAY_FOR_INIT.get():
             self.charger.set_user_originated(USER_ORIGINATED_CAR_NAME, self.name)
 
     def update_to_be_saved_extra_device_info(self, data_to_update: dict, time: datetime):
@@ -2736,12 +2741,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return self.get_car_next_charge_values_options_energy()
 
     async def user_set_next_charge_target(self, value: int | float | str, for_init: bool = False):
-        prev_replay = self._user_replay_for_init
-        self._user_replay_for_init = for_init
+        token = _USER_REPLAY_FOR_INIT.set(for_init)
         try:
             await self._user_set_next_charge_target(value)
         finally:
-            self._user_replay_for_init = prev_replay
+            _USER_REPLAY_FOR_INIT.reset(token)
 
     async def _user_set_next_charge_target(self, value: int | float | str):
 
@@ -2945,12 +2949,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
             for c in self.home._cars:
                 c._qs_bump_solar_priority = False
             self._qs_bump_solar_priority = True
-        prev_replay = self._user_replay_for_init
-        self._user_replay_for_init = for_init
+        token = _USER_REPLAY_FOR_INIT.set(for_init)
         try:
             self.set_user_originated("bump_solar", self._qs_bump_solar_priority)
         finally:
-            self._user_replay_for_init = prev_replay
+            _USER_REPLAY_FOR_INIT.reset(token)
 
     def get_charger_options(self) -> list[str]:
 
