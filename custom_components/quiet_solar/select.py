@@ -25,7 +25,7 @@ from .const import (
 )
 from .entity import QSDeviceEntity
 from .ha_model.bistate_duration import QSBiStateDuration
-from .ha_model.car import QSCar
+from .ha_model.car import QSCar, user_replay_context
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.climate_controller import QSClimateDuration
 from .ha_model.home import QSHome, QSHomeMode
@@ -307,17 +307,19 @@ class QSBaseSelect(QSDeviceEntity, SelectEntity):
 
     async def set_current_option(self, option, for_init=False):
         """Return the current option."""
-        if self.entity_description.async_set_current_option_fn is None:
-            try:
-                setattr(self.device, self.entity_description.key, option)
-            except Exception as e:
-                _LOGGER.info(
-                    f"can't set select option {option} on {self.device.name} for {self.entity_description.key}: {e}"
+        # QS-416 R3-3: a restore replay never pins the car <-> charger pair
+        with user_replay_context(for_init):
+            if self.entity_description.async_set_current_option_fn is None:
+                try:
+                    setattr(self.device, self.entity_description.key, option)
+                except Exception as e:
+                    _LOGGER.info(
+                        f"can't set select option {option} on {self.device.name} for {self.entity_description.key}: {e}"
+                    )
+            else:
+                await self.entity_description.async_set_current_option_fn(
+                    self.device, self.entity_description.key, option, for_init
                 )
-        else:
-            await self.entity_description.async_set_current_option_fn(
-                self.device, self.entity_description.key, option, for_init
-            )
         if self.device.home:
             try:
                 await self.device.home.force_update_all()

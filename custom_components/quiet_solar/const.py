@@ -31,9 +31,14 @@ STORAGE_KEY_ASKED_FOR_RESET_FIRST_CMD_RESET_DONE = "asked_for_reset_user_initiat
 STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_CAR_NAME = "attached_car_best_score_car_name"
 STORAGE_KEY_ATTACHED_CAR_BEST_SCORE = "attached_car_best_score"
 STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT = "attached_car_best_score_saved_at"
+# QS-416 review fix #03 R3-1: the attached car's plug-sensor reading at the save
+# ("on" / "off" / None): an "on" here, then a valid "off" after the save, proves an unplug.
+STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_PLUG_STATE = "attached_car_best_score_plug_state"
 # QS-416: save time of the charger's user car pin (USER_ORIGINATED_CAR_NAME): the
-# boot guard lifts the pin on a valid "off" of the pinned car recorded since then.
+# boot guard lifts the pin on an unplug of the pinned car (an "on" -> "off") since then.
 STORAGE_KEY_USER_PIN_SAVED_AT = "user_pin_saved_at"
+# QS-416 review fix #03 R3-1: the pinned car's plug-sensor reading at the save.
+STORAGE_KEY_USER_PIN_PLUG_STATE = "user_pin_plug_state"
 
 DEVICE_TYPE = "device_type"
 

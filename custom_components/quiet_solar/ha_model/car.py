@@ -1,6 +1,8 @@
 import bisect
 import logging
 import math
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta
 from datetime import time as dt_time
@@ -72,6 +74,26 @@ _LOGGER = logging.getLogger(__name__)
 # across those awaits would hide a concurrent genuine user action on the same car, or
 # be left stuck at True by two interleaved calls restoring in the wrong order.
 _USER_REPLAY_FOR_INIT: ContextVar[bool] = ContextVar("qs_user_replay_for_init", default=False)
+
+
+@contextmanager
+def user_replay_context(for_init: bool) -> Iterator[None]:
+    """QS-416: mark the enclosed user setter call as an entity restore replay.
+
+    Set once at the shared restore dispatch of every entity platform (select,
+    switch, number, time — review fix #03 R3-3), so no restored entity, whatever
+    its setter, pins the car <-> charger pair. `for_init=False` is a no-op: it
+    never ends an outer replay.
+    """
+    if not for_init:
+        yield
+        return
+    token = _USER_REPLAY_FOR_INIT.set(True)
+    try:
+        yield
+    finally:
+        _USER_REPLAY_FOR_INIT.reset(token)
+
 
 MIN_CHARGE_POWER_W = 70
 
@@ -2741,11 +2763,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return self.get_car_next_charge_values_options_energy()
 
     async def user_set_next_charge_target(self, value: int | float | str, for_init: bool = False):
-        token = _USER_REPLAY_FOR_INIT.set(for_init)
-        try:
+        with user_replay_context(for_init):
             await self._user_set_next_charge_target(value)
-        finally:
-            _USER_REPLAY_FOR_INIT.reset(token)
 
     async def _user_set_next_charge_target(self, value: int | float | str):
 
@@ -2949,11 +2968,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
             for c in self.home._cars:
                 c._qs_bump_solar_priority = False
             self._qs_bump_solar_priority = True
-        token = _USER_REPLAY_FOR_INIT.set(for_init)
-        try:
+        with user_replay_context(for_init):
             self.set_user_originated("bump_solar", self._qs_bump_solar_priority)
-        finally:
-            _USER_REPLAY_FOR_INIT.reset(token)
 
     def get_charger_options(self) -> list[str]:
 

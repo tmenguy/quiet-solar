@@ -14,7 +14,7 @@ from .const import (
     DOMAIN,
 )
 from .ha_model.bistate_duration import QSBiStateDuration
-from .ha_model.car import QSCar
+from .ha_model.car import QSCar, user_replay_context
 from .ha_model.charger import QSChargerGeneric
 from .home_model.load import AbstractDevice
 
@@ -139,15 +139,18 @@ class QSBaseTime(QSDeviceEntity, TimeEntity, RestoreEntity):
 
         self._set_availabiltiy()
 
-        await self.async_set_value(val)
+        await self.async_set_value(val, for_init=True)
 
-    async def async_set_value(self, value: dt_time) -> None:
-        """Change the value."""
+    async def async_set_value(self, value: dt_time, for_init: bool = False) -> None:
+        """Change the value; `for_init` = entity restore replay (QS-416 R3-3: never pins)."""
         self._attr_native_value = value
-        try:
-            setattr(self.device, self.entity_description.key, value)
-        except Exception as e:
-            _LOGGER.info("can't set time %s on %s for %s: %s", value, self.device.name, self.entity_description.key, e)
+        with user_replay_context(for_init):
+            try:
+                setattr(self.device, self.entity_description.key, value)
+            except Exception as e:
+                _LOGGER.info(
+                    "can't set time %s on %s for %s: %s", value, self.device.name, self.entity_description.key, e
+                )
         self._set_availabiltiy()
         self.async_write_ha_state()
 

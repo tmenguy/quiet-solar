@@ -17,7 +17,7 @@ from .const import (
     SWITCH_ENABLE_DEVICE,
 )
 from .entity import QSDeviceEntity
-from .ha_model.car import QSCar
+from .ha_model.car import QSCar, user_replay_context
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.device import HADeviceMixin
 
@@ -219,10 +219,12 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
 
         for_init = kwargs.pop("for_init", False)
 
-        if self.entity_description.async_switch is not None:
-            await self.entity_description.async_switch(self.device, True, for_init)
-        else:
-            setattr(self.device, self.entity_description.key, True)
+        # QS-416 R3-3: a restore replay never pins the car <-> charger pair
+        with user_replay_context(for_init):
+            if self.entity_description.async_switch is not None:
+                await self.entity_description.async_switch(self.device, True, for_init)
+            else:
+                setattr(self.device, self.entity_description.key, True)
 
         self._attr_is_on = True
         self._set_availabiltiy()
@@ -245,10 +247,12 @@ class QSSwitchEntity(QSDeviceEntity, SwitchEntity):
 
         for_init = kwargs.pop("for_init", False)
 
-        if self.entity_description.async_switch is not None:
-            await self.entity_description.async_switch(self.device, False, for_init)
-        else:
-            setattr(self.device, self.entity_description.key, False)
+        # QS-416 R3-3: a restore replay never pins the car <-> charger pair
+        with user_replay_context(for_init):
+            if self.entity_description.async_switch is not None:
+                await self.entity_description.async_switch(self.device, False, for_init)
+            else:
+                setattr(self.device, self.entity_description.key, False)
 
         self._attr_is_on = False
         self._set_availabiltiy()

@@ -144,19 +144,24 @@ selection, the invited-car `-1` path, or a car scored on another charger.
 There is no absolute lock any more: a wrong car attached for hours is
 displaced as soon as a strictly better proof shows up. The floor is
 **persisted** with the charger (`STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_*`:
-car name, floor, `saved_at`), moved to the boot slot by
-`device_post_home_init`, and restored by the first `attach_car` of the
-**same** car inside the boot window (120 s, like `_boot_car`) — unless a
-valid `off` of the car plug sensor was recorded since `saved_at` (positive
-proof of an unplug during the shutdown; `unavailable` / `unknown` holes
-do not block; a `saved_at` in the future of the attach — clock behind —
-refuses too). Only the **live** floor of the attached car is ever saved,
+car name, floor, `saved_at`, the car's plug reading at the save), moved to
+the boot slot by `device_post_home_init`, and restored by the first
+`attach_car` of the **same** car inside the boot window (120 s, like
+`_boot_car`) — unless an **`on` → `off` transition** of the car plug
+sensor is seen since `saved_at` (positive proof of an unplug during the
+shutdown, `_car_unplugged_since`: a valid `off` at/after `saved_at` whose
+previous valid reading — the saved reading when known, else the last
+valid sample before `saved_at` — is `on`). A bare `off` proves nothing:
+the boot poll re-stamps a sensor stuck at `off` with the boot time.
+`unavailable` / `unknown` holes do not block; a `saved_at` in the future
+of the attach — clock behind — refuses too. Only the **live** floor of the attached car is ever saved,
 stamped with the save `time` (`update_to_be_saved_extra_device_info(data,
 time)`); a pending restored value is never re-written — it lives in memory
 until the matching attach, so saves before that attach do not lose it, but
 a 2nd restart inside the boot window does (accepted risk). The same
 positive-proof check (`_car_unplugged_since`) guards a persisted **user
-car pin** during the boot window (`STORAGE_KEY_USER_PIN_SAVED_AT`,
+car pin** during the boot window (`STORAGE_KEY_USER_PIN_SAVED_AT` /
+`STORAGE_KEY_USER_PIN_PLUG_STATE`,
 `_lift_boot_user_pin_if_car_unplugged` at the top of `_compute_best_car`;
 see `user-override.md`). `_compute_best_car` skips a car pinned on an
 enabled, inactive charger that still holds it, and never takes such a car

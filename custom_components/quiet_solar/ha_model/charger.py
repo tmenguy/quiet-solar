@@ -150,7 +150,9 @@ from ..const import (
     SENSOR_CONSTRAINT_SENSOR_CHARGE,
     STORAGE_KEY_ATTACHED_CAR_BEST_SCORE,
     STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_CAR_NAME,
+    STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_PLUG_STATE,
     STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT,
+    STORAGE_KEY_USER_PIN_PLUG_STATE,
     STORAGE_KEY_USER_PIN_SAVED_AT,
     USER_ORIGINATED_CAR_NAME,
     USER_ORIGINATED_CHARGE_TIME,
@@ -2470,15 +2472,24 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         # QS-416 floor: best score of the attached car since its attach (cleared by
         # `detach_car`). Set BEFORE `super().__init__`, whose reset() detaches.
         self._attached_car_best_score: float | None = None
-        # (car name, floor, saved_at): read from storage, then moved to the boot slot
-        # by `device_post_home_init`, consumed by the matching `attach_car`.
-        self._saved_attached_car_best_score: tuple[str, float, datetime] | None = None
-        self._boot_attached_car_best_score: tuple[str, float, datetime] | None = None
-        # QS-416: save time of the persisted user car pin (USER_ORIGINATED_CAR_NAME),
-        # read from storage, then moved by `device_post_home_init` to the boot slot
-        # (pinned car name, saved_at) that guards that pin during the boot window.
+        # (car name, floor, saved_at, plug reading at the save): read from storage, then
+        # moved to the boot slot by `device_post_home_init`, consumed by the matching
+        # `attach_car`.
+        self._saved_attached_car_best_score: tuple[str, float, datetime, str | None] | None = None
+        self._boot_attached_car_best_score: tuple[str, float, datetime, str | None] | None = None
+        # QS-416: save time (and the pinned car's plug reading at the save) of the
+        # persisted user car pin (USER_ORIGINATED_CAR_NAME), read from storage, then
+        # moved by `device_post_home_init` to the boot slot (pinned car name,
+        # saved_at, plug reading) that guards that pin during the boot window.
         self._saved_user_pin_saved_at: datetime | None = None
-        self._boot_user_pin: tuple[str, datetime] | None = None
+        self._saved_user_pin_plug_state: str | None = None
+        self._boot_user_pin: tuple[str, datetime, str | None] | None = None
+        # QS-416 review fix #03 R3-2: the charger was seen plugged (a plugged cycle ran
+        # or a car got attached) since its last unplug. The unplug branch clears the
+        # user car choice only on that plugged -> unplugged EDGE, so a choice made on
+        # an unplugged charger survives until the car is plugged and unplugged again.
+        # Not persisted: an unplugged first cycle after a restart is no edge.
+        self._seen_plugged: bool = False
         # QS-346: the car this charger last had attached, used to keep the plug-state
         # rescue alive after a `detach_car()` (e.g. a `qs_device_clean_and_reset`) so a
         # faulted charger does not lose the very car that proves it is plugged. Only
@@ -2583,23 +2594,51 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             data_to_update[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_CAR_NAME] = self.car.name
             data_to_update[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE] = self._attached_car_best_score
             data_to_update[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT] = time.isoformat()
+            data_to_update[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_PLUG_STATE] = self._car_plug_reading(self.car, time)
         else:
             data_to_update[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_CAR_NAME] = None
             data_to_update[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE] = None
             data_to_update[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT] = None
+            data_to_update[STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_PLUG_STATE] = None
 
         # QS-416: stamp a car pin (persisted with the user-originated data) with the
-        # save `time`, so the boot guard can lift it on an unplug seen since then.
+        # save `time` and the pinned car's plug reading, so the boot guard can lift it
+        # on an unplug seen since then.
         pinned_car_name = self.get_user_originated(USER_ORIGINATED_CAR_NAME)
         if pinned_car_name is not None and pinned_car_name != CHARGER_NO_CAR_CONNECTED:
             data_to_update[STORAGE_KEY_USER_PIN_SAVED_AT] = time.isoformat()
+            data_to_update[STORAGE_KEY_USER_PIN_PLUG_STATE] = self._car_plug_reading(
+                self.home.get_car_by_name(pinned_car_name), time
+            )
         else:
             data_to_update[STORAGE_KEY_USER_PIN_SAVED_AT] = None
+            data_to_update[STORAGE_KEY_USER_PIN_PLUG_STATE] = None
 
     def use_saved_extra_device_info(self, stored_load_info: dict):
         super().use_saved_extra_device_info(stored_load_info)
         self._saved_attached_car_best_score = self._read_saved_attached_car_best_score(stored_load_info)
         self._saved_user_pin_saved_at = self._parse_saved_at(stored_load_info.get(STORAGE_KEY_USER_PIN_SAVED_AT))
+        self._saved_user_pin_plug_state = self._parse_plug_reading(
+            stored_load_info.get(STORAGE_KEY_USER_PIN_PLUG_STATE)
+        )
+
+    @staticmethod
+    def _car_plug_reading(car: QSCar | None, time: datetime) -> str | None:
+        """QS-416: last valid reading of the car plug sensor at `time` ("on" / "off"), else None."""
+        if car is None or car.car_plugged is None:
+            return None
+        return QSChargerGeneric._parse_plug_reading(
+            car.get_sensor_latest_possible_valid_value(entity_id=car.car_plugged, time=time)
+        )
+
+    @staticmethod
+    def _parse_plug_reading(value: object) -> str | None:
+        """A persisted plug reading: "on" / "off"; anything else (missing, malformed) → None (unknown)."""
+        if value == STATE_ON:
+            return STATE_ON
+        if value == STATE_OFF:
+            return STATE_OFF
+        return None
 
     @staticmethod
     def _parse_saved_at(value: object) -> datetime | None:
@@ -2617,8 +2656,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
     @staticmethod
     def _read_saved_attached_car_best_score(
         stored_load_info: dict,
-    ) -> tuple[str, float, datetime] | None:
-        """Validate the persisted QS-416 floor; anything malformed (or an older store) → None."""
+    ) -> tuple[str, float, datetime, str | None] | None:
+        """Validate the persisted QS-416 floor; anything malformed (or an older store) → None.
+
+        The plug reading at the save is optional: malformed or missing → None (unknown).
+        """
         name = stored_load_info.get(STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_CAR_NAME)
         best = stored_load_info.get(STORAGE_KEY_ATTACHED_CAR_BEST_SCORE)
         saved_at = QSChargerGeneric._parse_saved_at(stored_load_info.get(STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_SAVED_AT))
@@ -2632,7 +2674,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         # OverflowError on e.g. 10**400
         if not 0 < best < CAR_SCORE_MAX:
             return None
-        return name, float(best), saved_at
+        plug_at_save = QSChargerGeneric._parse_plug_reading(
+            stored_load_info.get(STORAGE_KEY_ATTACHED_CAR_BEST_SCORE_PLUG_STATE)
+        )
+        return name, float(best), saved_at, plug_at_save
 
     def support_user_override(self) -> bool:
         return True
@@ -3599,14 +3644,15 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
     def _lift_boot_user_pin_if_car_unplugged(self, time: datetime) -> None:
         """QS-416: drop a persisted user car pin whose car was unplugged while HA was down.
 
-        Same positive-proof rule as the persisted floor: a valid "off" of the pinned
-        car's plug sensor recorded since the pin's save time. Checked at every
-        decision of the boot window (the car API may report only after a while); no
-        proof (on / holes / no sensor / no saved time) keeps the pin, as before.
+        Same positive-proof rule as the persisted floor (`_car_unplugged_since`: an
+        "on" -> "off" transition of the pinned car's plug sensor since the pin's save
+        time). Checked at every decision of the boot window (the car API may report
+        only after a while); no proof (a stale re-polled "off", on, holes, no sensor,
+        no saved time) keeps the pin, as before.
         """
         if self._boot_user_pin is None:
             return
-        pinned_car_name, saved_at = self._boot_user_pin
+        pinned_car_name, saved_at, plug_at_save = self._boot_user_pin
         if self.get_user_originated(USER_ORIGINATED_CAR_NAME) != pinned_car_name:
             # not the persisted pin any more (changed without the hook, e.g. a restore)
             self._boot_user_pin = None
@@ -3614,7 +3660,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         car = self.home.get_car_by_name(pinned_car_name)
         if car is None:
             return
-        unplugged_at = self._car_unplugged_since(car, saved_at, time)
+        # A `saved_at` in the future (clock behind the save) is an empty window: no
+        # proof, the pin is kept and the guard stays ARMED, re-checked at the next
+        # decisions. Unlike the floor, consumed once at the attach, which must refuse.
+        unplugged_at = self._car_unplugged_since(car, saved_at, time, plug_at_save)
         if unplugged_at is None:
             return
 
@@ -4065,8 +4114,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             and pinned_car_name is not None
             and pinned_car_name != CHARGER_NO_CAR_CONNECTED
         ):
-            self._boot_user_pin = (pinned_car_name, self._saved_user_pin_saved_at)
+            self._boot_user_pin = (pinned_car_name, self._saved_user_pin_saved_at, self._saved_user_pin_plug_state)
         self._saved_user_pin_saved_at = None
+        self._saved_user_pin_plug_state = None
 
     def _has_state_to_reset(self, keep_commands: bool) -> bool:
         """Extend the base predicate with the user-initiated flags this class clears.
@@ -4233,6 +4283,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         await self._on_charger_fault_cycle(time)
 
         if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
+            # QS-416 R3-2: edge-triggered — see `_seen_plugged` (a car still attached
+            # here also proves the charger was plugged, as before QS-416)
+            unplug_edge = self._seen_plugged or self.car is not None
+            self._seen_plugged = False
             if self.car:
                 _LOGGER.warning(
                     "check_load_activity_and_constraints: unplugged connected car %s on charger %s: "
@@ -4261,7 +4315,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             # physical unplug, reset the user selected car for charger — outside the
             # `if self.car:` above (QS-416): the pinned car may already have been taken
             # by another charger, and a surviving pin would pull it back at the replug.
-            self.clear_user_originated(USER_ORIGINATED_CAR_NAME)
+            # Only on the plugged -> unplugged edge (R3-2): a choice made while the
+            # charger stays unplugged (pre-selection before plugging) is kept.
+            if unplug_edge:
+                self.clear_user_originated(USER_ORIGINATED_CAR_NAME)
 
             # QS-346: a physical unplug kills the remembered car — after it, a replug on
             # a still-faulted charger must NOT re-attach on the strength of stale memory.
@@ -4278,6 +4335,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 )
 
         elif self.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
+            self._seen_plugged = True
             best_car = self.get_best_car(time)
 
             if (
@@ -5106,6 +5164,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
         self.update_power_steps()
         self.car_attach_time = time
+        # a car is only attached to a plugged charger (R3-2, see `_seen_plugged`)
+        self._seen_plugged = True
 
         car.charger = self
 
@@ -5118,14 +5178,15 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         """QS-416: restore the persisted floor when the SAME car re-attaches after a restart.
 
         A non-matching car (e.g. the generic car attaching first) consumes nothing.
-        Refused only on positive proof of an unplug: a valid "off" of the car plug
-        sensor recorded since `saved_at`. `unavailable` / `unknown` / no state at all
+        Refused only on positive proof of an unplug (`_car_unplugged_since`: an
+        "on" -> "off" transition of the car plug sensor since `saved_at`). A stale
+        "off" re-polled after the boot, `unavailable` / `unknown` / no state at all
         restore — a cloud integration restarting always leaves such holes.
         """
         boot = self._boot_attached_car_best_score
         if boot is None:
             return
-        car_name, best_score, saved_at = boot
+        car_name, best_score, saved_at, plug_at_save = boot
         if car_name != car.name:
             return
         self._boot_attached_car_best_score = None
@@ -5142,7 +5203,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             )
             return
 
-        unplugged_at = self._car_unplugged_since(car, saved_at, time)
+        unplugged_at = self._car_unplugged_since(car, saved_at, time, plug_at_save)
         if unplugged_at is not None:
             _LOGGER.info(
                 "attach_car: %s on %s: persisted score floor NOT restored, car unplugged at %s",
@@ -5162,21 +5223,39 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         )
 
     @staticmethod
-    def _car_unplugged_since(car: QSCar, since: datetime, time: datetime) -> datetime | None:
-        """QS-416: time of a valid "off" of the car plug sensor recorded in [since, time], else None.
+    def _car_unplugged_since(car: QSCar, since: datetime, time: datetime, plug_at_save: str | None) -> datetime | None:
+        """QS-416: time of an unplug of the car proven in [since, time], else None.
 
-        Positive proof of an unplug only: `unavailable` / `unknown` / no state / no
-        sensor prove nothing (a cloud integration restarting always leaves holes).
-        The sample in force at the window start can be older than `since`: it is no
-        proof of an unplug after `since`, so it is ignored. `since > time` (clock
+        The proof is a TRANSITION (review fix #03 R3-1): a valid "off" sample at or
+        after `since` whose previous valid reading is "on". A bare "off" proves
+        nothing: every probed entity is re-polled and re-stamped with the poll time
+        (boot included), so a sensor stuck at "off" before the save — the ID.buzz
+        reports "off" while plugged — gets a fresh "off" sample after the restart.
+
+        The previous valid reading of the first sample after `since` is
+        `plug_at_save` (the reading persisted with the save) when known, else the
+        last valid sample before `since` in the history. An "off" with no earlier
+        valid reading at all (recorder history not loaded yet, nothing saved) is no
+        proof; the check runs at every boot-window decision, so a real unplug is
+        still seen once the history loads. Holes (`unavailable` / `unknown`) are
+        skipped, never a proof; no sensor proves nothing. `since > time` (clock
         behind the save) is an empty window: nothing can be seen.
         """
         if car.car_plugged is None or since > time:
             return None
-        num_seconds = (time - since).total_seconds()
-        for state_time, state, _attr in car.get_state_history_data(car.car_plugged, num_seconds, to_ts=time):
-            if state == STATE_OFF and state_time is not None and state_time >= since:
+        samples = [
+            (state_time, state)
+            for state_time, state, _attr in car.get_state_history_data(car.car_plugged, None, to_ts=time)
+            if state_time is not None
+        ]
+        before = [state for state_time, state in samples if state_time < since]
+        previous = plug_at_save if plug_at_save is not None else (before[-1] if before else None)
+        for state_time, state in samples:
+            if state_time < since:
+                continue
+            if state == STATE_OFF and previous == STATE_ON:
                 return state_time
+            previous = state
         return None
 
     def detach_car(self):
