@@ -30,8 +30,16 @@ class TestArgv:
                 ["diff", "--no-ext-diff", "--no-textconv", "--no-color", A, B, "--", "a/b/c.py"],
             ),
             ("show", {"rev": A, "path": "x/y.py"}, ["cat-file", "blob", f"{A}:x/y.py"]),
-            ("grep", {"rev": A, "pattern": "-O"}, ["grep", "-n", "--no-color", "-e", "-O", A]),
-            ("grep", {"rev": A, "pattern": "x", "path": "d"}, ["grep", "-n", "--no-color", "-e", "x", A, "--", "d"]),
+            (
+                "grep",
+                {"rev": A, "pattern": "-O"},
+                ["-c", "grep.patternType=basic", "grep", "-n", "--no-color", "-e", "-O", A],
+            ),
+            (
+                "grep",
+                {"rev": A, "pattern": "x", "path": "d"},
+                ["-c", "grep.patternType=basic", "grep", "-n", "--no-color", "-e", "x", A, "--", "d"],
+            ),
             ("ls-tree", {"rev": A}, ["ls-tree", "-r", "--name-only", A]),
             ("ls-tree", {"rev": A, "path": "-p"}, ["ls-tree", "-r", "--name-only", A, "--", "-p"]),
             ("ls-tree", {"rev": "f" * 64}, ["ls-tree", "-r", "--name-only", "f" * 64]),  # a SHA-256 object name
@@ -182,6 +190,30 @@ class TestCommand:
         assert run_cli("review", "read", "diff", "--base", "HEAD", "--head", A)[1]["error"] == "USAGE"
         assert run_cli("review", "read", "ls-tree", "--rev", A, "--output", "x")[1]["error"] == "USAGE"
         assert fake_runner.calls == []
+
+    def test_grep_is_a_pinned_bre_in_a_real_repository(self, tmp_path: Path) -> None:
+        """#421: ``--pattern`` is git's BRE whatever ``grep.patternType`` the repository configures."""
+        from control_plane import runner
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        def g(*args: str) -> str:
+            return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+        g("init", "-q", "-b", "main")
+        (repo / "a.py").write_text("y = f(x)\n")
+        g("add", ".")
+        g("-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "-m", "one")
+        g("config", "grep.patternType", "extended")
+        head = g("rev-parse", "HEAD")
+        real = runner.Runner()
+        assert (
+            gitread.read(real, repo, "grep", {"rev": head, "pattern": "f(x)"})["output"] == f"{head}:a.py:1:y = f(x)\n"
+        )
+        with pytest.raises(errors.CpError) as exc:
+            gitread.read(real, repo, "grep", {"rev": head, "pattern": "\\("})
+        assert exc.value.code == "NOT_FOUND" and "git grep exited 128" in exc.value.detail
 
     def test_against_a_real_repository(self, tmp_path: Path, monkeypatch) -> None:
         """A real ``Runner`` and a real git: every op, and a binary file is ``lossy``."""

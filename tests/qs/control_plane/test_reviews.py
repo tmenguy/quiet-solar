@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from control_plane import db, errors, paths, reviews, schema_reviews
+from control_plane import db, errors, liveness, paths, reviews, schema_reviews
 
 from .conftest import insert_task, open_run, sql
 
@@ -328,7 +328,7 @@ def rw(migrated: Path, fake_main: Path, fake_runner, fake_claude, fake_clock, fa
     for stem in schema_reviews.AGENTS.values():
         (agents / f"{stem}.md").write_text(f"---\nname: {stem}\n---\nbody\n")
     git = FakeGit(fake_runner, fake_main)
-    launch = {"exit": 0, "list": True, "on_launch": None, "seq": 0}
+    launch = {"exit": 0, "list": True, "on_launch": None, "seq": 0, "stdout": "", "stderr": ""}
 
     def claude_bg(call: Any) -> Any:
         from control_plane.runner import RunResult
@@ -341,7 +341,7 @@ def rw(migrated: Path, fake_main: Path, fake_runner, fake_claude, fake_clock, fa
         if launch["exit"] == 0 and launch["list"]:
             launch["seq"] += 1
             fake_claude.listing = [*(fake_claude.listing or []), agent(f"S-{name}", name, id=f"short-{launch['seq']}")]
-        return RunResult(launch["exit"], "", "")
+        return RunResult(launch["exit"], launch["stdout"], launch["stderr"])
 
     fake_runner.on(["claude", "--bg"], claude_bg)
     fake_runner.calls.clear()
@@ -460,7 +460,7 @@ class TestLaunch:
         prefix = f"{python} {main}/scripts/qs/cp.py"
         allow = [
             f"Read(/{directory}/in/**)",
-            f"Write(/{directory}/in/**)",
+            f"Edit(/{directory}/in/**)",
             *(
                 f"Bash({prefix} {cmd}:*)"
                 for cmd in ("snapshot", "task show", "ledger show", "review read", "finding open", "review finish")
@@ -519,7 +519,7 @@ class TestLaunch:
         d = Path("/x/V1")
         assert reviews.allowed_tools(Path("/m"), "/m/venv/bin/python", d)[:2] == [
             "Read(//x/V1/in/**)",
-            "Write(//x/V1/in/**)",
+            "Edit(//x/V1/in/**)",
         ]
         assert reviews.launch_args("auto", Path("/m"), "/p", d) == [
             "--permission-mode",
@@ -549,7 +549,7 @@ class TestLaunch:
         main, d = Path("/Users/José/m"), Path("/Users/José/r/V1")
         assert reviews.allowed_tools(main, "/Users/José/m/venv/bin/python", d) == [
             "Read(//Users/José/r/V1/in/**)",
-            "Write(//Users/José/r/V1/in/**)",
+            "Edit(//Users/José/r/V1/in/**)",
             *(
                 f"Bash(/Users/José/m/venv/bin/python /Users/José/m/scripts/qs/cp.py {cmd}:*)"
                 for cmd in reviews.CP_COMMANDS
@@ -790,12 +790,68 @@ class TestIdentifyAndFailures:
         }
         assert sum(rw["deps"].clock.sleeps) >= 60  # it waited LAUNCH_SETTLE_S
 
-    def test_a_failed_launch(self, rw) -> None:
+    @pytest.mark.parametrize(
+        ("stdout", "stderr", "expected"),
+        [
+            ("", "boom\n", "claude --bg exited 1: boom"),
+            ("out\n", "", "claude --bg exited 1: out"),  # stderr empty: stdout's tail
+            ("", "", "claude --bg exited 1"),  # no output: the bare head
+        ],
+    )
+    def test_a_failed_launch(self, rw, stdout: str, stderr: str, expected: str) -> None:
         rw["launch"]["exit"] = 1
+        rw["launch"]["stdout"], rw["launch"]["stderr"] = stdout, stderr
         code, out = global_r1(rw)
-        assert code == 1 and "claude --bg exited 1" in out["detail"]
-        assert review_row(rw["db"], "V1")["state"] == "failed"
+        row = review_row(rw["db"], "V1")
+        assert row["error"] == expected  # the cause is kept (#421)
+        assert code == 1 and out["detail"].endswith(row["error"])
+        assert row["state"] == "failed"
         assert review_alerts(rw["db"]) == [("R1", "review:V1:failed")]
+        payload = __import__("json").loads(sql(rw["db"], "SELECT payload FROM alerts LIMIT 1")[0][0])
+        assert payload["error"] == row["error"]
+
+    @pytest.mark.parametrize("where", ["stderr", "stdout"])
+    def test_a_failed_launch_untrusted(self, rw, where: str) -> None:
+        refusal = "Workspace not trusted. Run claude in /x once and accept the trust prompt"
+        rw["launch"]["exit"] = 1
+        if where == "stderr":
+            rw["launch"]["stderr"] = refusal + "x" * (1000 - len(refusal))
+        else:
+            rw["launch"]["stdout"], rw["launch"]["stderr"] = refusal, "x" * 1000
+        code, out = global_r1(rw)
+        row = review_row(rw["db"], "V1")
+        root = Path(row["dir"]).parents[1]
+        assert row["error"].startswith("claude --bg exited 1: x")
+        assert row["error"].endswith("; " + liveness.trust_hint(root))
+        assert len(row["error"]) == reviews.ERROR_MAX
+        assert code == 1 and out["detail"].endswith(row["error"])
+
+    def test_a_failed_launch_untrusted_with_a_long_review_dir(self, rw, monkeypatch, tmp_path: Path) -> None:
+        tail = Path(*["d" * 200] * (reviews.ERROR_MAX // 200), "e" * 200, "reviews")  # components <= 255
+        assert len(str(tail)) > reviews.ERROR_MAX  # long enough whatever `tmp_path` is (CI's is short)
+        monkeypatch.setenv("QS_CP_REVIEW_DIR", str(tmp_path / tail))
+        rw["launch"]["exit"] = 1
+        rw["launch"]["stderr"] = "Workspace not trusted. Run claude in /x once and accept the trust prompt"
+        code, out = global_r1(rw)
+        row = review_row(rw["db"], "V1")
+        assert len(str(Path(row["dir"]).parents[1])) > reviews.ERROR_MAX  # the hint alone would not fit
+        assert row["error"].startswith("claude --bg exited 1; the folder is not trusted")  # the head is kept
+        assert row["error"].endswith("e/reviews` or a parent folder and accept the trust prompt")
+        assert len(row["error"]) == reviews.ERROR_MAX
+        payload = __import__("json").loads(sql(rw["db"], "SELECT payload FROM alerts LIMIT 1")[0][0])
+        assert payload["error"] == row["error"]
+        assert code == 1 and out["detail"].endswith(row["error"])
+
+    def test_a_failed_launch_redacts_before_the_cut(self, rw) -> None:
+        nonce = "0123456789abcdef" * 2
+        token = f"review:V1.1.{nonce}"
+        budget = reviews.ERROR_MAX - len("claude --bg exited 1: ")
+        rw["launch"]["exit"] = 1
+        rw["launch"]["stderr"] = "x" * 1000 + token + "-" * (budget - len(token) // 2)  # the cut splits the token
+        global_r1(rw)
+        error = review_row(rw["db"], "V1")["error"]
+        assert error.startswith("claude --bg exited 1: ") and len(error) <= reviews.ERROR_MAX
+        assert not any(nonce[i : i + 8] in error for i in range(len(nonce) - 7))
 
     def test_a_closed_run_gets_no_alert(self, rw) -> None:
         rw["launch"]["exit"] = 1

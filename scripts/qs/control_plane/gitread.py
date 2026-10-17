@@ -8,7 +8,7 @@ op          arguments                                   runs
 ==========  ==========================================  =====================================================
 ``diff``    ``--base SHA --head SHA [--path P]``        ``git diff --no-ext-diff --no-textconv --no-color``
 ``show``    ``--rev SHA --path P``                      ``git cat-file blob <rev>:<P>``
-``grep``    ``--rev SHA --pattern X [--path P]``        ``git grep -n --no-color -e <X> <rev> [-- P]``
+``grep``    ``--rev SHA --pattern X [--path P]``        ``git -c grep.patternType=basic grep -n --no-color -e <X> <rev> [-- P]`` (``<X>`` is a BRE whatever the git config)
 ``ls-tree`` ``--rev SHA [--path P]``                    ``git ls-tree -r --name-only <rev> [-- P]``
 ``files``   ``--base SHA --head SHA [--path P]``        ``git diff … --name-status <base> <head> [-- P]``
 ==========  ==========================================  =====================================================
@@ -91,7 +91,7 @@ def argv(main: Path, op: str, given: dict[str, str]) -> list[str]:
     if op == "show":
         return [*git, "cat-file", "blob", f"{rev}:{path}"]
     if op == "grep":
-        return [*git, "grep", "-n", "--no-color", "-e", given["pattern"], rev, *tail]
+        return [*git, "-c", "grep.patternType=basic", "grep", "-n", "--no-color", "-e", given["pattern"], rev, *tail]
     return [*git, "ls-tree", "-r", "--name-only", rev, *tail]
 
 

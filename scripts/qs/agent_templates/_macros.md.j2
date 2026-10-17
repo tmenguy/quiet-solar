@@ -231,7 +231,7 @@ outside `in/`.
 3. Read the code only with `review read`, at the shas of your prompt:
    `review read diff --base <base_sha> --head <head_sha>` for the task's
    own change, `review read show --rev <head_sha> --path <file>`,
-   `review read grep --rev <head_sha> --pattern <regex>`,
+   `review read grep --rev <head_sha> --pattern '<regex>'`,
    `review read ls-tree --rev <head_sha>`. If an answer has
    `truncated: true`, list the changed files with
    `review read files --base <base_sha> --head <head_sha>` and read them
@@ -240,6 +240,19 @@ outside `in/`.
    base: read it with `ls-tree` / `show` at `head_sha`. Never assume a
    working tree: you have none. A task with no head (`head_state` `plan` or
    `unresolved`) is reviewed from its plan (digest, criteria).
+
+   `--pattern` is a basic regular expression (git's BRE): never escape
+   `(`, `)`, `|`, `+`, `?`, `{` or `}` (`\(`, `\{`, `\|`, `\+`, `\?` are
+   operators); `.`, `*`, `[`, `^`, `$` and `\` are special — escape one
+   with `\` to match it. Pass the pattern in single quotes
+   (`--pattern 'f(x)'`): unquoted, the shell eats a `\`, globs a `*` and
+   fails on a `(`; a pattern holding `'` cannot be single-quoted: pick
+   another one. A `--pattern` or `--path` value starting with `-`: use the
+   `=` form (`--pattern='--bg'`, `--path=-x`): with a space, argparse reads
+   it as an option (`USAGE`). A pattern git cannot compile comes back
+   `NOT_FOUND` with git's message: fix the pattern and retry once (the one
+   exception to the `NOT_FOUND` rule below).
+
 4. The lens:
 [% if kind == "global" %]
    - does each task fit the run's global plan;
