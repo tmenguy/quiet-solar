@@ -1047,8 +1047,8 @@ def _launch(ctx: StepCtx, start: Callable[[sqlite3.Row], runner.RunResult], *, t
         # the row's own nonce too, whitespace allowed between its characters: an echo wrapped inside the token
         nonce_re = re.compile(r"\s*".join(map(re.escape, row["nonce"])))
 
-        def scrub(text: str) -> str:
-            return nonce_re.sub("<redacted>", redact(text))
+        def scrub(text: str) -> str:  # the nonce first: `redact` would eat its hex up to a wrap (fix #03 H2)
+            return redact(nonce_re.sub("<redacted>", text))
 
         clean = dataclasses.replace(res, stdout=scrub(res.stdout), stderr=scrub(res.stderr))
         raise StepFailed(
@@ -1116,6 +1116,10 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
             raise errors.CpError("USAGE", f"args.{name} is required")
     _require_file_arg(args, "prompt_file")
     model = args.get("model")
+    for name in ("agent", "permission_mode", "model"):  # argv values: `claude` must not read one as an option
+        value = args.get(name)
+        if isinstance(value, str) and (value.startswith("-") or "\x00" in value):
+            raise errors.CpError("USAGE", f"args.{name} cannot start with `-` or hold a NUL")
     replace = bool(args.get("replace", False))
 
     def reserve(ctx: StepCtx) -> None:

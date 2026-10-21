@@ -2106,8 +2106,8 @@ class TestNodeLaunchFailure:
         nonce = node_row(w, "N1")["nonce"]
         row = call_row(w, "spawn", "k1")
         assert row is not None
-        for blob in (row["result"], json.dumps(out)):
-            assert nonce not in blob and "<redacted>" in blob
+        for blob in (row["result"], json.dumps(out)):  # no 8-character slice of the nonce (fix #03 H2)
+            assert not any(nonce[i : i + 8] in blob for i in range(len(nonce) - 7)) and "<redacted>" in blob
 
     @pytest.mark.parametrize("tool_name", ["spawn", "resume"])
     @pytest.mark.parametrize("text", ["---\nfront: matter\n", "- build it", "-p go", "a\x00b"])
@@ -2123,6 +2123,17 @@ class TestNodeLaunchFailure:
         assert row is not None and row["state"] == "failed"
         node = node_row(w, "N1")  # as after a model-policy refusal: reserved, never launched (fix #02, blind-hunter)
         assert (node["state"], node["launch_at"]) == ("spawning", None)
+
+    @pytest.mark.parametrize(
+        "extra",
+        [{"agent": "a\x00b"}, {"agent": "-p"}, {"model": "m\x00"}, {"model": "--x"}, {"permission_mode": "a\x00"}],
+    )
+    def test_an_argv_value_claude_cannot_take_is_usage(self, w: W, extra: dict[str, str]) -> None:
+        # #424 fix #03 H8: refused when the steps are built, before any effect
+        args = {"agent": "qs-node", "permission_mode": "auto", "prompt_file": w.files["prompt"], **extra}
+        code, out = tool(w, "spawn", "k1", **args)
+        assert code == 2 and out["error"] == "USAGE", out
+        assert w.sim.effects("claude", "--bg") == 0 and call_row(w, "spawn", "k1") is None
 
     @pytest.mark.parametrize("text", ["", " \n\t"])
     def test_an_empty_resume_message_is_refused(self, w: W, text: str) -> None:

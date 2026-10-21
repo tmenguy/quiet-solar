@@ -250,6 +250,15 @@ class TestDigests:
         assert reports.parse_digest("[1]") is None
         assert reports.parse_digest("[" * 100_000) is None  # too deep for `json.loads`: RecursionError
 
+    def test_deeply_nested_json_is_usage(self, world) -> None:
+        # #424 fix #03 H4: `json.loads` raises RecursionError on it; nothing is written
+        bad = _file(world, "deep.json", "[" * 300_000 + "]" * 300_000)
+        code, out = run_cli("digest", "put", "--task", "T1", "--file", bad, "--token", world["node"])
+        assert code == 2 and out["error"] == "USAGE", out
+        code, out = _post(world, None, raw="[" * 300_000 + "]" * 300_000)
+        assert code == 2 and out["error"] == "USAGE", out
+        assert _nothing_posted(world) and sql(world["db"], "SELECT count(*) FROM digests")[0][0] == 0
+
     def test_a_lone_surrogate_is_usage(self, world) -> None:
         # #424 fix #01 F2: `json.loads` accepts `\\ud800`, which no UTF-8 encoding holds
         bad = _file(world, "bad.json", json.dumps(digest(goal="\ud800")))

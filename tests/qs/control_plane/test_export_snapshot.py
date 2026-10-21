@@ -133,6 +133,22 @@ class TestExport:
             ("<details>\nopen", ["<details>", "open"]),
             ("> # x\n- ## y\n1. # z", ["> #### x", "- ##### y", "1. #### z"]),  # nested headings, prefix kept
             ("> Title\n> ---", ["> Title", "", "> ---"]),
+            # fix #03: only a bare top-level fence is tracked (CommonMark closes it only with a bare closer)
+            ("- ```\n# ListEscape", ["- ```", "#### ListEscape"]),
+            ("> ```\n# QuoteEscape", ["> ```", "#### QuoteEscape"]),
+            ("- ```\n  code\n## Decisions", ["- ```", "  code", "##### Decisions"]),
+            ("```\n- ```\n```\n# CloserEscape", ["```", "- ```", "```", "#### CloserEscape"]),
+            ("```\n    ```\n```\n# IndentEscape", ["```", "    ```", "```", "#### IndentEscape"]),
+            ("\t\t```\n  # TabEscape", ["\t\t```", "  #### TabEscape"]),  # 8 columns: indented code
+            ("\t```\n# x", ["\t```", "#### x"]),  # a tab is 4 columns: no fence
+            ("- ```\nTitle\n===", ["- ```", "Title", "", "==="]),
+            # an indented opener may sit in a list item: a less-indented line ends it (over-demotion is the safe side)
+            ("   ```\n# a\n   ```", ["   ```", "#### a", "   ```"]),
+            ("  ```\n  # kept\n  ```\n# h", ["  ```", "  # kept", "  ```", "#### h"]),
+            ("```\ncode\n```\xa0", ["```", "code", "```\xa0"]),  # a trailing NBSP line is kept
+            ("<div>\n```\n</div>\n\n# Evil", ["<div>", "```", "</div>", "", "#### Evil"]),  # HTML: no fence (H6)
+            ("see[^n]\n\n[^n]: a note\n> - [^m]: b", ["see[^n]", "", "\\[^n]: a note", "> - \\[^m]: b"]),  # H7
+            ("```\n[^n]: in code\n```", ["```", "[^n]: in code", "```"]),
         ],
     )
     def test_a_value_cannot_break_the_summary_structure(self, world, linked, value: str, rendered: list[str]) -> None:
@@ -144,6 +160,19 @@ class TestExport:
         start, end = lines.index("### Decisions"), lines.index("### Questions")
         assert lines[start + 1] == "" and lines[end - 1] == ""
         assert lines[start + 2 : end - 1] == [f"> {line}" if line else ">" for line in rendered]  # one blockquote
+
+    @pytest.mark.parametrize(
+        "line",
+        ["> " * 5000 + "x", "-  " * 5000 + "x", ">\t" * 5000 + "x", "1. " * 5000 + "---"],
+        ids=["quotes", "list-items", "tab-quotes", "ordered-underline"],
+    )
+    def test_deeply_nested_markers_render_in_linear_time(self, line: str) -> None:
+        # #424 fix #03 H1: the marker regexes are possessive, so no line backtracks exponentially
+        import time
+
+        started = time.monotonic()
+        assert export._value_lines(line + "\n" + line)[0].startswith("> ")
+        assert time.monotonic() - started < 2
 
     @pytest.mark.parametrize("body", ["Built by hand.\n\nNo JSON.\n", '{"goal": "x"}'])
     def test_a_stored_body_off_the_contract_is_rendered_raw(self, world, linked, body: str) -> None:
