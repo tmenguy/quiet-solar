@@ -27,6 +27,7 @@ evolve.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -67,6 +68,8 @@ PHASES = ("/create-plan", "/diagnose-task", "/decompose-epic")
 RELEASED_BEFORE_EFFECT = frozenset({"BUSY", "POLICY_REFUSED", "STALE_TOKEN", "STOPPED", "USAGE"})
 KEY_RE = re.compile(r"[A-Za-z0-9._:/-]{1,200}")
 _REVIEW_TOKEN_RE = re.compile(r"review:(V\d+)\.([01])\.[0-9a-f]+")  # #407: redacted from recorded errors
+# #424: mirrors `tokens._TOKEN_RE`; no `\b`, so a token glued to the text before it (`xnode:…`) is redacted too
+_NODE_TOKEN_RE = re.compile(r"node:([A-Z]\d+)\.(\d+)\.[0-9a-f]+")
 GH_LIST_LIMIT = "100"
 _RELAUNCH_RE = re.compile(r"(?P<base>.*?)(?:-r(?P<n>\d+))?")  # spawn names end in -g<generation>
 NON_TERMINAL_STATES = frozenset(set(tasks.TRANSITIONS) - tasks.TERMINAL)
@@ -291,8 +294,13 @@ def _files_digest(args: Mapping[str, Any], cache: Mapping[str, bytes]) -> str | 
 
 
 def redact(text: str) -> str:
-    """Every review token in ``text`` with its nonce replaced: ``review:V<n>.<e>.<redacted>`` (#407 D2)."""
-    return _REVIEW_TOKEN_RE.sub(r"review:\1.\2.<redacted>", text)
+    """Every review and node token in ``text`` with its nonce replaced: ``review:V<n>.<e>.<redacted>`` (#407 D2),
+    ``node:N<n>.<g>.<redacted>`` (#424 D1). Run tokens are kept: the run token never reaches a launch.
+
+    Called on error paths only (``_Call.fail``, ``reviews.close_locked``, ``reviews._launch``, ``_launch``): a
+    success or a replay still answers with the full node token.
+    """
+    return _NODE_TOKEN_RE.sub(r"node:\1.\2.<redacted>", _REVIEW_TOKEN_RE.sub(r"review:\1.\2.<redacted>", text))
 
 
 def _owned(cur: sqlite3.Cursor) -> None:
@@ -1023,7 +1031,10 @@ def _reserve_prelude(ctx: StepCtx) -> tuple[list[liveness.Agent] | None, dict[st
     return listing, locks.spawn_holders_alive(call.conn, call.ctx.probe)
 
 
-def _launch(ctx: StepCtx, start: Callable[[sqlite3.Row], runner.RunResult]) -> dict[str, Any]:
+def _launch(ctx: StepCtx, start: Callable[[sqlite3.Row], runner.RunResult], *, trust_dir: Path) -> dict[str, Any]:
+    """Write ``launch_at``, then ``start`` the session. A non-zero exit (a timeout's 124 included) fails the step with
+    the ``liveness.bg_failure`` text: the redacted output's tail, plus the trust hint naming ``trust_dir`` when
+    Claude Code refused the folder (#424 D1)."""
     node_id = ctx.outputs["reserve"]["node_id"]
     with ctx.write() as conn:
         conn.execute(
@@ -1032,8 +1043,11 @@ def _launch(ctx: StepCtx, start: Callable[[sqlite3.Row], runner.RunResult]) -> d
         )
         row = conn.execute("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
     res = start(row)
-    if not res.ok:
-        raise StepFailed(f"claude --bg exited {res.returncode}", {"exit_code": res.returncode}, res.returncode)
+    if not res.ok:  # redact before the cut: the node token rides in the prompt, and a cut one would not match
+        clean = dataclasses.replace(res, stdout=redact(res.stdout), stderr=redact(res.stderr))
+        raise StepFailed(
+            liveness.bg_failure(clean, trust_dir, liveness.BG_ERROR_MAX), {"exit_code": res.returncode}, res.returncode
+        )
     return {"launched": True}
 
 
@@ -1208,18 +1222,14 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
                 f" · token {token}"
             )
             argv = ["--agent", str(args["agent"]), "-n", row["name"], "--model", str(launch_model)]
-            argv += [
-                "--permission-mode",
-                str(args["permission_mode"]),
-                "--settings",
-                settings,
-                "--add-dir",
-                str(ctx.main),
-                text,
-            ]
+            # `--add-dir <directories...>` takes several values: placed last, it swallows the prompt as a second
+            # directory and the session starts with no prompt (#424 L8). So it goes before a single-value option,
+            # and the argv ends `--settings <json> <prompt>` (the watchdog's `--allowedTools=` form is safe too).
+            argv += ["--add-dir", str(ctx.main), "--permission-mode", str(args["permission_mode"])]
+            argv += ["--settings", settings, text]
             return ctx.claude.spawn_bg(argv, cwd=wt)
 
-        return _launch(ctx, start)
+        return _launch(ctx, start, trust_dir=wt.parent)
 
     return (
         Step("reserve", reserve),
@@ -1287,7 +1297,8 @@ def _resume_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
 
     def launch(ctx: StepCtx) -> dict[str, Any]:
         message = arg_file_text(ctx, "message_file")  # before `_launch` writes launch_at
-        return _launch(ctx, lambda row: ctx.claude.resume_bg(row["session_id"], message, cwd=wt))
+        # no `--add-dir`: a bare resume restores every option of the launch (#424 L7)
+        return _launch(ctx, lambda row: ctx.claude.resume_bg(row["session_id"], message, cwd=wt), trust_dir=wt.parent)
 
     return (
         Step("reserve", reserve),

@@ -35,6 +35,8 @@ class Sim:
     cleanup_status: str = "removed"
     gate_exit: int = 0
     launch_exit: int = 0
+    launch_stdout: str = ""
+    launch_stderr: str = "boom"
     list_on_launch: bool = True
     hold: threading.Event | None = None
     entered: threading.Event = field(default_factory=threading.Event)
@@ -135,7 +137,7 @@ class Sim:
     def _claude_bg(self, call: Call) -> RunResult:
         self._block()
         if self.launch_exit:
-            return RunResult(self.launch_exit, "", "boom")
+            return RunResult(self.launch_exit, self.launch_stdout, self.launch_stderr)
         if "--resume" in call.argv:
             sid = call.argv[call.argv.index("--resume") + 1]
             name = next((a.name for a in (self.claude.listing or []) if a.session_id == sid), None)

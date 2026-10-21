@@ -24,6 +24,7 @@ from . import errors, runner
 
 TOKEN_ENV = "QS_CP_TOKEN"
 UNTRUSTED = "Workspace not trusted"  # Claude Code's refusal of `--bg` in an untrusted folder (2.1.299, #421)
+BG_ERROR_MAX = 500  # a failed `claude --bg`'s recorded text keeps at most this many characters (#421, #424)
 
 
 def untrusted(res: runner.RunResult) -> bool:
@@ -43,7 +44,7 @@ def bg_failure(res: runner.RunResult, trust_dir: Path, limit: int) -> str:
     The tail is stderr's, else stdout's: what the prefix and the hint leave room for. When the prefix and the hint
     alone exceed ``limit`` (an unusually long ``trust_dir``), the hint shows the folder's end after a leading ``…``:
     the result is then exactly ``limit`` characters, with no tail. Never over ``limit``: when even the prefix and the
-    hint's fixed text do not fit (unreachable at ``ERROR_MAX``), the result is their start, cut at ``limit``.
+    hint's fixed text do not fit (unreachable at ``BG_ERROR_MAX``), the result is their start, cut at ``limit``.
     """
     head = f"claude --bg exited {res.returncode}"
     output = res.stderr.strip() or res.stdout.strip()

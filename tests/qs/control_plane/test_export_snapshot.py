@@ -3,16 +3,28 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
-from control_plane import export, ledger, snapshot
+from control_plane import export, ledger, messages, snapshot
 
 from .conftest import CUR, ORCH, insert_node, open_run, run_cli, sql
 
 GOLDEN = Path(__file__).parent / "golden"
+# #424 D5: a digest is a JSON object with exactly `reports.DIGEST_KEYS`, string values (`""`: nothing to say)
+WORLD_DIGEST = {
+    "goal": "Ship the Control Plane core.",
+    "why": "Nodes need one ledger.",
+    "plan": "One SQLite DB.\n\n# Modules\n\n- db, tasks",
+    "done": "Built the core.\n\nAll green.\n",
+    "problems": "",
+    "decisions": "Use WAL.",
+    "questions": "",
+    "discovered": "",
+}
 
 
 def _git(*args: str, cwd: Path) -> None:
@@ -48,7 +60,7 @@ def world(migrated: Path, tmp_path: Path) -> dict[str, Any]:
     ok("criteria", "set", "--task", "T1", "--file", _file(tmp_path, "c.txt", "Schema v1\nQueues work\n"))
     ok("criteria", "validate", "--task", "T1")
     ok("criteria", "state", "--task", "T1", "--idx", "1", "--to", "met")
-    ok("digest", "put", "--task", "T1", "--file", _file(tmp_path, "d.md", "Built the core.\n\nAll green.\n"))
+    ok("digest", "put", "--task", "T1", "--file", _file(tmp_path, "d.json", json.dumps(WORLD_DIGEST)))
     ok(
         "decision",
         "add",
@@ -76,6 +88,32 @@ class TestExport:
         path = Path(out["path"])
         assert path == linked.resolve() / "docs" / "stories" / "QS-11.summary.md"
         assert path.read_text() == (GOLDEN / "summary.md").read_text()
+
+    @pytest.mark.parametrize("heading", ["## Decisions", "   ## Decisions", "# Decisions"])
+    def test_a_heading_inside_a_value_stays_below_level_3(self, world, linked, heading: str) -> None:
+        value = f"{heading}\n- nested\n    ## an indented code line stays as is"
+        body = _file(world["tmp"], "d2.json", json.dumps({**WORLD_DIGEST, "decisions": value}))
+        assert run_cli("digest", "put", "--task", "T1", "--file", body, "--token", world["token"])[0] == 0
+        assert run_cli("export-summary", "--task", "T1", "--out-worktree", str(linked))[0] == 0
+        lines = (linked / "docs" / "stories" / "QS-11.summary.md").read_text().splitlines()
+        assert lines.count("## Decisions") == 1 and lines.count("### Decisions") == 1
+        assert f"###{heading.lstrip()}" in lines and "    ## an indented code line stays as is" in lines
+        top = [line.lstrip(" ") for line in lines if re.match(r" {0,3}#{1,2} ", line)]  # Markdown h1/h2 lines
+        assert top == [
+            "# QS-11 — The | Control Plane",
+            "## Digest",
+            "## Acceptance criteria",
+            "## Decisions",
+            "## PR and merge",
+            "## Ledger",
+        ]
+
+    @pytest.mark.parametrize("body", ["Built by hand.\n\nNo JSON.\n", '{"goal": "x"}'])
+    def test_a_stored_body_off_the_contract_is_rendered_raw(self, world, linked, body: str) -> None:
+        sql(world["db"], "UPDATE digests SET body = ? WHERE task_id = 'T1'", [body])  # stored before #424
+        assert run_cli("export-summary", "--task", "T1", "--out-worktree", str(linked))[0] == 0
+        text = (linked / "docs" / "stories" / "QS-11.summary.md").read_text()
+        assert f"## Digest\n\n{body.rstrip()}\n\n## Acceptance criteria" in text and "### Goal" not in text
 
     def test_refuses_the_main_checkout(self, world, fake_main) -> None:
         code, out = run_cli("export-summary", "--task", "T1", "--out-worktree", str(fake_main))
@@ -198,7 +236,7 @@ def busy_world(world, fake_clock) -> dict[str, Any]:
         w["token"],
     )
     run_cli("question", "open", "--task", "T1", "--text-file", _file(w["tmp"], "q.md", "?"), "--token", w["token"])
-    fields = _file(w["tmp"], "f.json", '{"tests": 1}')
+    fields = _file(w["tmp"], "f.json", '{"blocking": [1]}')
     run_cli(
         "report",
         "post",
@@ -336,8 +374,9 @@ class TestSnapshot:
         assert snap["tool_calls_in_flight"][0]["age_s"] == 60.0
         assert snap["hook_alerts"][0]["detail"] == {"kind": "queue_not_draining"}
         assert snap["alerts"][0]["payload"] == {"files": ["a"]} and snap["alerts"][0]["kind"] == "overlap"
-        assert snap["reports"][0]["fields"] == {"tests": 1}
-        assert snap["digests"] == [{"task_id": "T1", "bytes": 28, "updated_at": "2026-10-03T12:00:00.000000Z"}]
+        assert snap["reports"][0]["fields"] == {"blocking": [1]}
+        size = len(messages.canonical(WORLD_DIGEST).encode())
+        assert snap["digests"] == [{"task_id": "T1", "bytes": size, "updated_at": "2026-10-03T12:00:00.000000Z"}]
         assert [t["id"] for t in snap["tasks"]] == ["T1", "T2"]
         open_run("r2", "S-2")
         assert [r["id"] for r in run_cli("snapshot", "--run", "R2")[1]["runs"]] == ["R2"]
@@ -396,12 +435,17 @@ class TestTaskShow:
     def test_full_task_with_its_digest(self, busy_world) -> None:
         code, out = run_cli("task", "show", "--task", "T1")
         assert code == 0
-        assert out["digest"]["body"] == "Built the core.\n\nAll green.\n"
+        assert out["digest"]["body"] == WORLD_DIGEST  # an object, not text
         assert out["task"]["title"] == "The | Control Plane" and "nonce" not in out["nodes"][0]
         assert [c["state"] for c in out["criteria"]] == ["met", "open"] and out["depends_on"] == ["T2"]
         assert len(out["decisions"]) == 2 and len(out["reports"]) == 1 and len(out["questions"]) == 1
         assert [h["to_state"] for h in out["history"]] == ["proposed"]
         assert run_cli("task", "show", "--task", "T2")[1]["digest"] is None
+
+    @pytest.mark.parametrize("body", ["Built by hand.\n", '{"goal": "x"}', "[]"])
+    def test_a_stored_body_off_the_contract_is_returned_raw(self, busy_world, body: str) -> None:
+        sql(busy_world["db"], "UPDATE digests SET body = ? WHERE task_id = 'T1'", [body])  # stored before #424
+        assert run_cli("task", "show", "--task", "T1")[1]["digest"]["body"] == body
 
     def test_the_ledger_in_task_show(self, busy_world) -> None:
         out = run_cli("task", "show", "--task", "T1")[1]

@@ -32,7 +32,7 @@ GLOBAL = "global"
 CROSS_RUN = "cross_run"
 TOOL_NAME = "review"
 REVIEW_PERMISSION_MODE = "dontAsk"  # D6: "auto" is the fallback (`launch_args` builds both)
-ERROR_MAX = 500  # a recorded `reviews.error` keeps at most this many characters (its tail)
+ERROR_MAX = liveness.BG_ERROR_MAX  # a recorded `reviews.error` keeps at most this many characters (its tail)
 
 
 # --------------------------------------------------------------------------- where a review runs (D5)

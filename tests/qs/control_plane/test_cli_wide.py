@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from control_plane import cli, migrations, tools
+from control_plane import cli, migrations, reports, tools
 
 from .conftest import NEXT, ORCH, agent, insert_node, insert_task, open_run, run_cli, sql
 
@@ -76,7 +76,7 @@ def samples(f: dict[str, str]) -> dict[str, list[str]]:
             "--task",
             "T1",
             "--phase",
-            "p",
+            "build",
             "--round",
             "1",
             "--status",
@@ -86,7 +86,7 @@ def samples(f: dict[str, str]) -> dict[str, list[str]]:
             "--fields-file",
             f["json"],
         ],
-        "digest put": ["digest", "put", "--task", "T1", "--file", f["text"]],
+        "digest put": ["digest", "put", "--task", "T1", "--file", f["digest"]],
         "msg post": ["msg", "post", "--run", "R1", "--to", "orchestrator", "--kind", "k", "--payload-file", f["json"]],
         "msg pop": ["msg", "pop", "--run", "R1", "--as", "orchestrator"],
         "msg ack": ["msg", "ack", "1", "--receipt", "r"],
@@ -207,11 +207,13 @@ def world(migrated: Path, tmp_path: Path, fake_claude, fake_runner, fake_popen) 
         "json": tmp_path / "p.json",
         "prompt": tmp_path / "prompt.md",
         "finding": tmp_path / "finding.json",
+        "digest": tmp_path / "digest.json",
     }
     files["finding"].write_text(json.dumps({"severity": "should_fix", "category": "test", "title": "t", "body": "b"}))
     files["text"].write_text("one\n")
     files["json"].write_text("{}")
     files["prompt"].write_text("go")
+    files["digest"].write_text(json.dumps(dict.fromkeys(reports.DIGEST_KEYS, "")))  # #424 D5: a digest on the contract
     f = {k: str(v) for k, v in files.items()}
     for name, args in TOOL_ARGS.items():
         p = tmp_path / f"tool-{name}.json"
@@ -242,7 +244,7 @@ def _stale(world: dict[str, Any], fake_runner, fake_popen) -> str:
 @pytest.mark.parametrize(
     "name",
     sorted(
-        set(samples(dict.fromkeys(["text", "json", "finding"] + [f"tool:{t}" for t in TOOL_ARGS], "x")))
+        set(samples(dict.fromkeys(["text", "json", "finding", "digest"] + [f"tool:{t}" for t in TOOL_ARGS], "x")))
         - RUN_TOKEN_REFUSED
     ),
 )
@@ -270,7 +272,8 @@ def test_stale_node_generation_changes_nothing(world, name: str, fake_runner, fa
 
 
 @pytest.mark.parametrize(
-    "name", sorted(set(samples(dict.fromkeys(["text", "json", "finding"] + [f"tool:{t}" for t in TOOL_ARGS], "x"))))
+    "name",
+    sorted(set(samples(dict.fromkeys(["text", "json", "finding", "digest"] + [f"tool:{t}" for t in TOOL_ARGS], "x")))),
 )
 def test_node_token_out_of_bounds_conflicts(world, name: str, fake_runner) -> None:
     if name == "msg ack":  # a message of another node's queue
@@ -309,7 +312,7 @@ def _all_non_exempt(f: dict[str, str]) -> dict[str, list[str]]:
 
 
 ALL_NON_EXEMPT = sorted(
-    _all_non_exempt(dict.fromkeys(["text", "json", "finding"] + [f"tool:{t}" for t in TOOL_ARGS], "x"))
+    _all_non_exempt(dict.fromkeys(["text", "json", "finding", "digest"] + [f"tool:{t}" for t in TOOL_ARGS], "x"))
 )
 
 
@@ -390,7 +393,9 @@ def _review(world: dict[str, Any], state: str = "running") -> dict[str, str]:
     return {"session": f"review:V1.1.{SESSION}", "grant": f"review:V1.0.{GRANT}"}
 
 
-ALL_SAMPLES = sorted(samples(dict.fromkeys(["text", "json", "finding"] + [f"tool:{t}" for t in TOOL_ARGS], "x")))
+ALL_SAMPLES = sorted(
+    samples(dict.fromkeys(["text", "json", "finding", "digest"] + [f"tool:{t}" for t in TOOL_ARGS], "x"))
+)
 
 
 @pytest.mark.parametrize("name", ALL_SAMPLES)

@@ -91,6 +91,13 @@ class TestRefresh:
         assert states == {"N1": "reaped", "N4": "running", "N5": "spawning", "N6": "taken_over"}
         assert nodes.refresh(conn, fake_clock, [], "R9")["changes"] == []
 
+    def test_a_listed_done_is_a_finished_turn(self, world, conn, fake_clock) -> None:
+        # #424 pin 1 (L1/L3/L9): an idle session between turns is listed `idle/done`; it is never reaped
+        listing = [agent("S-n1", status="idle", state="done")]
+        assert nodes.refresh(conn, fake_clock, listing)["changes"] == [("N1", "running", "idle")]
+        assert nodes.refresh(conn, fake_clock, listing)["changes"] == []
+        assert sql(world["db"], "SELECT state FROM nodes WHERE id = 'N1'")[0][0] == "idle"
+
 
 class TestCommands:
     def test_stop(self, world) -> None:

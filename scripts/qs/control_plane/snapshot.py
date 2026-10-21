@@ -10,7 +10,7 @@ import json
 import sqlite3
 from typing import Any
 
-from . import alerts, daemon, db, errors, ledger, migrations, tasks
+from . import alerts, daemon, db, errors, ledger, migrations, reports, tasks
 from . import clock as clock_mod
 
 SECRET_COLUMNS = frozenset({"nonce", "grant_nonce"})  # #407: a review's session nonce and launch grant
@@ -185,6 +185,12 @@ def snapshot(conn: sqlite3.Connection | None, clock: clock_mod.Clock, run_id: st
         }
 
 
+def _digest_body(body: str) -> dict[str, str] | str:
+    """The digest object, or the raw text of a body stored before #424 (``reports.parse_digest``)."""
+    parsed = reports.parse_digest(body)
+    return body if parsed is None else parsed
+
+
 def task_show(conn: sqlite3.Connection | None, task_id: str) -> dict[str, Any]:
     if conn is None:
         raise errors.CpError("NOT_FOUND", f"unknown task {task_id} (no DB yet)")
@@ -194,7 +200,9 @@ def task_show(conn: sqlite3.Connection | None, task_id: str) -> dict[str, Any]:
         digest = conn.execute("SELECT body, updated_at FROM digests WHERE task_id = ?", (task_id,)).fetchone()
         return {
             "task": task,
-            "digest": None if digest is None else {"body": digest["body"], "updated_at": digest["updated_at"]},
+            "digest": None
+            if digest is None
+            else {"body": _digest_body(digest["body"]), "updated_at": digest["updated_at"]},
             "criteria": _rows(conn, "SELECT * FROM criteria WHERE task_id = ? ORDER BY idx", (task_id,)),
             "history": _rows(conn, "SELECT * FROM task_history WHERE task_id = ? ORDER BY id", (task_id,)),
             "depends_on": [

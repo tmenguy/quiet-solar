@@ -220,3 +220,6 @@ custom_components/volkswagencarnet
 /harness_state.db-shm
 /harness_state.db.*.lock
 /harness_state.db.migrate-error.json
+
+# QS-424: a node's worktree-local files (plan, digest, binding, round): never committed
+/.qs-node/
