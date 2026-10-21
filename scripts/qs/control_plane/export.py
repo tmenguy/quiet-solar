@@ -31,6 +31,9 @@ _DEFINITION_RE = re.compile(rf"({_PREFIX}[ \t]*)\[(?=(?:[^\]\\]|\\.?)*+(?:\]:|$)
 # `<` opening a tag, a comment, `<?` or `<!` (not a URI autolink): raw HTML would hide, nest or restyle every later
 # section, and an HTML block ignores backslash escapes, so it becomes `&lt;` (fix #05)
 _HTML_RE = re.compile(r"<(?![A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*>)(?=[A-Za-z/!?])")
+# a GitHub alert marker, alone on the quote's first line, would restyle the block: GitHub ignores a `\[`, not a
+# trailing `&#32;` (fix #06, checked on its renderer)
+_ALERT_RE = re.compile(r"[ \t]{0,3}\[!(?:note|tip|important|warning|caution)\][ \t]*", re.IGNORECASE)
 _LINE_END_RE = re.compile(r"\r\n|\r|\n")  # CommonMark's line ends (not `str.splitlines`'s)
 
 
@@ -46,15 +49,16 @@ def _value_lines(value: str) -> list[str]:
     * leading blank lines are dropped;
     * a heading, nested in a quote or a list item or not, at any indentation, is pushed three levels down (capped
       at 6, its prefix kept);
-    * a setext underline gets a blank line before it, unless the line before is empty (a ``---`` becomes a thematic break, a
-      ``===`` plain text);
+    * a setext underline gets a blank line before it, unless the line before is empty (a ``---`` becomes a
+      thematic break, a ``===`` plain text);
     * a footnote or link-reference definition (``[^n]:`` / ``[x]:`` at the line's start, or a ``[`` whose label
       runs past the line) is escaped (``\\[``): it would otherwise act on the whole summary;
+    * a GitHub alert marker (``[!NOTE]``) alone on the first line gets a trailing ``&#32;``: it would restyle the block;
     * a ``<`` that opens a tag, a comment, ``<?`` or ``<!`` (not a URI autolink) becomes ``&lt;``, and a NUL
       U+FFFD (it would make the summary a binary file).
 
     Inside a code block these rewrites are cosmetic (a ``# comment`` reads ``#### comment``, ``List<int>`` reads
-    ``List&lt;int>``): the safe side.
+    ``List&lt;int>``, an escaped ``\\<b>`` ``&lt;b>``): the safe side.
     Whitespace is CommonMark's: spaces and tabs only.
     """
     lines = _LINE_END_RE.split(value.rstrip(" \t\r\n"))
@@ -71,6 +75,8 @@ def _value_lines(value: str) -> list[str]:
             out.append("")
         definition = _DEFINITION_RE.match(line)
         out.append(line if definition is None else f"{definition[1]}\\{line[definition.end(1) :]}")
+    if out and _ALERT_RE.fullmatch(out[0]):
+        out[0] += "&#32;"
     return [f"> {line}" if line else ">" for line in out]
 
 

@@ -153,6 +153,8 @@ class TestExport:
             ("<div>\nx <!-- y", ["&lt;div>", "x &lt;!-- y"]),
             ("<?x\n<![CDATA[\n<table>\n</b> <b>", ["&lt;?x", "&lt;![CDATA[", "&lt;table>", "&lt;/b> &lt;b>"]),
             ("see <https://x.y/z> and a < b <3", ["see <https://x.y/z> and a < b <3"]),  # autolinks, plain `<`
+            ("[!Caution] \nboom\n[!NOTE]", ["[!Caution] &#32;", "boom", "[!NOTE]"]),  # no alert box (fix #06)
+            ("[!NOTE] text", ["[!NOTE] text"]),  # text after the marker: no alert either
             ("a\x00b", ["a\ufffdb"]),  # a NUL would make the summary a binary file (fix #05)
             # fix #05: an indented `>` line is paragraph text, not a blank quote line
             ("foo\n    >\n===", ["foo", "    >", "", "==="]),

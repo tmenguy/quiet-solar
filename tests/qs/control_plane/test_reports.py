@@ -210,6 +210,8 @@ class TestReportContract:
         code, out = run_cli(*base, "--round", round_, "--fields-file", path, "--token", world["node"])
         assert code == 2 and out["error"] == "USAGE" and "--round" in out["detail"], out
         assert _nothing_posted(world)
+        code, out = run_cli(*base, "--round", str(2**63 - 1), "--fields-file", path, "--token", world["node"])
+        assert code == 0, out  # the bound itself is accepted
 
     def test_strings_are_stored_as_given(self, world) -> None:
         fields = {"discovered": [{"title": " padded ", "why": "w "}]}
