@@ -1044,9 +1044,11 @@ def _launch(ctx: StepCtx, start: Callable[[sqlite3.Row], runner.RunResult], *, t
         row = conn.execute("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
     res = start(row)
     if not res.ok:  # redact before the cut: the node token rides in the prompt, and a cut one would not match
+        # the row's own nonce too, whitespace allowed between its characters: an echo wrapped inside the token
+        nonce_re = re.compile(r"\s*".join(map(re.escape, row["nonce"])))
 
-        def scrub(text: str) -> str:  # the row's own nonce too: an echo wrapped inside the token is no whole token
-            return redact(text).replace(row["nonce"], "<redacted>")
+        def scrub(text: str) -> str:
+            return nonce_re.sub("<redacted>", redact(text))
 
         clean = dataclasses.replace(res, stdout=scrub(res.stdout), stderr=scrub(res.stderr))
         raise StepFailed(
@@ -1072,10 +1074,17 @@ def _identify(ctx: StepCtx, *, resume: bool) -> dict[str, Any]:
         ctx.clock.sleep(IDENTIFY_POLL_S)
 
 
-def _no_leading_dash(text: str, what: str) -> None:
-    """``claude`` reads a last positional that starts with ``-`` as an option (#424 fix #01 F3): refused, unlaunched."""
+def _launchable(text: str, what: str, *, empty_ok: bool = True) -> None:
+    """Refuse, before ``launch_at``, a prompt or message ``claude --bg`` cannot take (#424 fixes #01 F3, #02 G4).
+
+    It is the argv's last positional: a leading ``-`` is read as an option, and a NUL cannot be in an argv at all.
+    """
     if text.startswith("-"):
         raise StepFailed(f"the {what} starts with `-`: claude would read it as an option")
+    if "\x00" in text:
+        raise StepFailed(f"the {what} holds a NUL character, which no argv can carry")
+    if not empty_ok and not text.strip():
+        raise StepFailed(f"the {what} is empty")
 
 
 def _node_token(conn: sqlite3.Connection, node_id: str) -> str:
@@ -1210,7 +1219,7 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
 
     def launch(ctx: StepCtx) -> dict[str, Any]:
         prompt = arg_file_text(ctx, "prompt_file")  # before `_launch` writes launch_at: a bad file launches nothing
-        _no_leading_dash(prompt, "prompt")
+        _launchable(prompt, "prompt")  # never empty: the launched text adds the Control Plane line
         # A caller model wins and sends no effort. Otherwise the policy is resolved again here, before
         # `_launch` writes launch_at: the probe rewrites reserve's output, so nothing is carried over.
         launch_model: str | None = str(model) if model else None
@@ -1309,8 +1318,9 @@ def _resume_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
 
     def launch(ctx: StepCtx) -> dict[str, Any]:
         message = arg_file_text(ctx, "message_file")  # before `_launch` writes launch_at
-        _no_leading_dash(message, "message")
-        # no `--add-dir`: a bare resume restores every option of the launch (#424 L7)
+        _launchable(message, "message", empty_ok=False)
+        # no `--add-dir`: a bare resume restores every option of the launch (#424 L7); the hint names the worktrees'
+        # root, which the maintainer trusts once and its worktrees inherit (#421, D7)
         return _launch(ctx, lambda row: ctx.claude.resume_bg(row["session_id"], message, cwd=wt), trust_dir=wt.parent)
 
     return (

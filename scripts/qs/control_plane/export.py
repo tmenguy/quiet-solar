@@ -22,44 +22,59 @@ def _cell(text: str) -> str:
     return " ".join(str(text).split()).replace("|", "\\|")
 
 
-_ATX_RE = re.compile(r" {0,3}(#{1,6})(?=[ \t]|$)(.*)")  # a CommonMark ATX heading
-_FENCE_RE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")  # a code fence's opener or closer
-_SETEXT_RE = re.compile(r" {0,3}(?:=+|-+)[ \t]*")  # a setext heading's underline, when it follows a text line
+_PREFIX = r"(?:[ \t]*>[ \t]?|[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+)*"  # blockquote and list-item markers
+_ATX_RE = re.compile(rf"({_PREFIX}[ \t]*)(#{{1,6}})(?=[ \t]|$)(.*)")  # a heading, nested or not
+_FENCE_RE = re.compile(rf"{_PREFIX}[ \t]*(`{{3,}}|~{{3,}})(.*)")  # a code fence's opener or closer
+_SETEXT_RE = re.compile(r"(?:[ \t]*>[ \t]?)*[ \t]*(?:=+|-+)[ \t]*")  # a setext underline, under a text line
+_LINE_END_RE = re.compile(r"\r\n|\r|\n")  # CommonMark's line ends (not `str.splitlines`'s)
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" \t"))
 
 
 def _value_lines(value: str) -> list[str]:
-    """A digest value's lines, rendered so it cannot break the summary's own outline (#424 D5, fix #01 F1).
+    """A digest value as a blockquote that cannot break the summary's own outline (#424 D5, fixes #01 and #02).
 
-    Leading blank lines are dropped. A heading is pushed three levels down (capped at 6); a line inside a code fence
-    is kept as it is, and a fence still open at the value's end is closed; a setext underline gets a blank line before
-    it (a `---` becomes a thematic break, a `===` plain text). Everything else is kept verbatim.
+    Every line is quoted (``> ``): the blank line after the value ends the quote, which closes any fence, list or
+    HTML block left open inside it. Inside, leading blank lines are dropped; a heading, nested in a quote or a list
+    item or not, is pushed three levels down (capped at 6, its prefix kept); a setext underline gets a blank line
+    before it (a ``---`` becomes a thematic break, a ``===`` plain text). Lines inside a code fence are kept as they
+    are (best effort: a fence also ends at a line indented less than its opener, as when a list item ends).
+    Whitespace is CommonMark's: spaces and tabs only.
     """
-    lines = value.rstrip().splitlines()
-    while lines and not lines[0].strip():
+    lines = _LINE_END_RE.split(value.rstrip())
+    while lines and not lines[0].strip(" \t"):
         lines.pop(0)
     out: list[str] = []
-    fence: str | None = None  # the open fence's marker
+    fence: tuple[str, int] | None = None  # the open fence's marker and its opener's indentation
     for line in lines:
         match = _FENCE_RE.fullmatch(line)
         if fence is not None:
-            out.append(line)
-            if match and match[1][0] == fence[0] and len(match[1]) >= len(fence) and not match[2].strip():
-                fence = None
-            continue
+            if line.strip(" \t") and _indent(line) < fence[1]:
+                fence = None  # a less-indented line ends the list item, and the fence with it: read it again
+            else:
+                out.append(line)
+                if (
+                    match
+                    and match[1][0] == fence[0][0]
+                    and len(match[1]) >= len(fence[0])
+                    and not match[2].strip(" \t")
+                ):
+                    fence = None
+                continue
         if match and not (match[1][0] == "`" and "`" in match[2]):  # a backtick fence's info has no backtick
-            fence = match[1]
+            fence = (match[1], _indent(line))
             out.append(line)
             continue
         heading = _ATX_RE.fullmatch(line)
         if heading:
-            out.append("#" * min(6, len(heading[1]) + 3) + heading[2])
+            out.append(heading[1] + "#" * min(6, len(heading[2]) + 3) + heading[3])
             continue
-        if _SETEXT_RE.fullmatch(line) and out and out[-1].strip():
+        if _SETEXT_RE.fullmatch(line) and out and out[-1].strip(" \t>"):
             out.append("")
         out.append(line)
-    if fence is not None:
-        out.append(fence)
-    return out
+    return [f"> {line}" if line else ">" for line in out]
 
 
 def _digest_lines(body: str) -> list[str]:

@@ -30,6 +30,7 @@ FIELDS = ("blocking", "questions", "discovered")  # every key optional; `{}` is 
 DISCOVERED_KEYS = ("title", "why", "shrinks")  # title, why required; shrinks optional
 FIELDS_MAX_BYTES = DIGEST_MAX_BYTES  # the canonical JSON's UTF-8 size
 QUESTION_ID_RE = re.compile(r"Q-[1-9][0-9]*")  # `question open`'s ids, fullmatch
+SQL_INT_MAX = 2**63 - 1  # a finding id is a SQLite INTEGER
 
 DIGEST_KEYS = ("goal", "why", "plan", "done", "problems", "decisions", "questions", "discovered")
 
@@ -81,7 +82,7 @@ def validate_fields(fields: Any) -> None:
         raise _usage(f"fields: unknown key {unknown[0]!r}; the keys are {', '.join(FIELDS)}")
     if "blocking" in fields:
         for i, item in enumerate(_list(fields, "blocking")):
-            if not isinstance(item, int) or isinstance(item, bool) or item <= 0:
+            if not isinstance(item, int) or isinstance(item, bool) or not 0 < item <= SQL_INT_MAX:
                 raise _usage(f"fields.blocking[{i}] must be a positive integer (a finding id), not {item!r}")
     if "questions" in fields:
         for i, item in enumerate(_list(fields, "questions")):
@@ -141,6 +142,7 @@ def post_report(
     if status not in STATUSES:
         raise errors.CpError("USAGE", f"--status must be one of {', '.join(STATUSES)}")
     validate_fields(fields)
+    _canonical_bytes(summary, "--summary")  # a lone surrogate (argv's `surrogateescape`) is USAGE, not INTERNAL
     with db.write(conn):
         who = tokens.require(conn, token, kinds={"run", "node"}, task_id=task_id)
         tasks.get(conn, task_id)
@@ -179,8 +181,8 @@ def put_digest(
     max_bytes: int = DIGEST_MAX_BYTES,
 ) -> dict[str, Any]:
     validate_digest(digest)
-    size = len(_canonical_bytes(digest, "the digest"))
-    body = messages.canonical(digest)
+    raw = _canonical_bytes(digest, "the digest")
+    size, body = len(raw), raw.decode()
     if size > max_bytes:
         raise errors.CpError("CONFLICT", f"the digest is {size} bytes; the cap is {max_bytes}")
     with db.write(conn):

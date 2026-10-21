@@ -6,25 +6,25 @@ Task T1 · issue #11 · state `proposed`
 
 ### Goal
 
-Ship the Control Plane core.
+> Ship the Control Plane core.
 
 ### Why
 
-Nodes need one ledger.
+> Nodes need one ledger.
 
 ### Plan
 
-One SQLite DB.
-
-#### Modules
-
-- db, tasks
+> One SQLite DB.
+>
+> #### Modules
+>
+> - db, tasks
 
 ### Done
 
-Built the core.
-
-All green.
+> Built the core.
+>
+> All green.
 
 ### Problems
 
@@ -32,7 +32,7 @@ _None._
 
 ### Decisions
 
-Use WAL.
+> Use WAL.
 
 ### Questions
 

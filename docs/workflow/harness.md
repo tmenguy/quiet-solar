@@ -418,7 +418,7 @@ hand-sets a model.
   through `--settings` **does** take effect on a `--bg` session:
   checked live on 2026-10-18 (#424 L6, Claude Code 2.1.302 — the
   session's banner showed the effort sent). The post-merge node run of
-  #424 (AC9) confirms it on a real node.
+  #424 (AC9) will confirm it on a real node.
 - **One complete row per harness** in `HARNESS_MODELS`, in that
   harness's own vocabulary, **both in exact versions**:
 

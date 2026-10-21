@@ -120,6 +120,7 @@ class TestReportContract:
             ({"blocking": [-1]}, "blocking"),
             ({"blocking": [1.0]}, "blocking"),
             ({"blocking": ["1"]}, "blocking"),
+            ({"blocking": [2**63]}, "blocking"),  # beyond a SQLite INTEGER (fix #02 G7)
             ({"questions": "Q-1"}, "questions"),
             ({"questions": [1]}, "questions"),
             ({"questions": ["Q-1 "]}, "questions"),
@@ -170,7 +171,7 @@ class TestReportContract:
         [
             {},
             {"blocking": []},
-            {"blocking": [1, 7, 7]},
+            {"blocking": [1, 7, 7, 2**63 - 1]},
             {"questions": ["Q-1", "Q-12"]},
             {
                 "discovered": [
@@ -190,6 +191,14 @@ class TestReportContract:
     def test_a_lone_surrogate_is_usage(self, world) -> None:
         code, out = _post(world, {"discovered": [{"title": "\ud800", "why": "w"}]})  # #424 fix #01 F2
         assert code == 2 and out["error"] == "USAGE" and "UTF-8" in out["detail"], out
+        assert _nothing_posted(world)
+
+    def test_a_lone_surrogate_in_the_summary_is_usage(self, world, monkeypatch) -> None:
+        # #424 fix #02 G3: a non-UTF-8 argv byte arrives as a lone surrogate (`surrogateescape`)
+        path = _file(world, "fields.json", "{}")
+        base = ["report", "post", "--task", "T1", "--phase", "build", "--round", "1", "--status", "blocked"]
+        code, out = run_cli(*base, "--summary", "\udcff", "--fields-file", path, "--token", world["node"])
+        assert code == 2 and out["error"] == "USAGE" and "--summary" in out["detail"], out
         assert _nothing_posted(world)
 
     def test_strings_are_stored_as_given(self, world) -> None:

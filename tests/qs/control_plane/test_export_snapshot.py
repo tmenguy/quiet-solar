@@ -91,14 +91,16 @@ class TestExport:
 
     @pytest.mark.parametrize("heading", ["## Decisions", "   ## Decisions", "# Decisions"])
     def test_a_heading_inside_a_value_stays_below_level_3(self, world, linked, heading: str) -> None:
-        value = f"{heading}\n- nested\n    ## an indented code line stays as is"
+        value = f"{heading}\n- nested\n    ## an indented line is demoted too"  # code or a nested heading
         body = _file(world["tmp"], "d2.json", json.dumps({**WORLD_DIGEST, "decisions": value}))
         assert run_cli("digest", "put", "--task", "T1", "--file", body, "--token", world["token"])[0] == 0
         assert run_cli("export-summary", "--task", "T1", "--out-worktree", str(linked))[0] == 0
         lines = (linked / "docs" / "stories" / "QS-11.summary.md").read_text().splitlines()
         assert lines.count("## Decisions") == 1 and lines.count("### Decisions") == 1
-        assert f"###{heading.lstrip()}" in lines and "    ## an indented code line stays as is" in lines
-        top = [line.lstrip(" ") for line in lines if re.match(r" {0,3}#{1,2} ", line)]  # Markdown h1/h2 lines
+        indent = heading[: len(heading) - len(heading.lstrip())]
+        assert f"> {indent}###{heading.lstrip()}" in lines and ">     ##### an indented line is demoted too" in lines
+        # Markdown h1/h2 lines, quoted or not
+        top = [re.sub(r"^(?:>[ \t]?)*[ \t]*", "", line) for line in lines if re.match(r"(?:>[ \t]?)*[ \t]*#{1,2} ", line)]
         assert top == [
             "# QS-11 — The | Control Plane",
             "## Digest",
@@ -119,8 +121,18 @@ class TestExport:
             ("Decisions\n---------\nuse X", ["Decisions", "", "---------", "use X"]),  # setext h2 → a break
             ("Decisions\n===", ["Decisions", "", "==="]),
             ("- a\n\n---", ["- a", "", "---"]),  # a break after a blank line stays as it is
-            ("```\nunclosed", ["```", "unclosed", "```"]),  # closed at the value's end
+            ("text\n\xa0\n---", ["text", "\xa0", "", "---"]),  # an NBSP line is no blank line (fix #02 G2)
+            ("```\nunclosed", ["```", "unclosed"]),  # left open: the quote's end closes it
+            ("```\ncode\n```\xa0\n# x", ["```", "code", "```\xa0", "# x"]),  # an NBSP trailer closes nothing
             ("\r\n  \n# hi\r\nok", ["#### hi", "ok"]),  # leading blank lines dropped, CRLF too
+            ("a\rb", ["a", "b"]),  # CommonMark's line ends
+            # fix #02 G1: fences in list items, as GitHub reads them
+            ("1. Run:\n   ```bash\n   make\n```\nthen done", ["1. Run:", "   ```bash", "   make", "```", "then done"]),
+            ("- item\n  ```\n  code\n# Heading", ["- item", "  ```", "  code", "#### Heading"]),
+            ("- item\n  ```\n  code", ["- item", "  ```", "  code"]),
+            ("<details>\nopen", ["<details>", "open"]),
+            ("> # x\n- ## y\n1. # z", ["> #### x", "- ##### y", "1. #### z"]),  # nested headings, prefix kept
+            ("> Title\n> ---", ["> Title", "", "> ---"]),
         ],
     )
     def test_a_value_cannot_break_the_summary_structure(self, world, linked, value: str, rendered: list[str]) -> None:
@@ -131,7 +143,7 @@ class TestExport:
         lines = (linked / "docs" / "stories" / "QS-11.summary.md").read_text().splitlines()
         start, end = lines.index("### Decisions"), lines.index("### Questions")
         assert lines[start + 1] == "" and lines[end - 1] == ""
-        assert lines[start + 2 : end - 1] == rendered
+        assert lines[start + 2 : end - 1] == [f"> {line}" if line else ">" for line in rendered]  # one blockquote
 
     @pytest.mark.parametrize("body", ["Built by hand.\n\nNo JSON.\n", '{"goal": "x"}'])
     def test_a_stored_body_off_the_contract_is_rendered_raw(self, world, linked, body: str) -> None:

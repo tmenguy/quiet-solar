@@ -2095,10 +2095,12 @@ class TestNodeLaunchFailure:
             assert not any(nonce[i : i + 8] in blob for i in range(len(nonce) - 7))
         assert len(json.loads(row["result"])["detail"]) <= liveness.BG_ERROR_MAX
 
-    def test_a_wrapped_node_token_is_redacted_by_its_nonce(self, w: W) -> None:
+    @pytest.mark.parametrize("wrap", [r"\1\n\2", r"\1\2\n  "])
+    def test_a_wrapped_node_token_is_redacted_by_its_nonce(self, w: W, wrap: str) -> None:
         # #424 fix #01 F4: an echo that wraps the token after its prefix leaves no whole token for `redact`
         w.sim.launch_exit = 1
-        w.sim.launch_output = lambda argv: re.sub(r"(node:N\d+\.\d+\.)", r"\1\n", argv[-1])
+        # wrapped after the prefix, or inside the nonce (fix #02 G6)
+        w.sim.launch_output = lambda argv: re.sub(r"(node:N\d+\.\d+\.)([0-9a-f]{10})", wrap, argv[-1])
         code, out = spawn(w, "k1")
         assert code == 1 and out["error"] == "TOOL_FAILED"
         nonce = node_row(w, "N1")["nonce"]
@@ -2108,13 +2110,23 @@ class TestNodeLaunchFailure:
             assert nonce not in blob and "<redacted>" in blob
 
     @pytest.mark.parametrize("tool_name", ["spawn", "resume"])
-    @pytest.mark.parametrize("text", ["---\nfront: matter\n", "- build it", "-p go"])
+    @pytest.mark.parametrize("text", ["---\nfront: matter\n", "- build it", "-p go", "a\x00b"])
     def test_a_leading_dash_is_refused_before_any_launch(self, w: W, tool_name: str, text: str) -> None:
         # #424 fix #01 F3: the prompt is the argv's last positional; `claude` would read a leading `-` as an option
         for name in ("prompt", "msg"):
             Path(w.files[name]).write_text(text)
         code, out = _launch_node(w, tool_name, "k1")
-        assert code == 1 and out["error"] == "TOOL_FAILED" and "starts with `-`" in out["detail"], out
+        why = "NUL" if "\x00" in text else "starts with `-`"
+        assert code == 1 and out["error"] == "TOOL_FAILED" and why in out["detail"], out
         assert w.sim.effects("claude", "--bg") == 0
         row = call_row(w, tool_name, "k1")
         assert row is not None and row["state"] == "failed"
+        node = node_row(w, "N1")  # as after a model-policy refusal: reserved, never launched (fix #02, blind-hunter)
+        assert (node["state"], node["launch_at"]) == ("spawning", None)
+
+    @pytest.mark.parametrize("text", ["", " \n\t"])
+    def test_an_empty_resume_message_is_refused(self, w: W, text: str) -> None:
+        Path(w.files["msg"]).write_text(text)
+        code, out = _launch_node(w, "resume", "k1")
+        assert code == 1 and out["error"] == "TOOL_FAILED" and "is empty" in out["detail"], out
+        assert w.sim.effects("claude", "--bg") == 0
