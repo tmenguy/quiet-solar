@@ -26,12 +26,18 @@ def _cell(text: str) -> str:
 _PREFIX = r"(?:[ \t]*>[ \t]?|[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+)*+"  # blockquote and list-item markers
 _ATX_RE = re.compile(rf"({_PREFIX}[ \t]*)(#{{1,6}})(?=[ \t]|$)(.*)")  # a heading, nested or not
 _SETEXT_RE = re.compile(r"(?:[ \t]*>[ \t]?)*+[ \t]*(?:=+|-+)[ \t]*")  # a setext underline, under a text line
-_DEFINITION_RE = re.compile(rf"({_PREFIX}[ \t]*)\[(?=[^\]]*\]:)")  # a footnote / link-reference definition
+# a footnote / link-reference definition, or the start of one whose label goes on past the line (fix #05)
+_DEFINITION_RE = re.compile(rf"({_PREFIX}[ \t]*)\[(?=(?:[^\]\\]|\\.?)*+(?:\]:|$))")
+# `<` opening a tag, a comment, `<?` or `<!` (not a URI autolink): raw HTML would hide, nest or restyle every later
+# section, and an HTML block ignores backslash escapes, so it becomes `&lt;` (fix #05)
+_HTML_RE = re.compile(r"<(?![A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*>)(?=[A-Za-z/!?])")
 _LINE_END_RE = re.compile(r"\r\n|\r|\n")  # CommonMark's line ends (not `str.splitlines`'s)
 
 
 def _value_lines(value: str) -> list[str]:
-    """A digest value as a blockquote that cannot break the summary's own outline (#424 D5, fixes #01 to #04).
+    """A digest value as a blockquote whose Markdown cannot break the summary's own outline (#424 D5, fixes #01–#05).
+
+    Raw HTML cannot run either: ``<`` before a tag reads ``&lt;``.
 
     Every line is quoted (``> ``): the blank line after the value ends the quote, which closes any fence, list or
     HTML block left open inside it. Inside, line by line, with no Markdown state at all (a code-fence tracker
@@ -40,24 +46,28 @@ def _value_lines(value: str) -> list[str]:
     * leading blank lines are dropped;
     * a heading, nested in a quote or a list item or not, at any indentation, is pushed three levels down (capped
       at 6, its prefix kept);
-    * a setext underline under a text line gets a blank line before it (a ``---`` becomes a thematic break, a
+    * a setext underline gets a blank line before it, unless the line before is empty (a ``---`` becomes a thematic break, a
       ``===`` plain text);
-    * a footnote or link-reference definition (``[^n]:`` / ``[x]:`` at the line's start) is escaped (``\\[``):
-      it would otherwise act on the whole summary.
+    * a footnote or link-reference definition (``[^n]:`` / ``[x]:`` at the line's start, or a ``[`` whose label
+      runs past the line) is escaped (``\\[``): it would otherwise act on the whole summary;
+    * a ``<`` that opens a tag, a comment, ``<?`` or ``<!`` (not a URI autolink) becomes ``&lt;``, and a NUL
+      U+FFFD (it would make the summary a binary file).
 
-    Inside a code block these rewrites are cosmetic (a ``# comment`` reads ``#### comment``): the safe side.
+    Inside a code block these rewrites are cosmetic (a ``# comment`` reads ``#### comment``, ``List<int>`` reads
+    ``List&lt;int>``): the safe side.
     Whitespace is CommonMark's: spaces and tabs only.
     """
     lines = _LINE_END_RE.split(value.rstrip(" \t\r\n"))
     while lines and not lines[0].strip(" \t"):
         lines.pop(0)
     out: list[str] = []
-    for line in lines:
+    for raw in lines:
+        line = _HTML_RE.sub("&lt;", raw.replace("\x00", "\ufffd"))
         heading = _ATX_RE.fullmatch(line)
         if heading:
             out.append(heading[1] + "#" * min(6, len(heading[2]) + 3) + heading[3])
             continue
-        if _SETEXT_RE.fullmatch(line) and out and out[-1].strip(" \t>"):
+        if _SETEXT_RE.fullmatch(line) and out and out[-1]:  # unless already blank: `    >` is text (fix #05)
             out.append("")
         definition = _DEFINITION_RE.match(line)
         out.append(line if definition is None else f"{definition[1]}\\{line[definition.end(1) :]}")

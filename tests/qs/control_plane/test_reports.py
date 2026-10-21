@@ -126,6 +126,7 @@ class TestReportContract:
             ({"questions": ["Q-1 "]}, "questions"),
             ({"questions": ["Q-0"]}, "questions"),
             ({"questions": ["q-1"]}, "questions"),
+            ({"questions": ["Q-" + "9" * 19]}, "questions"),  # beyond a SQLite INTEGER (fix #05)
             ({"questions": ["Q-01"]}, "questions"),
             ({"discovered": {}}, "discovered"),
             ({"discovered": ["t"]}, "discovered"),
@@ -172,7 +173,7 @@ class TestReportContract:
             {},
             {"blocking": []},
             {"blocking": [1, 7, 7, 2**63 - 1]},
-            {"questions": ["Q-1", "Q-12"]},
+            {"questions": ["Q-1", "Q-12", "Q-9223372036854775807"]},
             {
                 "discovered": [
                     _DISCOVERED,
@@ -199,6 +200,15 @@ class TestReportContract:
         base = ["report", "post", "--task", "T1", "--phase", "build", "--round", "1", "--status", "blocked"]
         code, out = run_cli(*base, "--summary", "\udcff", "--fields-file", path, "--token", world["node"])
         assert code == 2 and out["error"] == "USAGE" and "--summary" in out["detail"], out
+        assert _nothing_posted(world)
+
+    @pytest.mark.parametrize("round_", ["-1", str(2**63)])
+    def test_a_round_off_the_int_range_is_usage(self, world, round_: str) -> None:
+        # #424 fix #05: `round` is an int >= 0 that fits a SQLite INTEGER, refused before the transaction
+        path = _file(world, "fields.json", "{}")
+        base = ["report", "post", "--task", "T1", "--phase", "build", "--status", "blocked", "--summary", "s"]
+        code, out = run_cli(*base, "--round", round_, "--fields-file", path, "--token", world["node"])
+        assert code == 2 and out["error"] == "USAGE" and "--round" in out["detail"], out
         assert _nothing_posted(world)
 
     def test_strings_are_stored_as_given(self, world) -> None:

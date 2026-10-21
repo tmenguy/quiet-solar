@@ -100,7 +100,9 @@ class TestExport:
         indent = heading[: len(heading) - len(heading.lstrip())]
         assert f"> {indent}###{heading.lstrip()}" in lines and ">     ##### an indented line is demoted too" in lines
         # Markdown h1/h2 lines, quoted or not
-        top = [re.sub(r"^(?:>[ \t]?)*[ \t]*", "", line) for line in lines if re.match(r"(?:>[ \t]?)*[ \t]*#{1,2} ", line)]
+        top = [
+            re.sub(r"^(?:>[ \t]?)*[ \t]*", "", line) for line in lines if re.match(r"(?:>[ \t]?)*[ \t]*#{1,2} ", line)
+        ]
         assert top == [
             "# QS-11 — The | Control Plane",
             "## Digest",
@@ -121,7 +123,7 @@ class TestExport:
             ("text\n\xa0\n---", ["text", "\xa0", "", "---"]),  # an NBSP line is no blank line
             ("\r\n  \n# hi\r\nok", ["#### hi", "ok"]),  # leading blank lines dropped, CRLF too
             ("a\rb", ["a", "b"]),  # CommonMark's line ends
-            ("<details>\nopen", ["<details>", "open"]),  # left open: the quote's end closes it
+            ("<details>\nopen", ["&lt;details>", "open"]),  # left open: the quote's end closes it
             ("```\nunclosed", ["```", "unclosed"]),
             ("> # x\n- ## y\n1. # z\n    # w", ["> #### x", "- ##### y", "1. #### z", "    #### w"]),  # any nesting
             ("> Title\n> ---", ["> Title", "", "> ---"]),
@@ -135,13 +137,27 @@ class TestExport:
             ("```\ncode\n\t```\n# Title", ["```", "code", "\t```", "#### Title"]),
             ("  ```\ncode\n```\n# Title", ["  ```", "code", "```", "#### Title"]),
             ("<\n```\n\n```\n# Title", ["<", "```", "", "```", "#### Title"]),
-            ("<div>\n```\n</div>\n\n# Evil", ["<div>", "```", "</div>", "", "#### Evil"]),
+            ("<div>\n```\n</div>\n\n# Evil", ["&lt;div>", "```", "&lt;/div>", "", "#### Evil"]),
             ("```\ntext\n---\n```", ["```", "text", "", "---", "```"]),
             # a footnote or link-reference definition would act on the whole summary: escaped
             ("see[^n]\n\n[^n]: a note\n> - [^m]: b", ["see[^n]", "", "\\[^n]: a note", "> - \\[^m]: b"]),
             ("```\n[^n]: in code\n```", ["```", "\\[^n]: in code", "```"]),
-            ("[foo]: https://x\n  [Bar baz]: <y>", ["\\[foo]: https://x", "  \\[Bar baz]: <y>"]),
+            ("[foo]: https://x\n  [Bar baz]: <y>", ["\\[foo]: https://x", "  \\[Bar baz]: &lt;y>"]),
             ("see [foo] and [a]: b", ["see [foo] and [a]: b"]),  # not at the line's start: no definition
+            ("[foo\nbar]: https://x", ["\\[foo", "bar]: https://x"]),  # a label over two lines (fix #05)
+            ("[a\\]b]: https://x", ["\\[a\\]b]: https://x"]),  # an escaped bracket in the label
+            ("[x] done\n- [ ] todo\n[link](u)", ["[x] done", "- [ ] todo", "[link](u)"]),  # no definitions
+            ("[foo\\\nbar]: https://x", ["\\[foo\\", "bar]: https://x"]),  # a label line ending in `\`
+            # fix #05: raw HTML would hide, nest or restyle every later section: `<` before a tag is `&lt;`
+            ("<!-- todo", ["&lt;!-- todo"]),
+            ("<div>\nx <!-- y", ["&lt;div>", "x &lt;!-- y"]),
+            ("<?x\n<![CDATA[\n<table>\n</b> <b>", ["&lt;?x", "&lt;![CDATA[", "&lt;table>", "&lt;/b> &lt;b>"]),
+            ("see <https://x.y/z> and a < b <3", ["see <https://x.y/z> and a < b <3"]),  # autolinks, plain `<`
+            ("a\x00b", ["a\ufffdb"]),  # a NUL would make the summary a binary file (fix #05)
+            # fix #05: an indented `>` line is paragraph text, not a blank quote line
+            ("foo\n    >\n===", ["foo", "    >", "", "==="]),
+            ("> foo\n>     >\n> ===", ["> foo", ">     >", "", "> ==="]),
+            ("- foo\n      >\n  ===", ["- foo", "      >", "", "  ==="]),
         ],
     )
     def test_a_value_cannot_break_the_summary_structure(self, world, linked, value: str, rendered: list[str]) -> None:
@@ -169,11 +185,13 @@ class TestExport:
             "```\ncode\n\t```\n# Evil",
         ],
     )
-    def test_no_value_line_is_an_h1_or_h2(self, value: str) -> None:
+    def test_no_value_line_is_an_atx_h1_or_h2(self, value: str) -> None:
         # #424 fix #04: round 4's inputs, each an h1 on GitHub while a fence tracker existed
         lines = export._value_lines(value)
         assert all(line.startswith(">") for line in lines)
-        assert not [line for line in lines if re.match(r">[ \t]?(?:[ \t]*(?:>|[-*+]|\d+[.)])[ \t]*)*#{1,2}(?:[ \t]|$)", line)]
+        assert not [
+            line for line in lines if re.match(r">[ \t]?(?:[ \t]*(?:>|[-*+]|\d+[.)])[ \t]*)*#{1,2}(?:[ \t]|$)", line)
+        ]
         assert any(line.endswith("#### Evil") for line in lines)
 
     @pytest.mark.parametrize(

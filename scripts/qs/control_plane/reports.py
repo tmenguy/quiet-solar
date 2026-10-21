@@ -29,7 +29,7 @@ STATUSES = ("converged", "continuing", "blocked")
 FIELDS = ("blocking", "questions", "discovered")  # every key optional; `{}` is valid
 DISCOVERED_KEYS = ("title", "why", "shrinks")  # title, why required; shrinks optional
 FIELDS_MAX_BYTES = DIGEST_MAX_BYTES  # the canonical JSON's UTF-8 size
-QUESTION_ID_RE = re.compile(r"Q-[1-9][0-9]*")  # `question open`'s ids, fullmatch
+QUESTION_ID_RE = re.compile(r"Q-[1-9][0-9]{0,18}")  # `question open`'s ids, fullmatch (and <= SQL_INT_MAX)
 SQL_INT_MAX = 2**63 - 1  # a finding id is a SQLite INTEGER
 
 DIGEST_KEYS = ("goal", "why", "plan", "done", "problems", "decisions", "questions", "discovered")
@@ -86,7 +86,7 @@ def validate_fields(fields: Any) -> None:
                 raise _usage(f"fields.blocking[{i}] must be a positive integer (a finding id), not {item!r}")
     if "questions" in fields:
         for i, item in enumerate(_list(fields, "questions")):
-            if not isinstance(item, str) or QUESTION_ID_RE.fullmatch(item) is None:
+            if not isinstance(item, str) or QUESTION_ID_RE.fullmatch(item) is None or int(item[2:]) > SQL_INT_MAX:
                 raise _usage(f"fields.questions[{i}] must be a question id `Q-<n>`, not {item!r}")
     if "discovered" in fields:
         for i, item in enumerate(_list(fields, "discovered")):
@@ -141,6 +141,8 @@ def post_report(
         raise errors.CpError("USAGE", f"--phase must be one of {', '.join(PHASES)}")
     if status not in STATUSES:
         raise errors.CpError("USAGE", f"--status must be one of {', '.join(STATUSES)}")
+    if not isinstance(round_, int) or isinstance(round_, bool) or not 0 <= round_ <= SQL_INT_MAX:
+        raise errors.CpError("USAGE", f"--round must be an integer from 0 to {SQL_INT_MAX}")
     validate_fields(fields)
     _canonical_bytes(summary, "--summary")  # a lone surrogate (argv's `surrogateescape`) is USAGE, not INTERNAL
     with db.write(conn):
