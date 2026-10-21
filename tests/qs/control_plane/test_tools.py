@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import threading
 from collections.abc import Callable
@@ -1776,8 +1777,6 @@ class TestReviewFix03:
 
     def test_a_late_first_launch_listed_done_is_adopted(self, w: W) -> None:
         # #424 pin 3: a listed `idle/done` session is a finished turn, not an ended one (L1): adopted, as in H6
-        import re
-
         w.sim.list_on_launch = False
         assert spawn(w, "s1")[0] == 6
         [first] = w.runner.matching("claude", "--bg")
@@ -2095,3 +2094,27 @@ class TestNodeLaunchFailure:
         for blob in (row["result"], json.dumps(out)):
             assert not any(nonce[i : i + 8] in blob for i in range(len(nonce) - 7))
         assert len(json.loads(row["result"])["detail"]) <= liveness.BG_ERROR_MAX
+
+    def test_a_wrapped_node_token_is_redacted_by_its_nonce(self, w: W) -> None:
+        # #424 fix #01 F4: an echo that wraps the token after its prefix leaves no whole token for `redact`
+        w.sim.launch_exit = 1
+        w.sim.launch_output = lambda argv: re.sub(r"(node:N\d+\.\d+\.)", r"\1\n", argv[-1])
+        code, out = spawn(w, "k1")
+        assert code == 1 and out["error"] == "TOOL_FAILED"
+        nonce = node_row(w, "N1")["nonce"]
+        row = call_row(w, "spawn", "k1")
+        assert row is not None
+        for blob in (row["result"], json.dumps(out)):
+            assert nonce not in blob and "<redacted>" in blob
+
+    @pytest.mark.parametrize("tool_name", ["spawn", "resume"])
+    @pytest.mark.parametrize("text", ["---\nfront: matter\n", "- build it", "-p go"])
+    def test_a_leading_dash_is_refused_before_any_launch(self, w: W, tool_name: str, text: str) -> None:
+        # #424 fix #01 F3: the prompt is the argv's last positional; `claude` would read a leading `-` as an option
+        for name in ("prompt", "msg"):
+            Path(w.files[name]).write_text(text)
+        code, out = _launch_node(w, tool_name, "k1")
+        assert code == 1 and out["error"] == "TOOL_FAILED" and "starts with `-`" in out["detail"], out
+        assert w.sim.effects("claude", "--bg") == 0
+        row = call_row(w, tool_name, "k1")
+        assert row is not None and row["state"] == "failed"

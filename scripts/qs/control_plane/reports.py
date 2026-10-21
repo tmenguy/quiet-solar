@@ -38,6 +38,14 @@ def _usage(detail: str) -> errors.CpError:
     return errors.CpError("USAGE", detail)
 
 
+def _canonical_bytes(value: Any, what: str) -> bytes:
+    """``value``'s canonical JSON in UTF-8; a lone surrogate (``json.loads`` accepts ``\\ud800``) is ``USAGE``."""
+    try:
+        return messages.canonical(value).encode()
+    except UnicodeEncodeError as exc:
+        raise _usage(f"{what} is not valid UTF-8 text (a lone surrogate)") from exc
+
+
 def _list(fields: dict[str, Any], key: str) -> list[Any]:
     value = fields[key]
     if not isinstance(value, list):
@@ -82,7 +90,7 @@ def validate_fields(fields: Any) -> None:
     if "discovered" in fields:
         for i, item in enumerate(_list(fields, "discovered")):
             _check_discovered(i, item)
-    size = len(messages.canonical(fields).encode())
+    size = len(_canonical_bytes(fields, "the fields"))
     if size > FIELDS_MAX_BYTES:
         raise errors.CpError("CONFLICT", f"the fields are {size} bytes; the cap is {FIELDS_MAX_BYTES}")
 
@@ -171,8 +179,8 @@ def put_digest(
     max_bytes: int = DIGEST_MAX_BYTES,
 ) -> dict[str, Any]:
     validate_digest(digest)
+    size = len(_canonical_bytes(digest, "the digest"))
     body = messages.canonical(digest)
-    size = len(body.encode())
     if size > max_bytes:
         raise errors.CpError("CONFLICT", f"the digest is {size} bytes; the cap is {max_bytes}")
     with db.write(conn):

@@ -1044,7 +1044,11 @@ def _launch(ctx: StepCtx, start: Callable[[sqlite3.Row], runner.RunResult], *, t
         row = conn.execute("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
     res = start(row)
     if not res.ok:  # redact before the cut: the node token rides in the prompt, and a cut one would not match
-        clean = dataclasses.replace(res, stdout=redact(res.stdout), stderr=redact(res.stderr))
+
+        def scrub(text: str) -> str:  # the row's own nonce too: an echo wrapped inside the token is no whole token
+            return redact(text).replace(row["nonce"], "<redacted>")
+
+        clean = dataclasses.replace(res, stdout=scrub(res.stdout), stderr=scrub(res.stderr))
         raise StepFailed(
             liveness.bg_failure(clean, trust_dir, liveness.BG_ERROR_MAX), {"exit_code": res.returncode}, res.returncode
         )
@@ -1066,6 +1070,12 @@ def _identify(ctx: StepCtx, *, resume: bool) -> dict[str, Any]:
         if ctx.clock.now().timestamp() >= deadline:
             raise errors.CpError("BUSY", f"session {row['name']} is not listed yet; replay the same key")
         ctx.clock.sleep(IDENTIFY_POLL_S)
+
+
+def _no_leading_dash(text: str, what: str) -> None:
+    """``claude`` reads a last positional that starts with ``-`` as an option (#424 fix #01 F3): refused, unlaunched."""
+    if text.startswith("-"):
+        raise StepFailed(f"the {what} starts with `-`: claude would read it as an option")
 
 
 def _node_token(conn: sqlite3.Connection, node_id: str) -> str:
@@ -1200,6 +1210,7 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
 
     def launch(ctx: StepCtx) -> dict[str, Any]:
         prompt = arg_file_text(ctx, "prompt_file")  # before `_launch` writes launch_at: a bad file launches nothing
+        _no_leading_dash(prompt, "prompt")
         # A caller model wins and sends no effort. Otherwise the policy is resolved again here, before
         # `_launch` writes launch_at: the probe rewrites reserve's output, so nothing is carried over.
         launch_model: str | None = str(model) if model else None
@@ -1229,6 +1240,7 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
             argv += ["--settings", settings, text]
             return ctx.claude.spawn_bg(argv, cwd=wt)
 
+        # the hint names the worktrees' root: the maintainer trusts it once, its worktrees inherit it (#421, D7)
         return _launch(ctx, start, trust_dir=wt.parent)
 
     return (
@@ -1297,6 +1309,7 @@ def _resume_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
 
     def launch(ctx: StepCtx) -> dict[str, Any]:
         message = arg_file_text(ctx, "message_file")  # before `_launch` writes launch_at
+        _no_leading_dash(message, "message")
         # no `--add-dir`: a bare resume restores every option of the launch (#424 L7)
         return _launch(ctx, lambda row: ctx.claude.resume_bg(row["session_id"], message, cwd=wt), trust_dir=wt.parent)
 

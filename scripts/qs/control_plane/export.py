@@ -7,6 +7,7 @@ before the merge). Nothing tracked is ever written into the main checkout.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
@@ -21,10 +22,44 @@ def _cell(text: str) -> str:
     return " ".join(str(text).split()).replace("|", "\\|")
 
 
-def _demote(line: str) -> str:
-    """A value's Markdown heading (``#`` after at most three spaces) pushed below level 3: ``###`` prepended."""
-    text = line.lstrip(" ")
-    return "###" + text if text.startswith("#") and len(line) - len(text) < 4 else line
+_ATX_RE = re.compile(r" {0,3}(#{1,6})(?=[ \t]|$)(.*)")  # a CommonMark ATX heading
+_FENCE_RE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")  # a code fence's opener or closer
+_SETEXT_RE = re.compile(r" {0,3}(?:=+|-+)[ \t]*")  # a setext heading's underline, when it follows a text line
+
+
+def _value_lines(value: str) -> list[str]:
+    """A digest value's lines, rendered so it cannot break the summary's own outline (#424 D5, fix #01 F1).
+
+    Leading blank lines are dropped. A heading is pushed three levels down (capped at 6); a line inside a code fence
+    is kept as it is, and a fence still open at the value's end is closed; a setext underline gets a blank line before
+    it (a `---` becomes a thematic break, a `===` plain text). Everything else is kept verbatim.
+    """
+    lines = value.rstrip().splitlines()
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    out: list[str] = []
+    fence: str | None = None  # the open fence's marker
+    for line in lines:
+        match = _FENCE_RE.fullmatch(line)
+        if fence is not None:
+            out.append(line)
+            if match and match[1][0] == fence[0] and len(match[1]) >= len(fence) and not match[2].strip():
+                fence = None
+            continue
+        if match and not (match[1][0] == "`" and "`" in match[2]):  # a backtick fence's info has no backtick
+            fence = match[1]
+            out.append(line)
+            continue
+        heading = _ATX_RE.fullmatch(line)
+        if heading:
+            out.append("#" * min(6, len(heading[1]) + 3) + heading[2])
+            continue
+        if _SETEXT_RE.fullmatch(line) and out and out[-1].strip():
+            out.append("")
+        out.append(line)
+    if fence is not None:
+        out.append(fence)
+    return out
 
 
 def _digest_lines(body: str) -> list[str]:
@@ -34,10 +69,7 @@ def _digest_lines(body: str) -> list[str]:
         return [body.rstrip(), ""]
     lines: list[str] = []
     for key in reports.DIGEST_KEYS:
-        value = digest[key].rstrip().lstrip("\n")
-        lines += [f"### {key.capitalize()}", ""]
-        lines += [_demote(line) for line in value.splitlines()] if value else ["_None._"]
-        lines.append("")
+        lines += [f"### {key.capitalize()}", "", *(_value_lines(digest[key]) or ["_None._"]), ""]
     return lines
 
 

@@ -108,6 +108,31 @@ class TestExport:
             "## Ledger",
         ]
 
+    @pytest.mark.parametrize(
+        ("value", "rendered"),
+        [
+            ("#424 merged\n#tag", ["#424 merged", "#tag"]),  # not headings: no space after the `#`s
+            ("```bash\n# install\n```\n# after", ["```bash", "# install", "```", "#### after"]),
+            ("~~~~\n# a\n~~~\n# still code\n~~~~~\n# h", ["~~~~", "# a", "~~~", "# still code", "~~~~~", "#### h"]),
+            ("```py `x`\n# a heading", ["```py `x`", "#### a heading"]),  # a backtick info string: no fence
+            ("###### six\n#### four\n#\n## T #", ["###### six", "###### four", "####", "##### T #"]),
+            ("Decisions\n---------\nuse X", ["Decisions", "", "---------", "use X"]),  # setext h2 → a break
+            ("Decisions\n===", ["Decisions", "", "==="]),
+            ("- a\n\n---", ["- a", "", "---"]),  # a break after a blank line stays as it is
+            ("```\nunclosed", ["```", "unclosed", "```"]),  # closed at the value's end
+            ("\r\n  \n# hi\r\nok", ["#### hi", "ok"]),  # leading blank lines dropped, CRLF too
+        ],
+    )
+    def test_a_value_cannot_break_the_summary_structure(self, world, linked, value: str, rendered: list[str]) -> None:
+        # #424 fix #01 F1/F5
+        body = _file(world["tmp"], "d3.json", json.dumps({**WORLD_DIGEST, "decisions": value}))
+        assert run_cli("digest", "put", "--task", "T1", "--file", body, "--token", world["token"])[0] == 0
+        assert run_cli("export-summary", "--task", "T1", "--out-worktree", str(linked))[0] == 0
+        lines = (linked / "docs" / "stories" / "QS-11.summary.md").read_text().splitlines()
+        start, end = lines.index("### Decisions"), lines.index("### Questions")
+        assert lines[start + 1] == "" and lines[end - 1] == ""
+        assert lines[start + 2 : end - 1] == rendered
+
     @pytest.mark.parametrize("body", ["Built by hand.\n\nNo JSON.\n", '{"goal": "x"}'])
     def test_a_stored_body_off_the_contract_is_rendered_raw(self, world, linked, body: str) -> None:
         sql(world["db"], "UPDATE digests SET body = ? WHERE task_id = 'T1'", [body])  # stored before #424
