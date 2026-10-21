@@ -25,69 +25,42 @@ def _cell(text: str) -> str:
 # Possessive (`*+`): a line of nested markers never backtracks exponentially (fix #03 H1).
 _PREFIX = r"(?:[ \t]*>[ \t]?|[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+)*+"  # blockquote and list-item markers
 _ATX_RE = re.compile(rf"({_PREFIX}[ \t]*)(#{{1,6}})(?=[ \t]|$)(.*)")  # a heading, nested or not
-_FENCE_RE = re.compile(r"( {0,3})(`{3,}|~{3,})(.*)")  # a bare fence line, on the tab-expanded line
 _SETEXT_RE = re.compile(r"(?:[ \t]*>[ \t]?)*+[ \t]*(?:=+|-+)[ \t]*")  # a setext underline, under a text line
-_HTML_RE = re.compile(r" {0,3}<")  # an HTML block's start (on the tab-expanded line)
-_FOOTNOTE_RE = re.compile(rf"({_PREFIX}[ \t]*)(\[\^)")  # a GFM footnote definition's start
+_DEFINITION_RE = re.compile(rf"({_PREFIX}[ \t]*)\[(?=[^\]]*\]:)")  # a footnote / link-reference definition
 _LINE_END_RE = re.compile(r"\r\n|\r|\n")  # CommonMark's line ends (not `str.splitlines`'s)
 
 
-def _fence(line: str) -> re.Match[str] | None:
-    """A fence line with no container marker and at most three columns of indentation (a tab is 4 columns)."""
-    return _FENCE_RE.fullmatch(line.expandtabs(4))
-
-
 def _value_lines(value: str) -> list[str]:
-    """A digest value as a blockquote that cannot break the summary's own outline (#424 D5, fixes #01 to #03).
+    """A digest value as a blockquote that cannot break the summary's own outline (#424 D5, fixes #01 to #04).
 
     Every line is quoted (``> ``): the blank line after the value ends the quote, which closes any fence, list or
-    HTML block left open inside it. Inside, leading blank lines are dropped; a heading, nested in a quote or a list
-    item or not, is pushed three levels down (capped at 6, its prefix kept); a setext underline gets a blank line
-    before it (a ``---`` becomes a thematic break, a ``===`` plain text); a footnote definition's ``[^`` is escaped.
-    Only the lines of a **bare** fence (no list
-    or quote marker, at most three columns in) are kept as they are: CommonMark ends it only with a bare closer, or
-    — when it is indented, so perhaps inside a list item — at a less-indented line, which is then read again. A
-    fence behind a marker is not tracked: its ``#`` lines are demoted too, the safe side. Whitespace is CommonMark's:
-    spaces and tabs only.
+    HTML block left open inside it. Inside, line by line, with no Markdown state at all (a code-fence tracker
+    falls out of step with the renderer — review rounds 1 to 4 found a new way each time):
+
+    * leading blank lines are dropped;
+    * a heading, nested in a quote or a list item or not, at any indentation, is pushed three levels down (capped
+      at 6, its prefix kept);
+    * a setext underline under a text line gets a blank line before it (a ``---`` becomes a thematic break, a
+      ``===`` plain text);
+    * a footnote or link-reference definition (``[^n]:`` / ``[x]:`` at the line's start) is escaped (``\\[``):
+      it would otherwise act on the whole summary.
+
+    Inside a code block these rewrites are cosmetic (a ``# comment`` reads ``#### comment``): the safe side.
+    Whitespace is CommonMark's: spaces and tabs only.
     """
     lines = _LINE_END_RE.split(value.rstrip(" \t\r\n"))
     while lines and not lines[0].strip(" \t"):
         lines.pop(0)
     out: list[str] = []
-    fence: tuple[str, int] | None = None  # the open fence's marker and its opener's indentation
-    html = False  # inside an HTML block, until a blank line: no fence opens there (fix #03 H6)
     for line in lines:
-        match = _fence(line)
-        if fence is not None:
-            text = line.expandtabs(4)
-            if text.strip(" ") and len(text) - len(text.lstrip(" ")) < fence[1]:
-                fence = None  # a less-indented line ends the list item, and the fence with it: read it again
-            else:
-                out.append(line)
-                if (
-                    match
-                    and match[2][0] == fence[0][0]
-                    and len(match[2]) >= len(fence[0])
-                    and not match[3].strip(" \t")
-                ):
-                    fence = None
-                continue
-        if not line.strip(" \t"):
-            html = False
-        elif not html and _HTML_RE.match(line.expandtabs(4)):
-            html = True
-        if match and not html and not (match[2][0] == "`" and "`" in match[3]):  # a backtick info has no backtick
-            fence = (match[2], len(match[1]))
-            out.append(line)
-            continue
         heading = _ATX_RE.fullmatch(line)
         if heading:
             out.append(heading[1] + "#" * min(6, len(heading[2]) + 3) + heading[3])
             continue
         if _SETEXT_RE.fullmatch(line) and out and out[-1].strip(" \t>"):
             out.append("")
-        # a footnote definition would move its text after the summary's last section (fix #03 H7)
-        out.append(_FOOTNOTE_RE.sub(r"\1\\\2", line, count=1) if _FOOTNOTE_RE.match(line) else line)
+        definition = _DEFINITION_RE.match(line)
+        out.append(line if definition is None else f"{definition[1]}\\{line[definition.end(1) :]}")
     return [f"> {line}" if line else ">" for line in out]
 
 

@@ -2095,7 +2095,11 @@ class TestNodeLaunchFailure:
             assert not any(nonce[i : i + 8] in blob for i in range(len(nonce) - 7))
         assert len(json.loads(row["result"])["detail"]) <= liveness.BG_ERROR_MAX
 
-    @pytest.mark.parametrize("wrap", [r"\1\n\2", r"\1\2\n  "])
+    @pytest.mark.parametrize(
+        "wrap",
+        [r"\1\n\2", r"\1\2\n  ", "\\1\\2\x1b[0m\n\x1b[2m", r"\1\2 │\n│ ", "\\1\\2\u200b", r"\1\2-\n"],
+        ids=["after-prefix", "in-nonce", "ansi", "box", "zero-width", "hyphen"],
+    )
     def test_a_wrapped_node_token_is_redacted_by_its_nonce(self, w: W, wrap: str) -> None:
         # #424 fix #01 F4: an echo that wraps the token after its prefix leaves no whole token for `redact`
         w.sim.launch_exit = 1
@@ -2126,7 +2130,14 @@ class TestNodeLaunchFailure:
 
     @pytest.mark.parametrize(
         "extra",
-        [{"agent": "a\x00b"}, {"agent": "-p"}, {"model": "m\x00"}, {"model": "--x"}, {"permission_mode": "a\x00"}],
+        [
+            {"agent": "a\x00b"},
+            {"agent": "-p"},
+            {"model": "m\x00"},
+            {"model": "--x"},
+            {"model": -1},  # a JSON number: the argv would carry `--model -1`
+            {"permission_mode": "a\x00"},
+        ],
     )
     def test_an_argv_value_claude_cannot_take_is_usage(self, w: W, extra: dict[str, str]) -> None:
         # #424 fix #03 H8: refused when the steps are built, before any effect

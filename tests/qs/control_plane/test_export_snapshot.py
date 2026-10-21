@@ -114,41 +114,34 @@ class TestExport:
         ("value", "rendered"),
         [
             ("#424 merged\n#tag", ["#424 merged", "#tag"]),  # not headings: no space after the `#`s
-            ("```bash\n# install\n```\n# after", ["```bash", "# install", "```", "#### after"]),
-            ("~~~~\n# a\n~~~\n# still code\n~~~~~\n# h", ["~~~~", "# a", "~~~", "# still code", "~~~~~", "#### h"]),
-            ("```py `x`\n# a heading", ["```py `x`", "#### a heading"]),  # a backtick info string: no fence
             ("###### six\n#### four\n#\n## T #", ["###### six", "###### four", "####", "##### T #"]),
             ("Decisions\n---------\nuse X", ["Decisions", "", "---------", "use X"]),  # setext h2 → a break
             ("Decisions\n===", ["Decisions", "", "==="]),
             ("- a\n\n---", ["- a", "", "---"]),  # a break after a blank line stays as it is
-            ("text\n\xa0\n---", ["text", "\xa0", "", "---"]),  # an NBSP line is no blank line (fix #02 G2)
-            ("```\nunclosed", ["```", "unclosed"]),  # left open: the quote's end closes it
-            ("```\ncode\n```\xa0\n# x", ["```", "code", "```\xa0", "# x"]),  # an NBSP trailer closes nothing
+            ("text\n\xa0\n---", ["text", "\xa0", "", "---"]),  # an NBSP line is no blank line
             ("\r\n  \n# hi\r\nok", ["#### hi", "ok"]),  # leading blank lines dropped, CRLF too
             ("a\rb", ["a", "b"]),  # CommonMark's line ends
-            # fix #02 G1: fences in list items, as GitHub reads them
+            ("<details>\nopen", ["<details>", "open"]),  # left open: the quote's end closes it
+            ("```\nunclosed", ["```", "unclosed"]),
+            ("> # x\n- ## y\n1. # z\n    # w", ["> #### x", "- ##### y", "1. #### z", "    #### w"]),  # any nesting
+            ("> Title\n> ---", ["> Title", "", "> ---"]),
+            # fix #04: no fence is tracked, so no tracker can fall out of step with the renderer: a `#` line in
+            # code is demoted too (cosmetic), and every structure escape below is caught
+            ("```py\n# comment\nx = 1\n```", ["```py", "#### comment", "x = 1", "```"]),
             ("1. Run:\n   ```bash\n   make\n```\nthen done", ["1. Run:", "   ```bash", "   make", "```", "then done"]),
             ("- item\n  ```\n  code\n# Heading", ["- item", "  ```", "  code", "#### Heading"]),
-            ("- item\n  ```\n  code", ["- item", "  ```", "  code"]),
-            ("<details>\nopen", ["<details>", "open"]),
-            ("> # x\n- ## y\n1. # z", ["> #### x", "- ##### y", "1. #### z"]),  # nested headings, prefix kept
-            ("> Title\n> ---", ["> Title", "", "> ---"]),
-            # fix #03: only a bare top-level fence is tracked (CommonMark closes it only with a bare closer)
             ("- ```\n# ListEscape", ["- ```", "#### ListEscape"]),
-            ("> ```\n# QuoteEscape", ["> ```", "#### QuoteEscape"]),
-            ("- ```\n  code\n## Decisions", ["- ```", "  code", "##### Decisions"]),
             ("```\n- ```\n```\n# CloserEscape", ["```", "- ```", "```", "#### CloserEscape"]),
-            ("```\n    ```\n```\n# IndentEscape", ["```", "    ```", "```", "#### IndentEscape"]),
-            ("\t\t```\n  # TabEscape", ["\t\t```", "  #### TabEscape"]),  # 8 columns: indented code
-            ("\t```\n# x", ["\t```", "#### x"]),  # a tab is 4 columns: no fence
-            ("- ```\nTitle\n===", ["- ```", "Title", "", "==="]),
-            # an indented opener may sit in a list item: a less-indented line ends it (over-demotion is the safe side)
-            ("   ```\n# a\n   ```", ["   ```", "#### a", "   ```"]),
-            ("  ```\n  # kept\n  ```\n# h", ["  ```", "  # kept", "  ```", "#### h"]),
-            ("```\ncode\n```\xa0", ["```", "code", "```\xa0"]),  # a trailing NBSP line is kept
-            ("<div>\n```\n</div>\n\n# Evil", ["<div>", "```", "</div>", "", "#### Evil"]),  # HTML: no fence (H6)
-            ("see[^n]\n\n[^n]: a note\n> - [^m]: b", ["see[^n]", "", "\\[^n]: a note", "> - \\[^m]: b"]),  # H7
-            ("```\n[^n]: in code\n```", ["```", "[^n]: in code", "```"]),
+            ("```\ncode\n\t```\n# Title", ["```", "code", "\t```", "#### Title"]),
+            ("  ```\ncode\n```\n# Title", ["  ```", "code", "```", "#### Title"]),
+            ("<\n```\n\n```\n# Title", ["<", "```", "", "```", "#### Title"]),
+            ("<div>\n```\n</div>\n\n# Evil", ["<div>", "```", "</div>", "", "#### Evil"]),
+            ("```\ntext\n---\n```", ["```", "text", "", "---", "```"]),
+            # a footnote or link-reference definition would act on the whole summary: escaped
+            ("see[^n]\n\n[^n]: a note\n> - [^m]: b", ["see[^n]", "", "\\[^n]: a note", "> - \\[^m]: b"]),
+            ("```\n[^n]: in code\n```", ["```", "\\[^n]: in code", "```"]),
+            ("[foo]: https://x\n  [Bar baz]: <y>", ["\\[foo]: https://x", "  \\[Bar baz]: <y>"]),
+            ("see [foo] and [a]: b", ["see [foo] and [a]: b"]),  # not at the line's start: no definition
         ],
     )
     def test_a_value_cannot_break_the_summary_structure(self, world, linked, value: str, rendered: list[str]) -> None:
@@ -160,6 +153,28 @@ class TestExport:
         start, end = lines.index("### Decisions"), lines.index("### Questions")
         assert lines[start + 1] == "" and lines[end - 1] == ""
         assert lines[start + 2 : end - 1] == [f"> {line}" if line else ">" for line in rendered]  # one blockquote
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "1. ```bash\n   make test\n   ```\n   # Evil",
+            "- ```\n  # a\n  ```\n  # Evil",
+            "- a\n\n    ```\n    x\n  ```\n  # Evil",
+            "- a\n\n   ```\n     ```\n   # Evil",
+            "  ```\n x\n  ```\n  # Evil",
+            "<!--\n\n```\n\n-->\n# Evil",
+            "<pre>\n\n```\n\n</pre>\n# Evil",
+            "<= 5\n```\n\n```\n# Evil",
+            "para\n<span>\n```\n\n```\n# Evil",
+            "```\ncode\n\t```\n# Evil",
+        ],
+    )
+    def test_no_value_line_is_an_h1_or_h2(self, value: str) -> None:
+        # #424 fix #04: round 4's inputs, each an h1 on GitHub while a fence tracker existed
+        lines = export._value_lines(value)
+        assert all(line.startswith(">") for line in lines)
+        assert not [line for line in lines if re.match(r">[ \t]?(?:[ \t]*(?:>|[-*+]|\d+[.)])[ \t]*)*#{1,2}(?:[ \t]|$)", line)]
+        assert any(line.endswith("#### Evil") for line in lines)
 
     @pytest.mark.parametrize(
         "line",
