@@ -30,7 +30,7 @@ FIELDS = ("blocking", "questions", "discovered")  # every key optional; `{}` is 
 DISCOVERED_KEYS = ("title", "why", "shrinks")  # title, why required; shrinks optional
 FIELDS_MAX_BYTES = DIGEST_MAX_BYTES  # the canonical JSON's UTF-8 size
 QUESTION_ID_RE = re.compile(r"Q-[1-9][0-9]{0,18}")  # `question open`'s ids, fullmatch (and <= SQL_INT_MAX)
-SQL_INT_MAX = 2**63 - 1  # a finding id is a SQLite INTEGER
+SQL_INT_MAX = 2**63 - 1  # a finding id, a question id and a round are SQLite INTEGERs
 
 DIGEST_KEYS = ("goal", "why", "plan", "done", "problems", "decisions", "questions", "discovered")
 

@@ -153,8 +153,18 @@ class TestExport:
             ("<div>\nx <!-- y", ["&lt;div>", "x &lt;!-- y"]),
             ("<?x\n<![CDATA[\n<table>\n</b> <b>", ["&lt;?x", "&lt;![CDATA[", "&lt;table>", "&lt;/b> &lt;b>"]),
             ("see <https://x.y/z> and a < b <3", ["see <https://x.y/z> and a < b <3"]),  # autolinks, plain `<`
-            ("[!Caution] \nboom\n[!NOTE]", ["[!Caution] &#32;", "boom", "[!NOTE]"]),  # no alert box (fix #06)
-            ("[!NOTE] text", ["[!NOTE] text"]),  # text after the marker: no alert either
+            # no alert box (fixes #06, #07): a zero-width space before a first-line marker, escaped or not
+            ("[!Caution] \nboom\n[!NOTE]", ["&#8203;[!Caution] ", "boom", "[!NOTE]"]),
+            ("[!NOTE] text", ["&#8203;[!NOTE] text"]),
+            ("[!NOTE]\n\nx", ["&#8203;[!NOTE]", "", "x"]),
+            ("[!NOTE]\n---", ["&#8203;[!NOTE]", "", "---"]),
+            ("[!NOTE]\\\nx", ["&#8203;[!NOTE]\\", "x"]),
+            ("\\[!NOTE]", ["&#8203;\\[!NOTE]"]),
+            ("&#91;!TIP]", ["&#8203;&#91;!TIP]"]),
+            ("[\\!NOTE\\]", ["&#8203;\\[\\!NOTE\\]"]),  # its label runs past the line: escaped as well
+            ("   [!WARNING]", ["   &#8203;[!WARNING]"]),
+            ("\t[!TIP]", ["\t&#8203;[!TIP]"]),
+            ("x\n[!NOTE]", ["x", "[!NOTE]"]),  # not the first line: no alert
             ("a\x00b", ["a\ufffdb"]),  # a NUL would make the summary a binary file (fix #05)
             # fix #05: an indented `>` line is paragraph text, not a blank quote line
             ("foo\n    >\n===", ["foo", "    >", "", "==="]),

@@ -7,6 +7,7 @@ before the merge). Nothing tracked is ever written into the main checkout.
 
 from __future__ import annotations
 
+import html
 import re
 import sqlite3
 from collections.abc import Callable
@@ -31,14 +32,22 @@ _DEFINITION_RE = re.compile(rf"({_PREFIX}[ \t]*)\[(?=(?:[^\]\\]|\\.?)*+(?:\]:|$)
 # `<` opening a tag, a comment, `<?` or `<!` (not a URI autolink): raw HTML would hide, nest or restyle every later
 # section, and an HTML block ignores backslash escapes, so it becomes `&lt;` (fix #05)
 _HTML_RE = re.compile(r"<(?![A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*>)(?=[A-Za-z/!?])")
-# a GitHub alert marker, alone on the quote's first line, would restyle the block: GitHub ignores a `\[`, not a
-# trailing `&#32;` (fix #06, checked on its renderer)
-_ALERT_RE = re.compile(r"[ \t]{0,3}\[!(?:note|tip|important|warning|caution)\][ \t]*", re.IGNORECASE)
+# a GitHub alert marker on the quote's first line would restyle the block; GitHub matches it on the rendered text
+# (a `\[` does not stop it), but not behind a zero-width space (fixes #06, #07, checked on its renderer)
+_ALERT_RE = re.compile(r"[ \t]{0,3}\[!(?:note|tip|important|warning|caution)\]", re.IGNORECASE)
+_MD_ESCAPE_RE = re.compile(r"\\([!-/:-@\[-`{-~])")  # a CommonMark backslash escape (an ASCII punctuation)
+
+
+def _rendered(line: str) -> str:
+    """``line``'s text as it renders: backslash escapes and HTML entities decoded (GitHub matches alerts there)."""
+    return html.unescape(_MD_ESCAPE_RE.sub(r"\1", line))
+
+
 _LINE_END_RE = re.compile(r"\r\n|\r|\n")  # CommonMark's line ends (not `str.splitlines`'s)
 
 
 def _value_lines(value: str) -> list[str]:
-    """A digest value as a blockquote whose Markdown cannot break the summary's own outline (#424 D5, fixes #01–#05).
+    """A digest value as a blockquote whose Markdown cannot break the summary's own outline (#424 D5, fixes #01–#07).
 
     Raw HTML cannot run either: ``<`` before a tag reads ``&lt;``.
 
@@ -53,7 +62,8 @@ def _value_lines(value: str) -> list[str]:
       thematic break, a ``===`` plain text);
     * a footnote or link-reference definition (``[^n]:`` / ``[x]:`` at the line's start, or a ``[`` whose label
       runs past the line) is escaped (``\\[``): it would otherwise act on the whole summary;
-    * a GitHub alert marker (``[!NOTE]``) alone on the first line gets a trailing ``&#32;``: it would restyle the block;
+    * a GitHub alert marker (``[!NOTE]``) at the first line's start gets a zero-width space before it (``&#8203;``):
+      it would restyle the block;
     * a ``<`` that opens a tag, a comment, ``<?`` or ``<!`` (not a URI autolink) becomes ``&lt;``, and a NUL
       U+FFFD (it would make the summary a binary file).
 
@@ -75,8 +85,9 @@ def _value_lines(value: str) -> list[str]:
             out.append("")
         definition = _DEFINITION_RE.match(line)
         out.append(line if definition is None else f"{definition[1]}\\{line[definition.end(1) :]}")
-    if out and _ALERT_RE.fullmatch(out[0]):
-        out[0] += "&#32;"
+    if out and _ALERT_RE.match(_rendered(out[0])):  # `\[!NOTE]`, `&#91;!TIP]` are alerts too (fix #07)
+        indent = len(out[0]) - len(out[0].lstrip(" \t"))
+        out[0] = f"{out[0][:indent]}&#8203;{out[0][indent:]}"
     return [f"> {line}" if line else ">" for line in out]
 
 
