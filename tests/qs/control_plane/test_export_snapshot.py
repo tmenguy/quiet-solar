@@ -165,6 +165,9 @@ class TestExport:
             ("   [!WARNING]", ["   &#8203;[!WARNING]"]),
             ("\t[!TIP]", ["\t&#8203;[!TIP]"]),
             ("x\n[!NOTE]", ["x", "[!NOTE]"]),  # not the first line: no alert
+            ("&#" + "1" * 4301 + ";", ["&#" + "1" * 4301 + ";"]),  # no entity CommonMark reads: no int() of it (#08)
+            ("&#91!NOTE]", ["&#91!NOTE]"]),  # no `;`: GitHub shows it as text, no alert
+            ("&#00000091;!NOTE]", ["&#8203;&#00000091;!NOTE]"]),  # 8 digits: GitHub still reads it
             ("a\x00b", ["a\ufffdb"]),  # a NUL would make the summary a binary file (fix #05)
             # fix #05: an indented `>` line is paragraph text, not a blank quote line
             ("foo\n    >\n===", ["foo", "    >", "", "==="]),

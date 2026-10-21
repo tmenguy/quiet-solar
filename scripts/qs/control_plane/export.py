@@ -38,9 +38,15 @@ _ALERT_RE = re.compile(r"[ \t]{0,3}\[!(?:note|tip|important|warning|caution)\]",
 _MD_ESCAPE_RE = re.compile(r"\\([!-/:-@\[-`{-~])")  # a CommonMark backslash escape (an ASCII punctuation)
 
 
+# a character reference GitHub reads (cmark-gfm: 1 to 8 decimal or hex digits, or a name; the `;` required).
+# Decoding only these keeps `html.unescape` off a 4301-digit `&#…;`, which `int()` refuses (fix #08).
+_ENTITY_RE = re.compile(r"&(?:#[0-9]{1,8}|#[xX][0-9a-fA-F]{1,8}|[A-Za-z][A-Za-z0-9]{0,31});")
+
+
 def _rendered(line: str) -> str:
-    """``line``'s text as it renders: backslash escapes and HTML entities decoded (GitHub matches alerts there)."""
-    return html.unescape(_MD_ESCAPE_RE.sub(r"\1", line))
+    """``line``'s text as it renders: backslash escapes and character references decoded (GitHub matches alerts
+    there)."""
+    return _ENTITY_RE.sub(lambda m: html.unescape(m[0]), _MD_ESCAPE_RE.sub(r"\1", line))
 
 
 _LINE_END_RE = re.compile(r"\r\n|\r|\n")  # CommonMark's line ends (not `str.splitlines`'s)
