@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,9 @@ class Sim:
     cleanup_status: str = "removed"
     gate_exit: int = 0
     launch_exit: int = 0
+    launch_stdout: str = ""
+    launch_stderr: str = "boom"
+    launch_output: Callable[[list[str]], str] | None = None  # stderr built from the argv (an echoed prompt)
     list_on_launch: bool = True
     hold: threading.Event | None = None
     entered: threading.Event = field(default_factory=threading.Event)
@@ -135,7 +139,8 @@ class Sim:
     def _claude_bg(self, call: Call) -> RunResult:
         self._block()
         if self.launch_exit:
-            return RunResult(self.launch_exit, "", "boom")
+            stderr = self.launch_stderr if self.launch_output is None else self.launch_output(list(call.argv))
+            return RunResult(self.launch_exit, self.launch_stdout, stderr)
         if "--resume" in call.argv:
             sid = call.argv[call.argv.index("--resume") + 1]
             name = next((a.name for a in (self.claude.listing or []) if a.session_id == sid), None)

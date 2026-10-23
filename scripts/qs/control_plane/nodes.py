@@ -73,7 +73,13 @@ def recently_launched(row: sqlite3.Row, clock: clock_mod.Clock, settle_s: float 
 def refresh(
     conn: sqlite3.Connection, clock: clock_mod.Clock, listing: list[liveness.Agent] | None, run_id: str | None = None
 ) -> dict[str, Any]:
-    """Compare-and-set ``running`` / ``idle`` / ``reaped`` from a listing taken before the transaction."""
+    """Compare-and-set ``running`` / ``idle`` / ``reaped`` from a listing taken before the transaction.
+
+    A listed ``done`` is a finished turn, not an ended session (#424 L1/L3/L9): an ended or killed session is absent
+    from the default listing. So ``idle`` in either field reads ``idle``, anything else listed ``running`` (an
+    unexpected pair, ``busy/done`` or ``null/null``, reads live: the fail-safe side); contrast
+    ``reviewpilot._session_move``, where a single-turn review's ``done`` means the review is over.
+    """
     if listing is None:
         return {"refreshed": False, "changes": []}
     changes: list[tuple[str, str, str]] = []

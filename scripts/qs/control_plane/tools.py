@@ -27,6 +27,7 @@ evolve.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -67,6 +68,8 @@ PHASES = ("/create-plan", "/diagnose-task", "/decompose-epic")
 RELEASED_BEFORE_EFFECT = frozenset({"BUSY", "POLICY_REFUSED", "STALE_TOKEN", "STOPPED", "USAGE"})
 KEY_RE = re.compile(r"[A-Za-z0-9._:/-]{1,200}")
 _REVIEW_TOKEN_RE = re.compile(r"review:(V\d+)\.([01])\.[0-9a-f]+")  # #407: redacted from recorded errors
+# #424: mirrors `tokens._TOKEN_RE`; no `\b`, so a token glued to the text before it (`xnode:…`) is redacted too
+_NODE_TOKEN_RE = re.compile(r"node:([A-Z]\d+)\.(\d+)\.[0-9a-f]+")
 GH_LIST_LIMIT = "100"
 _RELAUNCH_RE = re.compile(r"(?P<base>.*?)(?:-r(?P<n>\d+))?")  # spawn names end in -g<generation>
 NON_TERMINAL_STATES = frozenset(set(tasks.TRANSITIONS) - tasks.TERMINAL)
@@ -291,8 +294,13 @@ def _files_digest(args: Mapping[str, Any], cache: Mapping[str, bytes]) -> str | 
 
 
 def redact(text: str) -> str:
-    """Every review token in ``text`` with its nonce replaced: ``review:V<n>.<e>.<redacted>`` (#407 D2)."""
-    return _REVIEW_TOKEN_RE.sub(r"review:\1.\2.<redacted>", text)
+    """Every review and node token in ``text`` with its nonce replaced: ``review:V<n>.<e>.<redacted>`` (#407 D2),
+    ``node:N<n>.<g>.<redacted>`` (#424 D1). Run tokens are kept: the run token never reaches a launch.
+
+    Called on error paths only (``_Call.fail``, ``reviews.close_locked``, ``reviews._launch``, ``_launch``): a
+    success or a replay still answers with the full node token.
+    """
+    return _NODE_TOKEN_RE.sub(r"node:\1.\2.<redacted>", _REVIEW_TOKEN_RE.sub(r"review:\1.\2.<redacted>", text))
 
 
 def _owned(cur: sqlite3.Cursor) -> None:
@@ -1023,7 +1031,10 @@ def _reserve_prelude(ctx: StepCtx) -> tuple[list[liveness.Agent] | None, dict[st
     return listing, locks.spawn_holders_alive(call.conn, call.ctx.probe)
 
 
-def _launch(ctx: StepCtx, start: Callable[[sqlite3.Row], runner.RunResult]) -> dict[str, Any]:
+def _launch(ctx: StepCtx, start: Callable[[sqlite3.Row], runner.RunResult], *, trust_dir: Path) -> dict[str, Any]:
+    """Write ``launch_at``, then ``start`` the session. A non-zero exit (a timeout's 124 included) fails the step with
+    the ``liveness.bg_failure`` text: the redacted output's tail, plus the trust hint naming ``trust_dir`` when
+    Claude Code refused the folder (#424 D1)."""
     node_id = ctx.outputs["reserve"]["node_id"]
     with ctx.write() as conn:
         conn.execute(
@@ -1032,8 +1043,21 @@ def _launch(ctx: StepCtx, start: Callable[[sqlite3.Row], runner.RunResult]) -> d
         )
         row = conn.execute("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
     res = start(row)
-    if not res.ok:
-        raise StepFailed(f"claude --bg exited {res.returncode}", {"exit_code": res.returncode}, res.returncode)
+    if not res.ok:  # redact before the cut: the node token rides in the prompt, and a cut one would not match
+        # the row's own nonce too: whole with whitespace between its characters (an echo wrapped inside the
+        # token), then any 8-character window of it (wrapped by an ANSI code, a box border, a zero-width space:
+        # fix #04); first, since `redact` would eat its hex up to a wrap (fix #03 H2)
+        nonce = row["nonce"]
+        nonce_re = re.compile(r"\s*".join(map(re.escape, nonce)))
+        window_re = re.compile("|".join(re.escape(nonce[i : i + 8]) for i in range(len(nonce) - 7)))
+
+        def scrub(text: str) -> str:
+            return redact(window_re.sub("<redacted>", nonce_re.sub("<redacted>", text)))
+
+        clean = dataclasses.replace(res, stdout=scrub(res.stdout), stderr=scrub(res.stderr))
+        raise StepFailed(
+            liveness.bg_failure(clean, trust_dir, liveness.BG_ERROR_MAX), {"exit_code": res.returncode}, res.returncode
+        )
     return {"launched": True}
 
 
@@ -1052,6 +1076,19 @@ def _identify(ctx: StepCtx, *, resume: bool) -> dict[str, Any]:
         if ctx.clock.now().timestamp() >= deadline:
             raise errors.CpError("BUSY", f"session {row['name']} is not listed yet; replay the same key")
         ctx.clock.sleep(IDENTIFY_POLL_S)
+
+
+def _launchable(text: str, what: str, *, empty_ok: bool = True) -> None:
+    """Refuse, before ``launch_at``, a prompt or message ``claude --bg`` cannot take (#424 fixes #01 F3, #02 G4).
+
+    It is the argv's last positional: a leading ``-`` is read as an option, and a NUL cannot be in an argv at all.
+    """
+    if text.startswith("-"):
+        raise StepFailed(f"the {what} starts with `-`: claude would read it as an option")
+    if "\x00" in text:
+        raise StepFailed(f"the {what} holds a NUL character, which no argv can carry")
+    if not empty_ok and not text.strip():
+        raise StepFailed(f"the {what} is empty")
 
 
 def _node_token(conn: sqlite3.Connection, node_id: str) -> str:
@@ -1083,6 +1120,10 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
             raise errors.CpError("USAGE", f"args.{name} is required")
     _require_file_arg(args, "prompt_file")
     model = args.get("model")
+    for name in ("agent", "permission_mode", "model"):  # argv values: `claude` must not read one as an option
+        value = None if args.get(name) is None else str(args[name])  # as the argv will carry it (`--model -1`)
+        if value is not None and (value.startswith("-") or "\x00" in value):
+            raise errors.CpError("USAGE", f"args.{name} cannot start with `-` or hold a NUL")
     replace = bool(args.get("replace", False))
 
     def reserve(ctx: StepCtx) -> None:
@@ -1186,6 +1227,7 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
 
     def launch(ctx: StepCtx) -> dict[str, Any]:
         prompt = arg_file_text(ctx, "prompt_file")  # before `_launch` writes launch_at: a bad file launches nothing
+        _launchable(prompt, "prompt")  # never empty: the launched text adds the Control Plane line
         # A caller model wins and sends no effort. Otherwise the policy is resolved again here, before
         # `_launch` writes launch_at: the probe rewrites reserve's output, so nothing is carried over.
         launch_model: str | None = str(model) if model else None
@@ -1208,18 +1250,15 @@ def _spawn_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
                 f" · token {token}"
             )
             argv = ["--agent", str(args["agent"]), "-n", row["name"], "--model", str(launch_model)]
-            argv += [
-                "--permission-mode",
-                str(args["permission_mode"]),
-                "--settings",
-                settings,
-                "--add-dir",
-                str(ctx.main),
-                text,
-            ]
+            # `--add-dir <directories...>` takes several values: placed last, it swallows the prompt as a second
+            # directory and the session starts with no prompt (#424 L8). So it goes before a single-value option,
+            # and the argv ends `--settings <json> <prompt>` (the watchdog's `--allowedTools=` form is safe too).
+            argv += ["--add-dir", str(ctx.main), "--permission-mode", str(args["permission_mode"])]
+            argv += ["--settings", settings, text]
             return ctx.claude.spawn_bg(argv, cwd=wt)
 
-        return _launch(ctx, start)
+        # the hint names the worktrees' root: the maintainer trusts it once, its worktrees inherit it (#421, D7)
+        return _launch(ctx, start, trust_dir=wt.parent)
 
     return (
         Step("reserve", reserve),
@@ -1287,7 +1326,10 @@ def _resume_steps(task: TaskRow, args: Mapping[str, Any]) -> Sequence[Step]:
 
     def launch(ctx: StepCtx) -> dict[str, Any]:
         message = arg_file_text(ctx, "message_file")  # before `_launch` writes launch_at
-        return _launch(ctx, lambda row: ctx.claude.resume_bg(row["session_id"], message, cwd=wt))
+        _launchable(message, "message", empty_ok=False)
+        # no `--add-dir`: a bare resume restores every option of the launch (#424 L7); the hint names the worktrees'
+        # root, which the maintainer trusts once and its worktrees inherit (#421, D7)
+        return _launch(ctx, lambda row: ctx.claude.resume_bg(row["session_id"], message, cwd=wt), trust_dir=wt.parent)
 
     return (
         Step("reserve", reserve),

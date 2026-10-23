@@ -3,16 +3,28 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
-from control_plane import export, ledger, snapshot
+from control_plane import export, ledger, messages, snapshot
 
 from .conftest import CUR, ORCH, insert_node, open_run, run_cli, sql
 
 GOLDEN = Path(__file__).parent / "golden"
+# #424 D5: a digest is a JSON object with exactly `reports.DIGEST_KEYS`, string values (`""`: nothing to say)
+WORLD_DIGEST = {
+    "goal": "Ship the Control Plane core.",
+    "why": "Nodes need one ledger.",
+    "plan": "One SQLite DB.\n\n# Modules\n\n- db, tasks",
+    "done": "Built the core.\n\nAll green.\n",
+    "problems": "",
+    "decisions": "Use WAL.",
+    "questions": "",
+    "discovered": "",
+}
 
 
 def _git(*args: str, cwd: Path) -> None:
@@ -48,7 +60,7 @@ def world(migrated: Path, tmp_path: Path) -> dict[str, Any]:
     ok("criteria", "set", "--task", "T1", "--file", _file(tmp_path, "c.txt", "Schema v1\nQueues work\n"))
     ok("criteria", "validate", "--task", "T1")
     ok("criteria", "state", "--task", "T1", "--idx", "1", "--to", "met")
-    ok("digest", "put", "--task", "T1", "--file", _file(tmp_path, "d.md", "Built the core.\n\nAll green.\n"))
+    ok("digest", "put", "--task", "T1", "--file", _file(tmp_path, "d.json", json.dumps(WORLD_DIGEST)))
     ok(
         "decision",
         "add",
@@ -76,6 +88,146 @@ class TestExport:
         path = Path(out["path"])
         assert path == linked.resolve() / "docs" / "stories" / "QS-11.summary.md"
         assert path.read_text() == (GOLDEN / "summary.md").read_text()
+
+    @pytest.mark.parametrize("heading", ["## Decisions", "   ## Decisions", "# Decisions"])
+    def test_a_heading_inside_a_value_stays_below_level_3(self, world, linked, heading: str) -> None:
+        value = f"{heading}\n- nested\n    ## an indented line is demoted too"  # code or a nested heading
+        body = _file(world["tmp"], "d2.json", json.dumps({**WORLD_DIGEST, "decisions": value}))
+        assert run_cli("digest", "put", "--task", "T1", "--file", body, "--token", world["token"])[0] == 0
+        assert run_cli("export-summary", "--task", "T1", "--out-worktree", str(linked))[0] == 0
+        lines = (linked / "docs" / "stories" / "QS-11.summary.md").read_text().splitlines()
+        assert lines.count("## Decisions") == 1 and lines.count("### Decisions") == 1
+        indent = heading[: len(heading) - len(heading.lstrip())]
+        assert f"> {indent}###{heading.lstrip()}" in lines and ">     ##### an indented line is demoted too" in lines
+        # Markdown h1/h2 lines, quoted or not
+        top = [
+            re.sub(r"^(?:>[ \t]?)*[ \t]*", "", line) for line in lines if re.match(r"(?:>[ \t]?)*[ \t]*#{1,2} ", line)
+        ]
+        assert top == [
+            "# QS-11 — The | Control Plane",
+            "## Digest",
+            "## Acceptance criteria",
+            "## Decisions",
+            "## PR and merge",
+            "## Ledger",
+        ]
+
+    @pytest.mark.parametrize(
+        ("value", "rendered"),
+        [
+            ("#424 merged\n#tag", ["#424 merged", "#tag"]),  # not headings: no space after the `#`s
+            ("###### six\n#### four\n#\n## T #", ["###### six", "###### four", "####", "##### T #"]),
+            ("Decisions\n---------\nuse X", ["Decisions", "", "---------", "use X"]),  # setext h2 → a break
+            ("Decisions\n===", ["Decisions", "", "==="]),
+            ("- a\n\n---", ["- a", "", "---"]),  # a break after a blank line stays as it is
+            ("text\n\xa0\n---", ["text", "\xa0", "", "---"]),  # an NBSP line is no blank line
+            ("\r\n  \n# hi\r\nok", ["#### hi", "ok"]),  # leading blank lines dropped, CRLF too
+            ("a\rb", ["a", "b"]),  # CommonMark's line ends
+            ("<details>\nopen", ["&lt;details>", "open"]),  # left open: the quote's end closes it
+            ("```\nunclosed", ["```", "unclosed"]),
+            ("> # x\n- ## y\n1. # z\n    # w", ["> #### x", "- ##### y", "1. #### z", "    #### w"]),  # any nesting
+            ("> Title\n> ---", ["> Title", "", "> ---"]),
+            # fix #04: no fence is tracked, so no tracker can fall out of step with the renderer: a `#` line in
+            # code is demoted too (cosmetic), and every structure escape below is caught
+            ("```py\n# comment\nx = 1\n```", ["```py", "#### comment", "x = 1", "```"]),
+            ("1. Run:\n   ```bash\n   make\n```\nthen done", ["1. Run:", "   ```bash", "   make", "```", "then done"]),
+            ("- item\n  ```\n  code\n# Heading", ["- item", "  ```", "  code", "#### Heading"]),
+            ("- ```\n# ListEscape", ["- ```", "#### ListEscape"]),
+            ("```\n- ```\n```\n# CloserEscape", ["```", "- ```", "```", "#### CloserEscape"]),
+            ("```\ncode\n\t```\n# Title", ["```", "code", "\t```", "#### Title"]),
+            ("  ```\ncode\n```\n# Title", ["  ```", "code", "```", "#### Title"]),
+            ("<\n```\n\n```\n# Title", ["<", "```", "", "```", "#### Title"]),
+            ("<div>\n```\n</div>\n\n# Evil", ["&lt;div>", "```", "&lt;/div>", "", "#### Evil"]),
+            ("```\ntext\n---\n```", ["```", "text", "", "---", "```"]),
+            # a footnote or link-reference definition would act on the whole summary: escaped
+            ("see[^n]\n\n[^n]: a note\n> - [^m]: b", ["see[^n]", "", "\\[^n]: a note", "> - \\[^m]: b"]),
+            ("```\n[^n]: in code\n```", ["```", "\\[^n]: in code", "```"]),
+            ("[foo]: https://x\n  [Bar baz]: <y>", ["\\[foo]: https://x", "  \\[Bar baz]: &lt;y>"]),
+            ("see [foo] and [a]: b", ["see [foo] and [a]: b"]),  # not at the line's start: no definition
+            ("[foo\nbar]: https://x", ["\\[foo", "bar]: https://x"]),  # a label over two lines (fix #05)
+            ("[a\\]b]: https://x", ["\\[a\\]b]: https://x"]),  # an escaped bracket in the label
+            ("[x] done\n- [ ] todo\n[link](u)", ["[x] done", "- [ ] todo", "[link](u)"]),  # no definitions
+            ("[foo\\\nbar]: https://x", ["\\[foo\\", "bar]: https://x"]),  # a label line ending in `\`
+            # fix #05: raw HTML would hide, nest or restyle every later section: `<` before a tag is `&lt;`
+            ("<!-- todo", ["&lt;!-- todo"]),
+            ("<div>\nx <!-- y", ["&lt;div>", "x &lt;!-- y"]),
+            ("<?x\n<![CDATA[\n<table>\n</b> <b>", ["&lt;?x", "&lt;![CDATA[", "&lt;table>", "&lt;/b> &lt;b>"]),
+            ("see <https://x.y/z> and a < b <3", ["see <https://x.y/z> and a < b <3"]),  # autolinks, plain `<`
+            # no alert box (fixes #06, #07): a zero-width space before a first-line marker, escaped or not
+            ("[!Caution] \nboom\n[!NOTE]", ["&#8203;[!Caution] ", "boom", "[!NOTE]"]),
+            ("[!NOTE] text", ["&#8203;[!NOTE] text"]),
+            ("[!NOTE]\n\nx", ["&#8203;[!NOTE]", "", "x"]),
+            ("[!NOTE]\n---", ["&#8203;[!NOTE]", "", "---"]),
+            ("[!NOTE]\\\nx", ["&#8203;[!NOTE]\\", "x"]),
+            ("\\[!NOTE]", ["&#8203;\\[!NOTE]"]),
+            ("&#91;!TIP]", ["&#8203;&#91;!TIP]"]),
+            ("[\\!NOTE\\]", ["&#8203;\\[\\!NOTE\\]"]),  # its label runs past the line: escaped as well
+            ("   [!WARNING]", ["   &#8203;[!WARNING]"]),
+            ("\t[!TIP]", ["\t&#8203;[!TIP]"]),
+            ("x\n[!NOTE]", ["x", "[!NOTE]"]),  # not the first line: no alert
+            ("&#" + "1" * 4301 + ";", ["&#" + "1" * 4301 + ";"]),  # no entity CommonMark reads: no int() of it (#08)
+            ("&#91!NOTE]", ["&#91!NOTE]"]),  # no `;`: GitHub shows it as text, no alert
+            ("&#00000091;!NOTE]", ["&#8203;&#00000091;!NOTE]"]),  # 8 digits: GitHub still reads it
+            ("a\x00b", ["a\ufffdb"]),  # a NUL would make the summary a binary file (fix #05)
+            # fix #05: an indented `>` line is paragraph text, not a blank quote line
+            ("foo\n    >\n===", ["foo", "    >", "", "==="]),
+            ("> foo\n>     >\n> ===", ["> foo", ">     >", "", "> ==="]),
+            ("- foo\n      >\n  ===", ["- foo", "      >", "", "  ==="]),
+        ],
+    )
+    def test_a_value_cannot_break_the_summary_structure(self, world, linked, value: str, rendered: list[str]) -> None:
+        # #424 fix #01 F1/F5
+        body = _file(world["tmp"], "d3.json", json.dumps({**WORLD_DIGEST, "decisions": value}))
+        assert run_cli("digest", "put", "--task", "T1", "--file", body, "--token", world["token"])[0] == 0
+        assert run_cli("export-summary", "--task", "T1", "--out-worktree", str(linked))[0] == 0
+        lines = (linked / "docs" / "stories" / "QS-11.summary.md").read_text().splitlines()
+        start, end = lines.index("### Decisions"), lines.index("### Questions")
+        assert lines[start + 1] == "" and lines[end - 1] == ""
+        assert lines[start + 2 : end - 1] == [f"> {line}" if line else ">" for line in rendered]  # one blockquote
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "1. ```bash\n   make test\n   ```\n   # Evil",
+            "- ```\n  # a\n  ```\n  # Evil",
+            "- a\n\n    ```\n    x\n  ```\n  # Evil",
+            "- a\n\n   ```\n     ```\n   # Evil",
+            "  ```\n x\n  ```\n  # Evil",
+            "<!--\n\n```\n\n-->\n# Evil",
+            "<pre>\n\n```\n\n</pre>\n# Evil",
+            "<= 5\n```\n\n```\n# Evil",
+            "para\n<span>\n```\n\n```\n# Evil",
+            "```\ncode\n\t```\n# Evil",
+        ],
+    )
+    def test_no_value_line_is_an_atx_h1_or_h2(self, value: str) -> None:
+        # #424 fix #04: round 4's inputs, each an h1 on GitHub while a fence tracker existed
+        lines = export._value_lines(value)
+        assert all(line.startswith(">") for line in lines)
+        assert not [
+            line for line in lines if re.match(r">[ \t]?(?:[ \t]*(?:>|[-*+]|\d+[.)])[ \t]*)*#{1,2}(?:[ \t]|$)", line)
+        ]
+        assert any(line.endswith("#### Evil") for line in lines)
+
+    @pytest.mark.parametrize(
+        "line",
+        ["> " * 5000 + "x", "-  " * 5000 + "x", ">\t" * 5000 + "x", "1. " * 5000 + "---"],
+        ids=["quotes", "list-items", "tab-quotes", "ordered-underline"],
+    )
+    def test_deeply_nested_markers_render_in_linear_time(self, line: str) -> None:
+        # #424 fix #03 H1: the marker regexes are possessive, so no line backtracks exponentially
+        import time
+
+        started = time.monotonic()
+        assert export._value_lines(line + "\n" + line)[0].startswith("> ")
+        assert time.monotonic() - started < 2
+
+    @pytest.mark.parametrize("body", ["Built by hand.\n\nNo JSON.\n", '{"goal": "x"}'])
+    def test_a_stored_body_off_the_contract_is_rendered_raw(self, world, linked, body: str) -> None:
+        sql(world["db"], "UPDATE digests SET body = ? WHERE task_id = 'T1'", [body])  # stored before #424
+        assert run_cli("export-summary", "--task", "T1", "--out-worktree", str(linked))[0] == 0
+        text = (linked / "docs" / "stories" / "QS-11.summary.md").read_text()
+        assert f"## Digest\n\n{body.rstrip()}\n\n## Acceptance criteria" in text and "### Goal" not in text
 
     def test_refuses_the_main_checkout(self, world, fake_main) -> None:
         code, out = run_cli("export-summary", "--task", "T1", "--out-worktree", str(fake_main))
@@ -198,7 +350,7 @@ def busy_world(world, fake_clock) -> dict[str, Any]:
         w["token"],
     )
     run_cli("question", "open", "--task", "T1", "--text-file", _file(w["tmp"], "q.md", "?"), "--token", w["token"])
-    fields = _file(w["tmp"], "f.json", '{"tests": 1}')
+    fields = _file(w["tmp"], "f.json", '{"blocking": [1]}')
     run_cli(
         "report",
         "post",
@@ -336,8 +488,9 @@ class TestSnapshot:
         assert snap["tool_calls_in_flight"][0]["age_s"] == 60.0
         assert snap["hook_alerts"][0]["detail"] == {"kind": "queue_not_draining"}
         assert snap["alerts"][0]["payload"] == {"files": ["a"]} and snap["alerts"][0]["kind"] == "overlap"
-        assert snap["reports"][0]["fields"] == {"tests": 1}
-        assert snap["digests"] == [{"task_id": "T1", "bytes": 28, "updated_at": "2026-10-03T12:00:00.000000Z"}]
+        assert snap["reports"][0]["fields"] == {"blocking": [1]}
+        size = len(messages.canonical(WORLD_DIGEST).encode())
+        assert snap["digests"] == [{"task_id": "T1", "bytes": size, "updated_at": "2026-10-03T12:00:00.000000Z"}]
         assert [t["id"] for t in snap["tasks"]] == ["T1", "T2"]
         open_run("r2", "S-2")
         assert [r["id"] for r in run_cli("snapshot", "--run", "R2")[1]["runs"]] == ["R2"]
@@ -396,12 +549,17 @@ class TestTaskShow:
     def test_full_task_with_its_digest(self, busy_world) -> None:
         code, out = run_cli("task", "show", "--task", "T1")
         assert code == 0
-        assert out["digest"]["body"] == "Built the core.\n\nAll green.\n"
+        assert out["digest"]["body"] == WORLD_DIGEST  # an object, not text
         assert out["task"]["title"] == "The | Control Plane" and "nonce" not in out["nodes"][0]
         assert [c["state"] for c in out["criteria"]] == ["met", "open"] and out["depends_on"] == ["T2"]
         assert len(out["decisions"]) == 2 and len(out["reports"]) == 1 and len(out["questions"]) == 1
         assert [h["to_state"] for h in out["history"]] == ["proposed"]
         assert run_cli("task", "show", "--task", "T2")[1]["digest"] is None
+
+    @pytest.mark.parametrize("body", ["Built by hand.\n", '{"goal": "x"}', "[]"])
+    def test_a_stored_body_off_the_contract_is_returned_raw(self, busy_world, body: str) -> None:
+        sql(busy_world["db"], "UPDATE digests SET body = ? WHERE task_id = 'T1'", [body])  # stored before #424
+        assert run_cli("task", "show", "--task", "T1")[1]["digest"]["body"] == body
 
     def test_the_ledger_in_task_show(self, busy_world) -> None:
         out = run_cli("task", "show", "--task", "T1")[1]

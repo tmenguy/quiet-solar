@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import threading
 from collections.abc import Callable
@@ -11,7 +12,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from control_plane import db, faults, locks, merge_policy, tools
+from control_plane import db, faults, liveness, locks, merge_policy, tokens, tools
+from control_plane.runner import RunResult
 
 from .conftest import (
     NEXT,
@@ -379,6 +381,8 @@ class TestSpawn:
 
         assert json.loads(argv[argv.index("--settings") + 1]) == hooks.hooks_settings("node", w.main)
         assert argv[argv.index("--add-dir") + 1] == str(w.main)
+        # #424 D2 (L8): `--add-dir` takes several values, so the prompt must not follow it directly
+        assert argv[-3] == "--settings" and argv.index("--add-dir") < argv.index("--permission-mode")
         prompt = argv[-1]
         assert prompt.startswith("Build T1.\n\nControl Plane: ") and out["token"] in prompt
         assert launch.detach and "QS_CP_TOKEN" in launch.env_remove and launch.cwd == str(w.sim.wt)
@@ -674,9 +678,10 @@ class TestResume:
 
     def test_refuses_a_live_node_and_one_that_never_launched(self, w: W) -> None:
         self._prep(w)
-        w.claude.listing = [agent("S-old", "r1-T1-g1")]
+        w.claude.listing = [agent("S-old", "r1-T1-g1", state="done")]  # #424 pin 2: a listed `done` is live (L1)
         code, out = self.resume(w, "r1")
         assert code == 1 and out["result"]["error"] == "INVALID_STATE" and "SendMessage" in out["detail"]
+        assert "is live" in out["detail"] and w.sim.effects("claude", "--bg") == 0
         sql(w.db, "UPDATE nodes SET session_id = NULL")
         w.claude.listing = []
         code, out = self.resume(w, "r2")
@@ -1770,6 +1775,23 @@ class TestReviewFix03:
         assert (node["state"], node["session_id"], node["short_id"]) == ("running", "S-first", "first")
         assert w.runner.matching("claude", "stop") == []
 
+    def test_a_late_first_launch_listed_done_is_adopted(self, w: W) -> None:
+        # #424 pin 3: a listed `idle/done` session is a finished turn, not an ended one (L1): adopted, as in H6
+        w.sim.list_on_launch = False
+        assert spawn(w, "s1")[0] == 6
+        [first] = w.runner.matching("claude", "--bg")
+        old_token = re.search(r"token (node:\S+)", first.argv[-1])[1]  # type: ignore[index]
+        w.clock.advance(61)
+        reap(w)
+        assert node_row(w, "N1")["state"] == "reaped"
+        w.claude.listing = [agent("S-first", "r1-T1-g1", id="first", state="done")]
+        code, out = spawn(w, "s1")
+        assert code == 0, out
+        assert w.sim.effects("claude", "--bg") == 1  # adopted: no relaunch
+        assert out["token"] == old_token and out["result"]["name"] == "r1-T1-g1"
+        assert node_row(w, "N1")["session_id"] == "S-first"
+        assert w.runner.matching("claude", "stop") == []
+
     def test_a_late_first_launch_seen_after_the_relaunch_is_stopped(self, w: W) -> None:
         w.sim.list_on_launch = False
         assert spawn(w, "s1")[0] == 6
@@ -1998,9 +2020,135 @@ class TestTaskLess:
         assert tools.redact(f"x review:V3.1.{'c' * 32} y run:R1.1.{'d' * 32}") == (
             f"x review:V3.1.<redacted> y run:R1.1.{'d' * 32}"
         )
+        node = tokens.mint("node", "N12", 3, tokens.new_nonce())  # #424 D1: node tokens too, run tokens never
+        assert tools.redact(f"a {node} b") == "a node:N12.3.<redacted> b"
+        assert tools.redact(tools.redact(node)) == "node:N12.3.<redacted>"
+        assert tools.redact(f"xx{node}") == "xxnode:N12.3.<redacted>"  # glued to the text before it
 
 
 def dataclasses_replace(spec: tools.ToolSpec, **changes: Any) -> tools.ToolSpec:
     import dataclasses
 
     return dataclasses.replace(spec, **changes)
+
+
+# --------------------------------------------------------------------------- #424: a node launch's failure text (D1)
+
+_REFUSAL = "Workspace not trusted. Run claude in /x once and accept the trust prompt"
+_LAUNCH_CASES: dict[str, tuple[int, str, str]] = {
+    "untrusted-in-stderr": (1, "", _REFUSAL + "x" * 1000),
+    "untrusted-in-stdout": (1, _REFUSAL, "x" * 1000),
+    "plain": (1, "", "boom " * 300),
+    "timeout": (124, "", "timeout after 120s"),  # what `runner.Runner` returns on a timeout
+}
+
+
+def _launch_node(w: W, tool_name: str, key: str) -> tuple[int, Any]:
+    if tool_name == "resume":
+        _prep_resume(w)
+        return tool(w, "resume", key, message_file=w.files["msg"])
+    return spawn(w, key)
+
+
+class TestNodeLaunchFailure:
+    @pytest.mark.parametrize("tool_name", ["spawn", "resume"])
+    @pytest.mark.parametrize("case", sorted(_LAUNCH_CASES))
+    def test_a_failed_launch_carries_its_output_and_the_trust_hint(self, w: W, tool_name: str, case: str) -> None:
+        exit_code, stdout, stderr = _LAUNCH_CASES[case]
+        w.sim.launch_exit, w.sim.launch_stdout, w.sim.launch_stderr = exit_code, stdout, stderr
+        code, out = _launch_node(w, tool_name, "k1")
+        assert code == 1 and out["error"] == "TOOL_FAILED", out
+        row = call_row(w, tool_name, "k1")
+        assert row is not None and row["state"] == "failed"
+        result = json.loads(row["result"])
+        detail = result["detail"]
+        trust_dir = w.sim.wt.parent
+        assert detail == liveness.bg_failure(RunResult(exit_code, stdout, stderr), trust_dir, liveness.BG_ERROR_MAX)
+        assert detail.startswith(f"claude --bg exited {exit_code}") and len(detail) <= liveness.BG_ERROR_MAX
+        if case.startswith("untrusted"):
+            assert detail.startswith(f"claude --bg exited {exit_code}: x")
+            assert detail.endswith("; " + liveness.trust_hint(trust_dir))
+        else:
+            assert "not trusted" not in detail
+        if case == "plain":
+            assert detail.startswith("claude --bg exited 1: ") and detail.endswith("boom")
+        if case == "timeout":
+            assert detail == "claude --bg exited 124: timeout after 120s"
+        assert result["output"] == {"exit_code": exit_code}
+        assert out["detail"] == f"{tool_name}: {detail}"
+
+    @pytest.mark.parametrize("tool_name", ["spawn", "resume"])
+    @pytest.mark.parametrize("cut", ["in-the-prefix", "in-the-nonce"])
+    def test_a_node_token_is_redacted_before_the_cut(self, w: W, tool_name: str, cut: str) -> None:
+        nonce = tokens.new_nonce()
+        token = tokens.mint("node", "N1", 1, nonce)
+        budget = liveness.BG_ERROR_MAX - len("claude --bg exited 1: ")
+        inside = 3 if cut == "in-the-prefix" else len(token) // 2  # where the tail's first character falls
+        assert (inside < len("node:N1.")) == (cut == "in-the-prefix")
+        w.sim.launch_exit = 1
+        w.sim.launch_stderr = "x" * 1000 + token + "-" * (budget - len(token) + inside)
+        code, out = _launch_node(w, tool_name, "k1")
+        assert code == 1 and out["error"] == "TOOL_FAILED"
+        row = call_row(w, tool_name, "k1")
+        assert row is not None
+        for blob in (row["result"], json.dumps(out)):
+            assert not any(nonce[i : i + 8] in blob for i in range(len(nonce) - 7))
+        assert len(json.loads(row["result"])["detail"]) <= liveness.BG_ERROR_MAX
+
+    @pytest.mark.parametrize(
+        "wrap",
+        [r"\1\n\2", r"\1\2\n  ", "\\1\\2\x1b[0m\n\x1b[2m", r"\1\2 │\n│ ", "\\1\\2\u200b", r"\1\2-\n"],
+        ids=["after-prefix", "in-nonce", "ansi", "box", "zero-width", "hyphen"],
+    )
+    def test_a_wrapped_node_token_is_redacted_by_its_nonce(self, w: W, wrap: str) -> None:
+        # #424 fix #01 F4: an echo that wraps the token after its prefix leaves no whole token for `redact`
+        w.sim.launch_exit = 1
+        # wrapped after the prefix, or inside the nonce (fix #02 G6)
+        w.sim.launch_output = lambda argv: re.sub(r"(node:N\d+\.\d+\.)([0-9a-f]{10})", wrap, argv[-1])
+        code, out = spawn(w, "k1")
+        assert code == 1 and out["error"] == "TOOL_FAILED"
+        nonce = node_row(w, "N1")["nonce"]
+        row = call_row(w, "spawn", "k1")
+        assert row is not None
+        for blob in (row["result"], json.dumps(out)):  # no 8-character slice of the nonce (fix #03 H2)
+            assert not any(nonce[i : i + 8] in blob for i in range(len(nonce) - 7)) and "<redacted>" in blob
+
+    @pytest.mark.parametrize("tool_name", ["spawn", "resume"])
+    @pytest.mark.parametrize("text", ["---\nfront: matter\n", "- build it", "-p go", "a\x00b"])
+    def test_a_leading_dash_is_refused_before_any_launch(self, w: W, tool_name: str, text: str) -> None:
+        # #424 fix #01 F3: the prompt is the argv's last positional; `claude` would read a leading `-` as an option
+        for name in ("prompt", "msg"):
+            Path(w.files[name]).write_text(text)
+        code, out = _launch_node(w, tool_name, "k1")
+        why = "NUL" if "\x00" in text else "starts with `-`"
+        assert code == 1 and out["error"] == "TOOL_FAILED" and why in out["detail"], out
+        assert w.sim.effects("claude", "--bg") == 0
+        row = call_row(w, tool_name, "k1")
+        assert row is not None and row["state"] == "failed"
+        node = node_row(w, "N1")  # as after a model-policy refusal: reserved, never launched (fix #02, blind-hunter)
+        assert (node["state"], node["launch_at"]) == ("spawning", None)
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {"agent": "a\x00b"},
+            {"agent": "-p"},
+            {"model": "m\x00"},
+            {"model": "--x"},
+            {"model": -1},  # a JSON number: the argv would carry `--model -1`
+            {"permission_mode": "a\x00"},
+        ],
+    )
+    def test_an_argv_value_claude_cannot_take_is_usage(self, w: W, extra: dict[str, str]) -> None:
+        # #424 fix #03 H8: refused when the steps are built, before any effect
+        args = {"agent": "qs-node", "permission_mode": "auto", "prompt_file": w.files["prompt"], **extra}
+        code, out = tool(w, "spawn", "k1", **args)
+        assert code == 2 and out["error"] == "USAGE", out
+        assert w.sim.effects("claude", "--bg") == 0 and call_row(w, "spawn", "k1") is None
+
+    @pytest.mark.parametrize("text", ["", " \n\t"])
+    def test_an_empty_resume_message_is_refused(self, w: W, text: str) -> None:
+        Path(w.files["msg"]).write_text(text)
+        code, out = _launch_node(w, "resume", "k1")
+        assert code == 1 and out["error"] == "TOOL_FAILED" and "is empty" in out["detail"], out
+        assert w.sim.effects("claude", "--bg") == 0

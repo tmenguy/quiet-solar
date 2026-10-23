@@ -31,6 +31,8 @@ def parse_payload(text: str) -> Any:
         return json.loads(text)
     except ValueError as exc:
         raise errors.CpError("USAGE", f"the payload is not JSON: {exc}") from exc
+    except RecursionError as exc:  # nested too deep for the decoder (#424 fix #03 H4)
+        raise errors.CpError("USAGE", "the payload is not JSON this decoder can read: nested too deep") from exc
 
 
 def _check_recipient(conn: sqlite3.Connection, run_id: str, recipient: str) -> None:

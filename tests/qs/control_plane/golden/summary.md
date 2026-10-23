@@ -4,9 +4,43 @@ Task T1 · issue #11 · state `proposed`
 
 ## Digest
 
-Built the core.
+### Goal
 
-All green.
+> Ship the Control Plane core.
+
+### Why
+
+> Nodes need one ledger.
+
+### Plan
+
+> One SQLite DB.
+>
+> #### Modules
+>
+> - db, tasks
+
+### Done
+
+> Built the core.
+>
+> All green.
+
+### Problems
+
+_None._
+
+### Decisions
+
+> Use WAL.
+
+### Questions
+
+_None._
+
+### Discovered
+
+_None._
 
 ## Acceptance criteria
 

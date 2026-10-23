@@ -561,10 +561,11 @@ class TestConvergence:
         lw.round()
         assert lw.conv()["converged"] is False and lw.conv()["latest_round"] == 2
 
-    def test_a_report_of_another_phase_spelling_does_not_count(self, lw: L) -> None:
+    def test_a_misspelled_phase_is_refused(self, lw: L) -> None:
         lw.round()
-        lw.report("converged", phase="Build")
-        lw.report("converged", phase="build ")
+        assert code_of(lw.report, "converged", phase="Build") == "USAGE"  # #424 D4: refused, never stored
+        assert code_of(lw.report, "converged", phase="build ") == "USAGE"
+        assert lw.conn.execute("SELECT count(*) FROM reports").fetchone()[0] == 0
         assert lw.conv()["converged"] is False
 
     def test_blocking_and_consistent(self, lw: L) -> None:

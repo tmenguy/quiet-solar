@@ -716,8 +716,8 @@ def _conf_digest_put(p: argparse.ArgumentParser) -> None:
 
 
 def _digest_put(args: argparse.Namespace, io: Io) -> dict[str, Any]:
-    body = read_file(args.file)
-    return _write(io, reports.put_digest, io.deps.clock, token=args.token, task_id=args.task, body=body)
+    digest = messages.parse_payload(read_file(args.file))  # #424 D5: JSON, never parsed as text
+    return _write(io, reports.put_digest, io.deps.clock, token=args.token, task_id=args.task, digest=digest)
 
 
 def _node_stop(args: argparse.Namespace, io: Io) -> dict[str, Any]:

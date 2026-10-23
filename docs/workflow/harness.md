@@ -414,10 +414,11 @@ hand-sets a model.
   Control Plane tool launches; every other new row is flat. The intent is
   that a no-model `tool spawn` passes the policy's `--model` and an
   `effortLevel` (through `--settings`) to the `--bg` node session,
-  overriding its frontmatter (`models.spawn_policy`). Whether
-  `effortLevel` through `--settings` takes effect on a `--bg` session is
-  **unverified** — child 6b observes it on the first real node spawn and
-  records the result here.
+  overriding its frontmatter (`models.spawn_policy`). `effortLevel`
+  through `--settings` **does** take effect on a `--bg` session:
+  checked live on 2026-10-18 (#424 L6, Claude Code 2.1.302 — the
+  session's banner showed the effort sent). The post-merge node run of
+  #424 (AC9) will confirm it on a real node.
 - **One complete row per harness** in `HARNESS_MODELS`, in that
   harness's own vocabulary, **both in exact versions**:
 
@@ -442,6 +443,9 @@ hand-sets a model.
   pin's `effortLevel`; a `--bg` node gets the spawn's `--settings`
   `effortLevel`, or none for a caller model or a `fast` row, in which
   case it inherits the worktree's pin; `fast` (`claude-haiku-5-5`) sets none.
+  A bare `claude --bg --resume` of an ended node keeps the model and
+  the effort it was spawned with, with every other launch option
+  (#424 L7), so `tool resume` passes no flag.
 - **Why full IDs, and no repo-wide alias pin.** The documented settings
   `env` pins (`ANTHROPIC_DEFAULT_OPUS_MODEL`, …) are **not applied** to
   the process (observed on 2.1.278), so aliases float to the provider
