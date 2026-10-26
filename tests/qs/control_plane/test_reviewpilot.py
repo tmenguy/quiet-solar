@@ -824,7 +824,7 @@ class TestStopClosed:
             agent("", "n-V1"),  # no target at all: no stop, no error
             agent("S-other", "other", id="o1"),
         ]
-        assert stop(pw) == ["V1"] and stops(fake_runner) == ["a1", "S-b"]
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["S-b", "a1"]  # sorted by target
 
     def test_a_session_and_its_same_named_fork(self, pw, fake_runner) -> None:
         """AC2: both are stopped; done only once neither is listed. Two stops in a tick are one attempt."""
@@ -832,10 +832,10 @@ class TestStopClosed:
         fork = agent("S-f", "n-V1", id="fork")
         pw["claude"].listing = [agent("S-1", id="short-1"), fork]
         stop(pw)
-        assert stops(fake_runner) == ["short-1", "fork"] and reviewpilot._state.attempts == {"V1": 1}
+        assert stops(fake_runner) == ["fork", "short-1"] and reviewpilot._state.attempts == {"V1": 1}
         pw["claude"].listing = [fork]
         later(pw)
-        assert stops(fake_runner) == ["short-1", "fork", "fork"] and "V1" not in reviewpilot._state.stopped
+        assert stops(fake_runner) == ["fork", "short-1", "fork"] and "V1" not in reviewpilot._state.stopped
         assert reviewpilot._state.attempts == {"V1": 2}
         pw["claude"].listing = []
         later(pw, 2)
@@ -931,6 +931,23 @@ class TestStopClosed:
         fake_runner.on(["claude", "stop"], RunResult(1, out, err))
         assert stop(pw) == ["V1"]
         assert capsys.readouterr().err == f"[cp-review-pilot] review V1: {line}\n"
+
+    def test_a_failed_stop_with_a_long_stderr_logs_its_tail(self, pw, fake_runner, capsys) -> None:
+        """AC4: a stderr over ``STOP_TAIL``: the logged tail fits, starts on a word and ends the stderr."""
+        from control_plane.runner import RunResult
+
+        err = " ".join(f"word{n:03d}" for n in range(40))  # 319 characters, words of 7
+        assert len(err) > reviewpilot.STOP_TAIL
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        fake_runner.on(["claude", "stop"], RunResult(1, "", err))
+        assert stop(pw) == ["V1"]
+        prefix = "[cp-review-pilot] review V1: claude stop exited 1: "
+        line = capsys.readouterr().err
+        assert line.startswith(prefix) and line.endswith("\n")
+        tail = line[len(prefix) : -1]
+        assert 0 < len(tail) <= reviewpilot.STOP_TAIL and err.endswith(tail)
+        assert tail.startswith("word") and err[-len(tail) - 1] == " "
 
     def test_an_unknown_listing_changes_nothing(self, pw, monkeypatch, fake_runner) -> None:
         """AC4: no stop, nothing marked; exactly a listing and its beat."""
@@ -1031,7 +1048,18 @@ class TestStopClosed:
         pw["claude"].listing = [agent("S-1", id="short-1")]
         fake_runner.on(["claude", "stop"], RunResult(1, "", "no"))
         reviewpilot._state.attempts["V1"] = 10_000
-        assert stop(pw) == ["V1"] and reviewpilot._state.retry_tick == {"V1": reviewpilot._state.tick + 120}
+        cap = int(reviewpilot.STOP_BACKOFF_MAX_S // reviewpilot.PILOT_EVERY_S)
+        assert stop(pw) == ["V1"] and reviewpilot._state.retry_tick == {"V1": reviewpilot._state.tick + cap}
+
+    def test_the_backoff_is_at_least_one_tick(self, pw, fake_runner, monkeypatch) -> None:
+        """AC5: a pilot period above ``STOP_BACKOFF_MAX_S`` still backs off one tick (the cap is never 0)."""
+        from control_plane.runner import RunResult
+
+        monkeypatch.setattr(reviewpilot, "PILOT_EVERY_S", reviewpilot.STOP_BACKOFF_MAX_S * 2)
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        fake_runner.on(["claude", "stop"], RunResult(1, "", "no"))
+        assert stop(pw) == ["V1"] and reviewpilot._state.retry_tick == {"V1": reviewpilot._state.tick + 1}
 
     def test_a_slow_listing_does_not_delay_the_retry(self, pw, fake_runner) -> None:
         """AC5: a listing that takes ``HOOK_SUBPROCESS_S`` still leaves the retry on the very next tick."""
@@ -1057,9 +1085,43 @@ class TestStopClosed:
             pw["clock"].advance(ticks.HOOK_SUBPROCESS_S)
             return RunResult(124, "", "timed out")
 
-        fake_runner.on(["claude", "stop", "short-1"], hang)
+        fake_runner.on(["claude", "stop", "fork"], hang)  # "fork" sorts first
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["fork"]
+        assert later(pw) == ["V1"] and stops(fake_runner) == ["fork", "short-1", "fork"]
+
+    def test_a_reordered_listing_does_not_starve_a_sibling(self, pw, fake_runner) -> None:
+        """AC5: the rotation runs over the matches sorted by target, whatever order the CLI lists them in."""
+        from control_plane.runner import RunResult
+
+        closed(pw, "V1", session="S-1")
+        main, fork = agent("S-1", id="short-1"), agent("S-f", "n-V1", id="fork")
+
+        def hang(c: Any) -> RunResult:
+            pw["clock"].advance(ticks.HOOK_SUBPROCESS_S)
+            return RunResult(124, "", "timed out")
+
+        fake_runner.on(["claude", "stop", "fork"], hang)
+        pw["claude"].listing = [fork, main]
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["fork"]
+        pw["claude"].listing = [main, fork]  # reordered between ticks
+        assert later(pw) == ["V1"] and stops(fake_runner) == ["fork", "short-1", "fork"]
+
+    def test_a_target_listed_twice_is_stopped_once(self, pw, fake_runner) -> None:
+        """AC2: the matches are deduplicated by target: one ``claude stop`` per target per tick."""
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1"), agent("S-1", "n-V1", id="short-1")]
         assert stop(pw) == ["V1"] and stops(fake_runner) == ["short-1"]
-        assert later(pw) == ["V1"] and stops(fake_runner) == ["short-1", "fork", "short-1"]
+
+    def test_an_exit_0_still_listed_under_a_new_target_is_logged(self, pw, fake_runner, capsys) -> None:
+        """AC4: stopped by its session id (no short id yet), then listed with a short id: still the same session."""
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1")]
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["S-1"]
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        assert later(pw) == ["V1"]
+        assert capsys.readouterr().err.splitlines() == [
+            "[cp-review-pilot] review V1: claude stop exited 0 but the session is still listed"
+        ]
 
     def test_a_budget_cut_fork_still_listed_is_not_logged(self, pw, fake_runner, capsys) -> None:
         """AC4: the exit-0-still-listed line is only for a target whose stop exited 0, not one the budget cut off."""
@@ -1070,12 +1132,12 @@ class TestStopClosed:
 
         def slow_ok(c: Any) -> RunResult:
             pw["clock"].advance(ticks.HOOK_SUBPROCESS_S)
-            pw["claude"].listing = [a for a in pw["claude"].listing if a.id != "short-1"]
+            pw["claude"].listing = [a for a in pw["claude"].listing if a.id != "fork"]
             return RunResult(0, "", "")
 
-        fake_runner.on(["claude", "stop", "short-1"], slow_ok)
-        assert stop(pw) == ["V1"] and stops(fake_runner) == ["short-1"]
-        assert later(pw) == ["V1"] and stops(fake_runner) == ["short-1", "fork"]
+        fake_runner.on(["claude", "stop", "fork"], slow_ok)  # "fork" sorts first: "short-1" is cut off
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["fork"]
+        assert later(pw) == ["V1"] and stops(fake_runner) == ["fork", "short-1"]
         assert capsys.readouterr().err == ""
 
     def test_an_exit_0_still_listed_is_logged_after_a_failure_too(self, pw, fake_runner, capsys) -> None:

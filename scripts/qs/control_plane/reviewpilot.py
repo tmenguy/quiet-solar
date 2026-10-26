@@ -22,12 +22,14 @@ Every ``PILOT_EVERY_S`` (a ``ticks.Throttle``), after ``detectors`` and before `
    stop interrupts it on purpose, since its token is void. Every closed review whose ``claude --bg`` ran
    (``launch_at`` set) and whose ``finished_at`` is within ``STOP_WINDOW_S`` is a candidate until it is confirmed
    gone: one listing, a beat, then ``claude stop`` (``HOOK_SUBPROCESS_S``, a beat after each) for every listed agent
-   with the review's ``session_id`` or ``name``, fewest attempts first (a review's own matches rotated by its
-   attempts), within a ``HOOK_SUBPROCESS_S`` budget. A review that got stops is retried in pilot ticks: the next
-   tick, then after 2, 4 … ticks, at most ``STOP_BACKOFF_MAX_S / PILOT_EVERY_S`` (120) ticks, 1 h; while it backs
-   off it is skipped (no stop, and no listing for it alone). Best-effort: a failed stop is logged once per exit
-   code, a target whose stop exited 0 but that is still listed once per review; an unknown listing changes nothing. A candidate no known listing shows is done — one without a ``session_id``
-   only past ``REQUEST_TTL_S`` from its launch (its session may still appear late).
+   with the review's ``session_id`` or ``name``, fewest attempts first (a review's own matches, one per target,
+   sorted by target and rotated by its attempts), within a ``HOOK_SUBPROCESS_S`` budget. A review that got stops
+   is retried in pilot ticks: the next tick, then after 2, 4 … ticks, at most ``STOP_BACKOFF_MAX_S /
+   PILOT_EVERY_S`` (120) ticks, 1 h; while it backs off it is skipped (no stop, and no listing for it alone).
+   Best-effort: a failed stop is logged once per review and exit code, a target whose stop exited 0 but that is
+   still listed once per review; an unknown listing changes nothing. A candidate no known listing shows is done —
+   one without a ``session_id`` only past ``REQUEST_TTL_S`` from its launch (its session may still appear late;
+   until then it costs one listing per tick).
 
 The daemon holds no token: the grant (``review:V<n>.0.<nonce>``) is the launcher's only authority.
 """
@@ -84,7 +86,7 @@ class _State:
     stopped: set[str] = field(default_factory=set)  # closed reviews confirmed gone
     attempts: dict[str, int] = field(default_factory=dict)  # ticks that sent the review a stop (fewest first)
     retry_tick: dict[str, int] = field(default_factory=dict)  # a review backing off: skipped until that tick
-    stopped_ok: dict[str, set[str]] = field(default_factory=dict)  # review → the targets whose stop exited 0
+    stopped_ok: dict[str, set[str]] = field(default_factory=dict)  # review → the ids, session ids whose stop exited 0
     stop_logged: set[tuple[str, int]] = field(default_factory=set)  # (review, exit code) already logged
     tick: int = 0  # step 4's runs (one per due tick): the backoff's clock, never pruned
 
@@ -545,13 +547,14 @@ def _closed_reviews(conn: sqlite3.Connection, clock: clock_mod.Clock) -> list[sq
 
 
 def _matches(row: sqlite3.Row, listing: Sequence[liveness.Agent]) -> list[liveness.Agent]:
-    """Every listed agent of the review (its ``session_id``, or its unique ``name``: a duplicate fork too)."""
-    return [
-        a
-        for a in listing
-        if (a.id or a.session_id)
-        and ((row["session_id"] is not None and a.session_id == row["session_id"]) or a.name == row["name"])
-    ]
+    """Every listed agent of the review (its ``session_id``, or its unique ``name``: a duplicate fork too), one per
+    target (``id``, else ``session_id``), sorted by target: the rotation does not depend on the listing's order."""
+    by_target: dict[str, liveness.Agent] = {}
+    for a in listing:
+        target = a.id or a.session_id
+        if target and ((row["session_id"] is not None and a.session_id == row["session_id"]) or a.name == row["name"]):
+            by_target.setdefault(target, a)
+    return [by_target[t] for t in sorted(by_target)]
 
 
 def _stop(seams: Seams, target: str) -> RunResult:
@@ -585,13 +588,14 @@ def _log_still_listed(review_id: str) -> None:
 def _backoff(review_id: str) -> int:
     """The ticks before the review's next stop: 1, doubled per attempt, at most ``STOP_BACKOFF_MAX_S / PILOT_EVERY_S``
     (int arithmetic, the exponent clamped: no overflow)."""
-    return min(2 ** min(_state.attempts[review_id] - 1, 16), int(STOP_BACKOFF_MAX_S // PILOT_EVERY_S))
+    cap = max(1, int(STOP_BACKOFF_MAX_S // PILOT_EVERY_S))  # a pilot period above the max still backs off a tick
+    return min(2 ** min(_state.attempts[review_id] - 1, 16), cap)
 
 
-def _rotated(found: list[liveness.Agent], attempts: int) -> list[liveness.Agent]:
+def _rotated(agents: list[liveness.Agent], attempts: int) -> list[liveness.Agent]:
     """A review's matches rotated by its attempts: a target whose stop hangs cannot starve the others."""
-    k = attempts % len(found) if found else 0
-    return found[k:] + found[:k]
+    k = attempts % len(agents) if agents else 0
+    return agents[k:] + agents[:k]
 
 
 def stop_closed(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) -> list[str]:
@@ -620,16 +624,18 @@ def stop_closed(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) 
     for row in candidates:  # gone (L3/L9); one never identified only once its session can no longer appear late
         if not matches[row["id"]] and (row["session_id"] is not None or row["launch_at"] <= settled):
             _state.stopped.add(row["id"])
-        elif any((a.id or a.session_id) in _state.stopped_ok.get(row["id"], set()) for a in matches[row["id"]]):
+        elif any({a.id, a.session_id} & _state.stopped_ok.get(row["id"], set()) for a in matches[row["id"]]):
             _log_still_listed(row["id"])
     started = clock.now()
     sent: list[str] = []
     ordered = sorted(candidates, key=lambda r: _state.attempts.get(r["id"], 0))  # stable: oldest first on a tie
-    for row, found in [(r, a) for r in ordered for a in _rotated(matches[r["id"]], _state.attempts.get(r["id"], 0))]:
+    for row, target_agent in [
+        (r, a) for r in ordered for a in _rotated(matches[r["id"]], _state.attempts.get(r["id"], 0))
+    ]:
         elapsed = (clock.now() - started).total_seconds()
         if elapsed < 0 or elapsed >= ticks.HOOK_SUBPROCESS_S:  # a clock stepped back (NTP) spends the budget too
             break  # the rest next tick
-        rid, target = row["id"], found.id or found.session_id
+        rid, target = row["id"], target_agent.id or target_agent.session_id
         res = _stop(seams, target)
         daemon.beat(conn, clock)
         if rid not in sent:  # one attempt per tick: a same-named fork does not double it
@@ -637,7 +643,7 @@ def stop_closed(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) 
             _state.attempts[rid] = _state.attempts.get(rid, 0) + 1
             _state.retry_tick[rid] = _state.tick + _backoff(rid)
         if res.ok:
-            _state.stopped_ok.setdefault(rid, set()).add(target)
+            _state.stopped_ok.setdefault(rid, set()).update(t for t in (target_agent.id, target_agent.session_id) if t)
         else:
             _log_stop_failure(rid, res)
     return sent
