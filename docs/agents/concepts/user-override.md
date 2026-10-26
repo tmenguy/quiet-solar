@@ -252,8 +252,19 @@ command state.
   an in-memory flag set by the hook outside `_USER_REPLAY_FOR_INIT`, never
   persisted) postdates the unplug, so the store — and its freeze — is
   kept. A shorter flap or a post-boot user action lifts only the pins
-  above (the QS-416 behaviour). The INFO line ends with `car user state
-  cleared` / `kept`. No proof (a stale `off`,
+  above (the QS-416 behaviour). The pin lift is immediate; the car-store
+  decision is not tied to it (review fix #03 R3-M1): the recorder is down
+  while HA is, so the first `off` of a downtime unplug is stamped by the
+  boot poll, seconds before the first proof — too fresh to be debounced.
+  The lift leaves a **pending check**
+  (`QSChargerGeneric._check_pending_boot_car_wipe`, re-run at every
+  decision of both plug branches through the boot guard) that wipes once
+  the `off` has lasted the window, and is dropped — store kept — when the
+  car's latest plug reading is `on` (a flap, or a later session), on a
+  post-boot user action on the car, when the car leaves the home, or
+  `CHARGER_BOOT_TIME_DATA_EXPIRATION_S` after the lift. The INFO line ends
+  with `car user state cleared` / `kept` / `pending`; a pending check logs
+  its outcome when it settles. No proof (a stale `off`,
   `on`, holes, no sensor, no earlier reading, no or invalid saved time)
   keeps it; a saved time in the future (clock behind) keeps it and leaves
   the guard armed; an `off` reported only after the boot window does not

@@ -2765,6 +2765,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._next_charge_target = None
         self._next_charge_target_energy = None
 
+    def reset_charge_targets(self) -> None:
+        """QS-431: public entry for the charger-card reset (lazy default, QS-352)."""
+        self._reset_charge_targets()
+
     async def setup_car_charge_target_if_needed(self, asked_target_charge=None):
 
         target_charge = asked_target_charge
