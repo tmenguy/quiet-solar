@@ -4,7 +4,7 @@ slug: user-override
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-10-16
+last_verified: 2026-10-26
 ---
 
 # User override
@@ -185,8 +185,10 @@ command state.
   (`USER_ORIGINATED_USER_FROZEN`, read via `QSCar.is_user_frozen()`) —
   only outside `_USER_REPLAY_FOR_INIT`, so an entity restore replay
   never freezes. A frozen car gets no automatic person constraint until
-  the store is cleared (`clear_all_user_originated`: unplug, reset,
-  pin taken, stale/unauthorised pin); a person ASAP keeps its person
+  the store is cleared (`clear_all_user_originated`: unplug — live,
+  or seen by the QS-416 boot guard while HA was down — the reset button
+  of the car card **or** of the charger card, pin taken,
+  stale/unauthorised pin); a person ASAP keeps its person
   target unless the car is frozen **and** carries a target marker
   (refined #48 escape).
   **QS-416:** the same hook also **pins the car↔charger association**:
@@ -238,7 +240,11 @@ command state.
   sensor stuck at `off` before the save (the ID.buzz reports `off` while
   plugged) gets a fresh `off` sample after the boot. On a proof, the
   charger pin, the car's charger choice naming that charger and the boot
-  car are dropped, and the normal rules apply. No proof (a stale `off`,
+  car are dropped, and the normal rules apply. **QS-431:** the proof is
+  a physical unplug for the car too, as in the live unplug branch: its
+  whole user-originated store (the `user_frozen` flag, the person pin,
+  the user markers) and its system person hold are cleared as well —
+  only a charger choice naming *another* charger survives. No proof (a stale `off`,
   `on`, holes, no sensor, no earlier reading, no or invalid saved time)
   keeps it; a saved time in the future (clock behind) keeps it and leaves
   the guard armed; an `off` reported only after the boot window does not

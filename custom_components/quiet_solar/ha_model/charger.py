@@ -2690,7 +2690,12 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
     async def user_clean_and_reset(self):
         # manual reset the user selected car for charger
+        car = self.car  # captured before the reset below detaches it
         await super().user_clean_and_reset()
+        # QS-431: the charger-card buttons act on the attached car (and freeze it): the
+        # charger-card reset clears the car's user store too, like the car-card reset.
+        if car is not None:
+            car.clear_all_user_originated()
         await self.update_charger_for_user_change()
 
     async def user_clean_constraints(self):
@@ -3670,8 +3675,17 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
         self._boot_user_pin = None
         self.clear_user_originated(USER_ORIGINATED_CAR_NAME)
-        if car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) == self.name:
-            car.clear_user_originated(USER_ORIGINATED_CHARGER_NAME)
+        # QS-431: the proven unplug is a physical unplug for the car's user state too,
+        # as in the live unplug branch: wipe its user store (the freeze flag, the person
+        # pin, the user markers) and its system person hold, or the car would stay
+        # frozen — no person constraint — at the next plug. Only a charger choice naming
+        # ANOTHER charger survives (QS-416 R2-2). Direct dict write: `set_user_originated`
+        # would run the car's snapshot hook and re-freeze it.
+        charger_choice = car.get_user_originated(USER_ORIGINATED_CHARGER_NAME)
+        car.clear_all_user_originated()
+        if charger_choice is not None and charger_choice != self.name:
+            car._user_originated[USER_ORIGINATED_CHARGER_NAME] = charger_choice
+        car.clear_system_person_hold()
         if self._boot_car is not None and self._boot_car.name == car.name:
             self._boot_car = None
         _LOGGER.info(
@@ -4205,9 +4219,14 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         return not ct.from_user and ct.end_of_constraint == DATETIME_MAX_UTC
 
     def _non_filler_constraints_signature(self) -> list[tuple]:
-        """QS-431: identity + shape of the real (non-filler) constraints, to detect a change."""
+        """QS-431: shape of the real (non-filler) constraints, to detect a change.
+
+        Shape only — what the filler's start depends on. No object identity: the
+        agenda constraint is rebuilt every cycle with the live SOC as its start, and a
+        replaced constraint of the same shape must keep the filler (no churn).
+        """
         return [
-            (id(ct), ct.load_param, ct.type, ct.target_value, ct.end_of_constraint)
+            (ct.load_param, ct.type, ct.target_value, ct.end_of_constraint)
             for ct in self._constraints
             if ct is not None and not self._is_filler_constraint(ct)
         ]
@@ -4919,8 +4938,13 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                                         car_charge_person.end_of_constraint = next_usage_time
                                         need_ct_update = True
                                     # QS-431: compare at display precision — a sub-percent drift
-                                    # of the person need must not change the notified state
-                                    if int(round(car_charge_person.target_value)) != int(round(target_charge)):
+                                    # of the person need must not change the notified state —
+                                    # with a half-percent hysteresis, so a need jittering around
+                                    # a .5 boundary does not flip the rounded value every poll
+                                    if (
+                                        int(round(car_charge_person.target_value)) != int(round(target_charge))
+                                        and abs(target_charge - car_charge_person.target_value) >= 0.5
+                                    ):
                                         car_charge_person.target_value = target_charge
                                         need_ct_update = True
                                     if need_ct_update:

@@ -209,7 +209,9 @@ Person re-allocated away / covered / need met → person constraint removed
   and the "trip not covered" notifications. Explicit consequence:
   **pinning a person on a car disables that car's person-trip charging
   until unplug / reset** (or the pin is taken by another car). The
-  freeze survives restarts. An HA restart replay, the QS-353 system
+  freeze survives restarts; an unplug while HA was down (proven by the
+  QS-416 boot guard) ends it, and so does the reset button of the car
+  card or of the charger card. An HA restart replay, the QS-353 system
   hold and the charger-card car pick do **not** freeze. A person
   constraint already ASAP at freeze time runs to completion, retargeted
   to the user's target marker if any.

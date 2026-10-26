@@ -463,3 +463,127 @@ async def test_legacy_untagged_filler_replaced_on_change():
     assert fillers[0] is not legacy
     assert fillers[0].load_info == FILLER_TAG
     assert fillers[0].initial_value == pytest.approx(PERSON_TARGET)
+
+
+# --------------------------------------------------------------------------- #
+# Review fix #01 — the freeze ends at every unplug / reset the user can make, the
+# filler survives an identical-shape rebuild, the rounded compare has hysteresis
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_unplug_during_downtime_unfreezes_car():
+    """S1: a frozen car unplugged while HA was down is unfrozen by the boot guard (the
+    QS-416 proven unplug), and gets its person constraint at the next plug."""
+    charger, car, now, thomas, _ = _fixture()
+    car.set_qs_bump_solar_charge_priority(True)  # genuine user action: freeze + pin
+    assert car.get_user_originated("user_frozen") is True
+    assert charger.get_user_originated("car_name") == car.name
+    car._system_person_hold_name = "Thomas Menguy"
+    car._system_person_hold_until = now + timedelta(hours=1)
+
+    # HA restart: the car is not attached at boot; the persisted pin arms the guard
+    saved_at = now - timedelta(minutes=30)
+    charger.detach_car()
+    charger._boot_user_pin = (car.name, saved_at, "on")
+    # the car's plug sensor saw the unplug during the downtime
+    car.car_plugged = "binary_sensor.zoe_plugged"
+    car.attach_ha_state_to_probe(car.car_plugged, is_numerical=False)
+    car._entity_probed_state[car.car_plugged] = []
+    car._add_state_history(car.car_plugged, "off", saved_at + timedelta(minutes=15), None, {})
+
+    charger.is_not_plugged = MagicMock(return_value=True)
+    charger.is_plugged = MagicMock(return_value=False)
+    t = now
+    await charger.check_load_activity_and_constraints(t)
+    assert charger._boot_user_pin is None  # precondition: the guard fired
+    assert charger.get_user_originated("car_name") is None
+    assert car.get_user_originated("user_frozen") is None
+    assert car._system_person_hold_name is None
+
+    # that evening: the car is plugged again, with a person need
+    charger.is_not_plugged = MagicMock(return_value=False)
+    charger.is_plugged = MagicMock(return_value=True)
+    t += STEP
+    plug_car(charger, car, t)
+    _set_need(car, t + timedelta(hours=6), PERSON_TARGET, thomas)
+    await _cycle(charger, t)
+    assert len(_person_cts(charger)) == 1
+
+
+@pytest.mark.asyncio
+async def test_charger_card_reset_unfreezes_car():
+    """S2: "charge now" from the charger card freezes the car; the charger-card reset
+    must unfreeze it, so the person constraint is pushed again."""
+    charger, car, now, thomas, _ = _fixture()
+    deadline = now + timedelta(hours=6)
+    _set_need(car, deadline, PERSON_TARGET, thomas)
+
+    t = now
+    await _cycle(charger, t)
+    assert len(_person_cts(charger)) == 1  # precondition: not frozen, pushed
+
+    await charger.user_force_charge_now()  # charger-card "charge now"
+    assert car.get_user_originated("user_frozen") is True
+
+    await charger.user_clean_and_reset()  # charger-card reset
+    assert car.get_user_originated("user_frozen") is None
+
+    t += STEP
+    plug_car(charger, car, t)
+    await _cycle(charger, t)
+    assert len(_person_cts(charger)) == 1
+
+
+@pytest.mark.asyncio
+async def test_filler_kept_when_agenda_rebuilt_with_same_shape():
+    """N1: the agenda constraint is rebuilt each cycle with the live SOC as its start;
+    a replaced-but-identical-shape constraint must keep the very same filler."""
+    charger, car, now, thomas, state = _fixture()
+    await car.user_set_next_charge_target(80, for_init=True)  # agenda target < default
+    car.get_next_scheduled_event = AsyncMock(return_value=(now + timedelta(hours=5), now + timedelta(hours=6)))
+    _set_need(car, None, None, None)
+
+    t = now
+    await _cycle(charger, t)
+    agenda = [c for c in _non_person_cts(charger) if c.end_of_constraint != DATETIME_MAX_UTC]
+    assert len(agenda) == 1  # precondition: the agenda constraint is live
+    fillers = _fillers(charger)
+    assert len(fillers) == 1
+    filler = fillers[0]
+
+    for _ in range(6):
+        state["soc"] += 1.0
+        t += STEP
+        await _cycle(charger, t)
+        fillers = _fillers(charger)
+        assert len(fillers) == 1
+        assert fillers[0] is filler
+
+
+@pytest.mark.asyncio
+async def test_person_target_rounding_jitter_does_not_rewrite():
+    """N2: a person need jittering around a .5 boundary must not flip the target on
+    each poll (half-percent hysteresis); a genuine move still rewrites."""
+    charger, car, now, thomas, _ = _fixture()
+    deadline = now + timedelta(hours=6)
+
+    _set_need(car, deadline, 44.49, thomas)
+    t = now
+    baseline = await _cycle(charger, t)
+    assert _person_cts(charger)[0].target_value == pytest.approx(44.49)
+
+    for jitter in (44.51, 44.48, 44.52):
+        _set_need(car, deadline, jitter, thomas)
+        t += STEP
+        h = await _cycle(charger, t)
+        person = _person_cts(charger)
+        assert len(person) == 1
+        assert person[0].target_value == pytest.approx(44.49)
+        assert h == baseline
+
+    _set_need(car, deadline, 45.2, thomas)
+    t += STEP
+    h = await _cycle(charger, t)
+    person = _person_cts(charger)
+    assert len(person) == 1
+    assert person[0].target_value == pytest.approx(45.2)
+    assert h != baseline
