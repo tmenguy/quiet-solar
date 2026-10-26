@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from control_plane import activeloop, alerts, daemon, db, errors, reviewpilot, reviews, schema_reviews
+from control_plane import activeloop, alerts, daemon, db, errors, reviewpilot, reviews, schema_reviews, ticks
 
 from .conftest import FakeProc, agent, insert_task, open_run, run_cli, sql
 
@@ -529,22 +529,26 @@ def review(
     launch_age: float | None = None,
     session: str | None = None,
     key: str = "pilot:e:1",
+    rid: str = "V1",
+    name: str = "n",
+    finished_age: float | None = None,
 ) -> None:
     from control_plane import clock as clock_mod
 
     created = clock_mod.stamp(pw["clock"], plus=-age)
     launch = None if launch_age is None else clock_mod.stamp(pw["clock"], plus=-launch_age)
+    finished = None if finished_age is None else clock_mod.stamp(pw["clock"], plus=-finished_age)
     sql(
         pw["db"],
         "INSERT INTO reviews (id, kind, coalesce_key, state, agent, name, tool_key, requested_by, session_id,"
-        " created_at, launch_at, updated_at) VALUES ('V1', 'cross_run', 'k', ?, 'a', 'n', ?, 'x', ?, ?, ?, ?)",
-        [state, f"review/{key}", session, created, launch, created],
+        " created_at, launch_at, finished_at, updated_at) VALUES (?, 'cross_run', 'k', ?, 'a', ?, ?, 'x', ?, ?, ?, ?, ?)",
+        [rid, state, name, f"review/{key}", session, created, launch, finished, created],
     )
     for task in ("T1", "T5"):
         sql(
             pw["db"],
-            "INSERT INTO review_tasks (review_id, task_id, run_id) SELECT 'V1', id, run_id FROM tasks WHERE id = ?",
-            [task],
+            "INSERT INTO review_tasks (review_id, task_id, run_id) SELECT ?, id, run_id FROM tasks WHERE id = ?",
+            [rid, task],
         )
 
 
@@ -735,6 +739,468 @@ class TestCloseDead:
         review(pw, "requested", age=60)
         sql(pw["db"], "UPDATE runs SET state = 'closed' WHERE id = 'R2'")
         assert close(pw) == ["V1"] and failed_alerts(pw) == [("R1", "review:V1:failed")]
+
+
+# --------------------------------------------------------------------------- stopping closed review sessions (#423)
+
+
+def stop(pw: dict[str, Any]) -> list[str]:
+    return reviewpilot.stop_closed(pw["conn"], pw["clock"], activeloop.seams())
+
+
+def stops(fake_runner: Any) -> list[str]:
+    """The targets of every ``claude stop`` sent, each checked to run under the tick-hook bound."""
+    calls = fake_runner.matching("claude", "stop")
+    assert all(c.timeout == ticks.HOOK_SUBPROCESS_S for c in calls)
+    return [c.argv[2] for c in calls]
+
+
+def later(pw: dict[str, Any], n: int = 1) -> list[str]:
+    """Step 4 of the ``n`` next ticks (``PILOT_EVERY_S`` apart) → the last one's stops (a review stopped once is
+    retried on the next tick, then after 2, 4 … ticks)."""
+    sent: list[str] = []
+    for _ in range(n):
+        pw["clock"].advance(reviewpilot.PILOT_EVERY_S)
+        sent = stop(pw)
+    return sent
+
+
+def closed(pw: dict[str, Any], rid: str, state: str = "finished", **kw: Any) -> None:
+    """A closed review whose ``claude --bg`` ran, closed recently (overridable)."""
+    kw.setdefault("launch_age", 100.0)
+    kw.setdefault("finished_age", 10.0)
+    kw.setdefault("name", f"n-{rid}")
+    review(pw, state, rid=rid, **kw)
+
+
+def recorder(pw: dict[str, Any], monkeypatch: Any, fake_runner: Any) -> list[str]:
+    """One ``events`` list: ``list`` per listing, ``beat`` per beat, ``stop`` per stop (which drops that agent)."""
+    from control_plane.runner import RunResult
+
+    events: list[str] = []
+    real = daemon.beat
+
+    def beat(conn: Any, clock: Any) -> None:
+        events.append("beat")
+        real(conn, clock)
+
+    def stopped(c: Any) -> RunResult:
+        events.append("stop")
+        pw["claude"].listing = [a for a in pw["claude"].listing if (a.id or a.session_id) != c.argv[2]]
+        return RunResult(0, "", "")
+
+    monkeypatch.setattr(daemon, "beat", beat)
+    pw["claude"].before_list = lambda: events.append("list")
+    fake_runner.on(["claude", "stop"], stopped)
+    return events
+
+
+class TestStopClosed:
+    def test_a_finished_review_over_three_ticks(self, pw, fake_runner) -> None:
+        """AC1: stopped, then confirmed gone, then never listed for again."""
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        assert stop(pw) == ["V1"]
+        assert pw["claude"].listings == 1 and stops(fake_runner) == ["short-1"]
+        pw["claude"].listing = []
+        assert later(pw) == [] and pw["claude"].listings == 2 and stops(fake_runner) == ["short-1"]
+        assert "V1" in reviewpilot._state.stopped
+        assert later(pw) == [] and pw["claude"].listings == 2 and len(stops(fake_runner)) == 1
+
+    @pytest.mark.parametrize(("state", "status"), [("abandoned", "busy"), ("failed", "idle")])
+    def test_abandoned_and_failed_are_stopped_too(self, pw, fake_runner, state: str, status: str) -> None:
+        """AC2: whatever the session's listed status."""
+        closed(pw, "V1", state, session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1", status=status)]
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["short-1"]
+
+    @pytest.mark.parametrize("state", ["failed", "finished"])
+    def test_no_session_id_every_agent_of_its_name(self, pw, fake_runner, state: str) -> None:
+        """AC2: never identified (a timed-out launch, or finished before it was listed): stopped by name."""
+        closed(pw, "V1", state)
+        pw["claude"].listing = [
+            agent("S-a", "n-V1", id="a1"),
+            agent("S-b", "n-V1"),  # no short id: its session id is the target
+            agent("", "n-V1"),  # no target at all: no stop, no error
+            agent("S-other", "other", id="o1"),
+        ]
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["S-b", "a1"]  # sorted by target
+
+    def test_a_session_and_its_same_named_fork(self, pw, fake_runner) -> None:
+        """AC2: both are stopped; done only once neither is listed. Two stops in a tick are one attempt."""
+        closed(pw, "V1", session="S-1")
+        fork = agent("S-f", "n-V1", id="fork")
+        pw["claude"].listing = [agent("S-1", id="short-1"), fork]
+        stop(pw)
+        assert stops(fake_runner) == ["fork", "short-1"] and reviewpilot._state.attempts == {"V1": 1}
+        pw["claude"].listing = [fork]
+        later(pw)
+        assert stops(fake_runner) == ["fork", "short-1", "fork"] and "V1" not in reviewpilot._state.stopped
+        assert reviewpilot._state.attempts == {"V1": 2}
+        pw["claude"].listing = []
+        later(pw, 2)
+        assert "V1" in reviewpilot._state.stopped
+
+    def test_a_late_session_is_stopped_before_the_ttl(self, pw, fake_runner) -> None:
+        """AC2: absent on tick 1 without a session id, listed on tick 2: stopped."""
+        closed(pw, "V1", "failed")
+        assert stop(pw) == [] and "V1" not in reviewpilot._state.stopped
+        pw["clock"].advance(reviewpilot.PILOT_EVERY_S)
+        pw["claude"].listing = [agent("S-late", "n-V1", id="late")]
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["late"]
+
+    @pytest.mark.parametrize(
+        ("launch_age", "done"), [(schema_reviews.REQUEST_TTL_S - 1, False), (schema_reviews.REQUEST_TTL_S, True)]
+    )
+    def test_no_session_id_is_done_only_past_the_launch_ttl(self, pw, launch_age: float, done: bool) -> None:
+        """AC2: the TTL boundary for a candidate whose session may still appear late."""
+        closed(pw, "V1", "failed", launch_age=launch_age)
+        stop(pw)
+        assert ("V1" in reviewpilot._state.stopped) is done
+
+    def test_never_launched_is_no_candidate(self, pw, fake_runner) -> None:
+        """AC3: no ``claude --bg`` ran: no listing, no stop."""
+        review(pw, "failed", finished_age=10)
+        pw["claude"].listing = [agent("S-1", "n", id="short-1")]
+        assert stop(pw) == [] and pw["claude"].listings == 0 and stops(fake_runner) == []
+
+    @pytest.mark.parametrize(
+        ("finished_age", "listed"), [(reviewpilot.STOP_WINDOW_S + 1, 0), (reviewpilot.STOP_WINDOW_S - 1, 1)]
+    )
+    def test_the_window(self, pw, fake_runner, finished_age: float, listed: int) -> None:
+        """AC3: closed just outside ``STOP_WINDOW_S`` is forgotten; just inside it is a candidate."""
+        closed(pw, "V1", session="S-1", finished_age=finished_age, launch_age=finished_age + 100)
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        stop(pw)
+        assert pw["claude"].listings == listed and len(stops(fake_runner)) == listed
+
+    def test_no_candidates_no_listing(self, pw) -> None:
+        """AC3: nothing closed (an open review only): no listing."""
+        assert stop(pw) == [] and pw["claude"].listings == 0
+        review(pw, "running", launch_age=10, session="S-1")
+        assert stop(pw) == [] and pw["claude"].listings == 0
+
+    @pytest.mark.parametrize("code", [1, 124])
+    def test_a_failed_stop_is_retried_and_logged_once_per_code(self, pw, fake_runner, capsys, code: int) -> None:
+        """AC4: best-effort — no raise, the others are still stopped, retried next tick, one line per exit code."""
+        from control_plane.runner import RunResult
+
+        closed(pw, "V1", session="S-1", finished_age=20)
+        closed(pw, "V2", session="S-2", finished_age=10)
+        pw["claude"].listing = [agent("S-1", id="short-1"), agent("S-2", id="short-2")]
+        fake_runner.on(["claude", "stop", "short-1"], RunResult(code, "", "the CLI said de\\` in a long line"))
+        assert stop(pw) == ["V1", "V2"]
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        assert later(pw) == ["V1"]
+        assert stops(fake_runner) == ["short-1", "short-2", "short-1"]
+        lines = capsys.readouterr().err.splitlines()
+        assert lines == [f"[cp-review-pilot] review V1: claude stop exited {code}: the CLI said de\\` in a long line"]
+        fake_runner.on(["claude", "stop", "short-1"], RunResult(code + 1, "", "other"))
+        assert later(pw, 2) == ["V1"]
+        assert later(pw, 4) == ["V1"]
+        assert capsys.readouterr().err.splitlines() == [
+            f"[cp-review-pilot] review V1: claude stop exited {code + 1}: other"
+        ]
+        assert "V1" not in reviewpilot._state.stopped
+
+    def test_a_raising_stop_is_a_failed_stop(self, pw, fake_runner, capsys) -> None:
+        """AC4: any exception from ``claude stop`` (a NUL in the target) is exit 127, logged, never raised."""
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+
+        def nul(c: Any) -> Any:
+            raise ValueError("embedded null byte")
+
+        fake_runner.on(["claude", "stop"], nul)
+        assert stop(pw) == ["V1"]
+        assert capsys.readouterr().err == "[cp-review-pilot] review V1: claude stop exited 127: embedded null byte\n"
+
+    @pytest.mark.parametrize(
+        ("out", "err", "line"),
+        [
+            ("said on stdout\n", "  \n", "claude stop exited 1: said on stdout"),  # stderr empty: stdout's tail
+            ("", "", "claude stop exited 1"),  # no output: no dangling separator
+        ],
+    )
+    def test_a_failed_stop_with_an_empty_stderr(self, pw, fake_runner, capsys, out: str, err: str, line: str) -> None:
+        """AC4: the logged tail falls back to stdout; with no output at all the line ends at the exit code."""
+        from control_plane.runner import RunResult
+
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        fake_runner.on(["claude", "stop"], RunResult(1, out, err))
+        assert stop(pw) == ["V1"]
+        assert capsys.readouterr().err == f"[cp-review-pilot] review V1: {line}\n"
+
+    def test_a_failed_stop_with_a_long_stderr_logs_its_tail(self, pw, fake_runner, capsys) -> None:
+        """AC4: a stderr over ``STOP_TAIL``: the logged tail fits, starts on a word and ends the stderr."""
+        from control_plane.runner import RunResult
+
+        err = " ".join(f"word{n:03d}" for n in range(40))  # 319 characters, words of 7
+        assert len(err) > reviewpilot.STOP_TAIL
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        fake_runner.on(["claude", "stop"], RunResult(1, "", err))
+        assert stop(pw) == ["V1"]
+        prefix = "[cp-review-pilot] review V1: claude stop exited 1: "
+        line = capsys.readouterr().err
+        assert line.startswith(prefix) and line.endswith("\n")
+        tail = line[len(prefix) : -1]
+        assert 0 < len(tail) <= reviewpilot.STOP_TAIL and err.endswith(tail)
+        assert tail.startswith("word") and err[-len(tail) - 1] == " "
+
+    def test_an_unknown_listing_changes_nothing(self, pw, monkeypatch, fake_runner) -> None:
+        """AC4: no stop, nothing marked; exactly a listing and its beat."""
+        events = recorder(pw, monkeypatch, fake_runner)
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = None
+        assert stop(pw) == [] and events == ["list", "beat"]
+        assert reviewpilot._state.stopped == set() and stops(fake_runner) == []
+
+    def test_a_beat_after_every_subprocess(self, pw, monkeypatch, fake_runner) -> None:
+        """AC5: the tick-hook contract — list, beat, then a beat after each stop; the listing under the bound."""
+        events = recorder(pw, monkeypatch, fake_runner)
+        closed(pw, "V1", session="S-1", finished_age=20)
+        closed(pw, "V2", session="S-2", finished_age=10)
+        pw["claude"].listing = [agent("S-1", id="short-1"), agent("S-2", id="short-2")]
+        assert stop(pw) == ["V1", "V2"]
+        assert events == ["list", "beat", "stop", "beat", "stop", "beat"]
+        assert pw["claude"].last_timeout == ticks.HOOK_SUBPROCESS_S
+
+    def test_the_time_budget_bounds_the_stops_not_the_checks(self, pw, fake_runner) -> None:
+        """AC5: a slow stop uses the whole budget; an unlisted candidate is still confirmed gone in the same tick."""
+        from control_plane.runner import RunResult
+
+        for n, age in ((1, 40), (2, 30), (3, 20), (4, 10)):
+            closed(pw, f"V{n}", session=f"S-{n}", finished_age=age)
+        pw["claude"].listing = [agent(f"S-{n}", id=f"short-{n}") for n in (1, 2, 3)]
+
+        def slow(c: Any) -> RunResult:
+            pw["clock"].advance(ticks.HOOK_SUBPROCESS_S)
+            return RunResult(0, "", "")
+
+        fake_runner.on(["claude", "stop"], slow)
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["short-1"]
+        assert reviewpilot._state.stopped == {"V4"}
+
+    def test_a_clock_stepping_back_spends_the_budget(self, pw, fake_runner) -> None:
+        """AC5: a negative elapsed time (an NTP step back) ends the stops: one sent, the rest next tick."""
+        from control_plane.runner import RunResult
+
+        for n, age in ((1, 30), (2, 20), (3, 10)):
+            closed(pw, f"V{n}", session=f"S-{n}", finished_age=age)
+        pw["claude"].listing = [agent(f"S-{n}", id=f"short-{n}") for n in (1, 2, 3)]
+
+        def step_back(c: Any) -> RunResult:
+            pw["clock"].advance(-60)
+            return RunResult(0, "", "")
+
+        fake_runner.on(["claude", "stop"], step_back)
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["short-1"]
+
+    def test_fewest_attempts_first(self, pw, fake_runner, monkeypatch) -> None:
+        """AC5: a stop that keeps failing never starves a newer candidate (two ticks in a row, whatever the budget)."""
+        from control_plane.runner import RunResult
+
+        monkeypatch.setattr(ticks, "HOOK_SUBPROCESS_S", reviewpilot.PILOT_EVERY_S / 6)  # well below half a tick
+
+        closed(pw, "V1", session="S-1", finished_age=20)
+        closed(pw, "V2", session="S-2", finished_age=10)
+        pw["claude"].listing = [agent("S-1", id="short-1"), agent("S-2", id="short-2")]
+
+        def slow_failure(c: Any) -> RunResult:
+            pw["clock"].advance(ticks.HOOK_SUBPROCESS_S)
+            return RunResult(1, "", "no")
+
+        fake_runner.on(["claude", "stop", "short-1"], slow_failure)
+        assert stop(pw) == ["V1"]
+        assert stop(pw) == ["V2", "V1"]
+        assert stops(fake_runner) == ["short-1", "short-2", "short-1"]
+
+    def test_a_stop_that_keeps_failing_backs_off(self, pw, fake_runner) -> None:
+        """AC5: retried on the next tick, then after 2, 4 … ticks, at most ``STOP_BACKOFF_MAX_S / PILOT_EVERY_S``
+        (120); a tick in between neither lists nor stops. Counted in ticks: the clock does not move."""
+        from control_plane.runner import RunResult
+
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        fake_runner.on(["claude", "stop"], RunResult(124, "", "timed out"))
+        sent: list[int] = []
+        for n in range(1, 401):  # 400 ticks
+            before = pw["claude"].listings
+            if stop(pw):
+                sent.append(n)
+            else:
+                assert pw["claude"].listings == before  # the only candidate is backing off: no listing
+        assert sent == [1, 2, 4, 8, 16, 32, 64, 128, 248, 368]
+        assert (
+            reviewpilot.STOP_BACKOFF_MAX_S == 3600
+            and reviewpilot.STOP_BACKOFF_MAX_S // reviewpilot.PILOT_EVERY_S == 120
+        )
+        assert pw["claude"].listings == len(sent) == len(stops(fake_runner))
+        assert reviewpilot._state.attempts == {"V1": len(sent)}
+
+    def test_the_backoff_never_overflows(self, pw, fake_runner) -> None:
+        """AC5: past any attempt count the delay stays the cap (int arithmetic, the exponent clamped)."""
+        from control_plane.runner import RunResult
+
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        fake_runner.on(["claude", "stop"], RunResult(1, "", "no"))
+        reviewpilot._state.attempts["V1"] = 10_000
+        cap = int(reviewpilot.STOP_BACKOFF_MAX_S // reviewpilot.PILOT_EVERY_S)
+        assert stop(pw) == ["V1"] and reviewpilot._state.retry_tick == {"V1": reviewpilot._state.tick + cap}
+
+    def test_the_backoff_is_at_least_one_tick(self, pw, fake_runner, monkeypatch) -> None:
+        """AC5: a pilot period above ``STOP_BACKOFF_MAX_S`` still backs off one tick (the cap is never 0)."""
+        from control_plane.runner import RunResult
+
+        monkeypatch.setattr(reviewpilot, "PILOT_EVERY_S", reviewpilot.STOP_BACKOFF_MAX_S * 2)
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        fake_runner.on(["claude", "stop"], RunResult(1, "", "no"))
+        assert stop(pw) == ["V1"] and reviewpilot._state.retry_tick == {"V1": reviewpilot._state.tick + 1}
+
+    def test_a_slow_listing_does_not_delay_the_retry(self, pw, fake_runner) -> None:
+        """AC5: a listing that takes ``HOOK_SUBPROCESS_S`` still leaves the retry on the very next tick."""
+        from control_plane.runner import RunResult
+
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        pw["claude"].before_list = lambda: pw["clock"].advance(ticks.HOOK_SUBPROCESS_S)
+        fake_runner.on(["claude", "stop"], RunResult(1, "", "no"))
+        start = pw["clock"].now()
+        assert stop(pw) == ["V1"]
+        pw["clock"].advance(reviewpilot.PILOT_EVERY_S - (pw["clock"].now() - start).total_seconds())  # due on time
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["short-1", "short-1"]
+
+    def test_a_hanging_stop_does_not_starve_its_sibling_fork(self, pw, fake_runner) -> None:
+        """AC5: a review's matches rotate with its attempts: over two eligible ticks every one of them gets a stop."""
+        from control_plane.runner import RunResult
+
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1"), agent("S-f", "n-V1", id="fork")]
+
+        def hang(c: Any) -> RunResult:
+            pw["clock"].advance(ticks.HOOK_SUBPROCESS_S)
+            return RunResult(124, "", "timed out")
+
+        fake_runner.on(["claude", "stop", "fork"], hang)  # "fork" sorts first
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["fork"]
+        assert later(pw) == ["V1"] and stops(fake_runner) == ["fork", "short-1", "fork"]
+
+    def test_a_reordered_listing_does_not_starve_a_sibling(self, pw, fake_runner) -> None:
+        """AC5: the rotation runs over the matches sorted by target, whatever order the CLI lists them in."""
+        from control_plane.runner import RunResult
+
+        closed(pw, "V1", session="S-1")
+        main, fork = agent("S-1", id="short-1"), agent("S-f", "n-V1", id="fork")
+
+        def hang(c: Any) -> RunResult:
+            pw["clock"].advance(ticks.HOOK_SUBPROCESS_S)
+            return RunResult(124, "", "timed out")
+
+        fake_runner.on(["claude", "stop", "fork"], hang)
+        pw["claude"].listing = [fork, main]
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["fork"]
+        pw["claude"].listing = [main, fork]  # reordered between ticks
+        assert later(pw) == ["V1"] and stops(fake_runner) == ["fork", "short-1", "fork"]
+
+    def test_a_target_listed_twice_is_stopped_once(self, pw, fake_runner) -> None:
+        """AC2: the matches are deduplicated by target: one ``claude stop`` per target per tick."""
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1"), agent("S-1", "n-V1", id="short-1")]
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["short-1"]
+
+    def test_an_exit_0_still_listed_under_a_new_target_is_logged(self, pw, fake_runner, capsys) -> None:
+        """AC4: stopped by its session id (no short id yet), then listed with a short id: still the same session."""
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1")]
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["S-1"]
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        assert later(pw) == ["V1"]
+        assert capsys.readouterr().err.splitlines() == [
+            "[cp-review-pilot] review V1: claude stop exited 0 but the session is still listed"
+        ]
+
+    def test_a_budget_cut_fork_still_listed_is_not_logged(self, pw, fake_runner, capsys) -> None:
+        """AC4: the exit-0-still-listed line is only for a target whose stop exited 0, not one the budget cut off."""
+        from control_plane.runner import RunResult
+
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1"), agent("S-f", "n-V1", id="fork")]
+
+        def slow_ok(c: Any) -> RunResult:
+            pw["clock"].advance(ticks.HOOK_SUBPROCESS_S)
+            pw["claude"].listing = [a for a in pw["claude"].listing if a.id != "fork"]
+            return RunResult(0, "", "")
+
+        fake_runner.on(["claude", "stop", "fork"], slow_ok)  # "fork" sorts first: "short-1" is cut off
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["fork"]
+        assert later(pw) == ["V1"] and stops(fake_runner) == ["fork", "short-1"]
+        assert capsys.readouterr().err == ""
+
+    def test_an_exit_0_still_listed_is_logged_after_a_failure_too(self, pw, fake_runner, capsys) -> None:
+        """AC4: a review that first logged a non-zero exit still gets the line once a stop exits 0 and it stays."""
+        from control_plane.runner import RunResult
+
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        fake_runner.on(["claude", "stop"], RunResult(124, "", "timed out"))
+        assert stop(pw) == ["V1"]
+        fake_runner.on(["claude", "stop"], RunResult(0, "", ""))
+        assert later(pw) == ["V1"]
+        assert later(pw, 2) == ["V1"]
+        assert capsys.readouterr().err.splitlines() == [
+            "[cp-review-pilot] review V1: claude stop exited 124: timed out",
+            "[cp-review-pilot] review V1: claude stop exited 0 but the session is still listed",
+        ]
+
+    def test_a_stop_that_exits_0_but_stays_listed_is_logged_once(self, pw, fake_runner, capsys) -> None:
+        """AC4: the session is still listed after a successful stop: one line, however many ticks it lasts."""
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        assert stop(pw) == ["V1"] and capsys.readouterr().err == ""
+        assert later(pw) == ["V1"]
+        assert later(pw, 2) == ["V1"]
+        assert capsys.readouterr().err.splitlines() == [
+            "[cp-review-pilot] review V1: claude stop exited 0 but the session is still listed"
+        ]
+
+    def test_the_backoff_is_pruned_with_the_window(self, pw, fake_runner) -> None:
+        """AC3: a review that leaves ``STOP_WINDOW_S`` takes its retry time with it."""
+        closed(pw, "V1", session="S-1", finished_age=reviewpilot.STOP_WINDOW_S - 10)
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        assert stop(pw) == ["V1"] and set(reviewpilot._state.retry_tick) == set(reviewpilot._state.stopped_ok) == {"V1"}
+        assert later(pw) == [] and reviewpilot._state.attempts == {}
+        assert reviewpilot._state.retry_tick == reviewpilot._state.stopped_ok == {}
+
+    def test_the_hook_stops_after_the_launches(self, pw, monkeypatch, fake_runner) -> None:
+        """AC6: through ``review_pilot_hook``, the stop comes after ``drain``'s launcher."""
+        events = recorder(pw, monkeypatch, fake_runner)
+        pw["popen"].on_call = lambda argv, kw: events.append("popen")
+        closed(pw, "V9", session="S-9")
+        pw["claude"].listing = [agent("S-9", id="short-9")]
+        cross(pw)
+        tick(pw)
+        assert review_states(pw) == {"V1": "requested", "V9": "finished"}
+        assert events.index("popen") < events.index("stop") and stops(fake_runner) == ["short-9"]
+
+    def test_the_hook_changes_no_row(self, pw, fake_runner) -> None:
+        """AC6: a tick with nothing to launch or close: stopping leaves the rows and the counts as they were."""
+
+        def snapshot() -> tuple[Any, ...]:
+            return (
+                [tuple(r) for r in sql(pw["db"], "SELECT * FROM reviews ORDER BY id")],
+                sql(pw["db"], "SELECT count(*) FROM alerts")[0][0],
+                sql(pw["db"], "SELECT count(*) FROM messages")[0][0],
+            )
+
+        closed(pw, "V9", session="S-9")
+        pw["claude"].listing = [agent("S-9", id="short-9")]
+        before = snapshot()
+        tick(pw)
+        assert stops(fake_runner) == ["short-9"] and snapshot() == before
 
 
 # --------------------------------------------------------------------------- end to end
