@@ -210,8 +210,10 @@ Person re-allocated away / covered / need met → person constraint removed
   **pinning a person on a car disables that car's person-trip charging
   until unplug / reset** (or the pin is taken by another car). The
   freeze survives restarts; an unplug while HA was down (proven by the
-  QS-416 boot guard) ends it, and so does the reset button of the car
-  card or of the charger card. An HA restart replay, the QS-353 system
+  QS-416 boot guard, debounced, and only when no user action reached the
+  car since the boot) ends it, and so does the reset button of the car
+  card or of the charger card (both also drop the forecasted person, the
+  system hold and the charge targets, and re-run the allocation). An HA restart replay, the QS-353 system
   hold and the charger-card car pick do **not** freeze. A person
   constraint already ASAP at freeze time runs to completion, retargeted
   to the user's target marker if any.

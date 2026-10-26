@@ -2690,13 +2690,23 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
     async def user_clean_and_reset(self):
         # manual reset the user selected car for charger
-        car = self.car  # captured before the reset below detaches it
-        await super().user_clean_and_reset()
         # QS-431: the charger-card buttons act on the attached car (and freeze it): the
-        # charger-card reset clears the car's user store too, like the car-card reset.
+        # charger-card reset resets the car's user side too, like the car-card reset
+        # (its car-side steps, without the recursion back into this charger). When the
+        # car-card reset drives this one, the car already left (`car.charger` is None)
+        # and has run those steps itself: they — and the notifying allocation — run once.
+        car = self.car if self.car is not None and self.car.charger is self else None
+        if car is not None:
+            self._clear_leaked_person_target_if_needed()  # constraints still live
+        await super().user_clean_and_reset()  # detaches the car
         if car is not None:
             car.clear_all_user_originated()
+            car.clear_system_person_hold()
+            car.current_forecasted_person = None
+            car._reset_charge_targets()  # lazy default (QS-352), no native-limit write
         await self.update_charger_for_user_change()
+        if car is not None and self.home:
+            await self.home.compute_and_set_best_persons_cars_allocations(force_update=True, do_notify=True)
 
     async def user_clean_constraints(self):
         await super().user_clean_constraints()
@@ -3675,25 +3685,38 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
         self._boot_user_pin = None
         self.clear_user_originated(USER_ORIGINATED_CAR_NAME)
-        # QS-431: the proven unplug is a physical unplug for the car's user state too,
-        # as in the live unplug branch: wipe its user store (the freeze flag, the person
-        # pin, the user markers) and its system person hold, or the car would stay
-        # frozen — no person constraint — at the next plug. Only a charger choice naming
-        # ANOTHER charger survives (QS-416 R2-2). Direct dict write: `set_user_originated`
-        # would run the car's snapshot hook and re-freeze it.
-        charger_choice = car.get_user_originated(USER_ORIGINATED_CHARGER_NAME)
-        car.clear_all_user_originated()
-        if charger_choice is not None and charger_choice != self.name:
-            car._user_originated[USER_ORIGINATED_CHARGER_NAME] = charger_choice
-        car.clear_system_person_hold()
+        # QS-431: a proven unplug that lasted the live path's debounce window is a
+        # physical unplug for the car's user state too, as in the live unplug branch:
+        # wipe its user store (the freeze flag, the person pin, the user markers) and
+        # its system person hold, or the car would stay frozen — no person constraint —
+        # at the next plug. Only when the whole store predates the restart: a user
+        # action on the car since boot postdates the unplug and is kept. Otherwise (a
+        # short plug-sensor flap, a post-boot user action) only the pins are lifted, as
+        # before. Only a charger choice naming ANOTHER charger survives the wipe
+        # (QS-416 R2-2). Direct dict write: `set_user_originated` would run the car's
+        # snapshot hook and re-freeze it.
+        wipe_car_store = (
+            not car.has_user_action_since_boot()
+            and self._car_unplugged_since(car, saved_at, time, plug_at_save, CHARGER_CHECK_STATE_WINDOW_S) is not None
+        )
+        if wipe_car_store:
+            charger_choice = car.get_user_originated(USER_ORIGINATED_CHARGER_NAME)
+            car.clear_all_user_originated()
+            if charger_choice is not None and charger_choice != self.name:
+                car._user_originated[USER_ORIGINATED_CHARGER_NAME] = charger_choice
+            car.clear_system_person_hold()
+        elif car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) == self.name:
+            car.clear_user_originated(USER_ORIGINATED_CHARGER_NAME)
         if self._boot_car is not None and self._boot_car.name == car.name:
             self._boot_car = None
         _LOGGER.info(
-            "boot_user_pin: %s on %s: persisted user pin lifted, car unplugged at %s (pin saved at %s)",
+            "boot_user_pin: %s on %s: persisted user pin lifted, car unplugged at %s (pin saved at %s),"
+            " car user state %s",
             car.name,
             self.name,
             unplugged_at,
             saved_at,
+            "cleared" if wipe_car_store else "kept",
         )
 
     def get_best_car(self, time: datetime) -> QSCar | None:
@@ -4938,12 +4961,15 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                                         car_charge_person.end_of_constraint = next_usage_time
                                         need_ct_update = True
                                     # QS-431: compare at display precision — a sub-percent drift
-                                    # of the person need must not change the notified state —
-                                    # with a half-percent hysteresis, so a need jittering around
-                                    # a .5 boundary does not flip the rounded value every poll
-                                    if (
-                                        int(round(car_charge_person.target_value)) != int(round(target_charge))
-                                        and abs(target_charge - car_charge_person.target_value) >= 0.5
+                                    # of the person need must not change the notified state. A
+                                    # rise of the rounded % always rewrites (the target never lags
+                                    # below the need); a fall needs a half-percent move too, so a
+                                    # need jittering around a .5 boundary flips at most once
+                                    rounded_target = int(round(car_charge_person.target_value))
+                                    rounded_need = int(round(target_charge))
+                                    if rounded_need > rounded_target or (
+                                        rounded_need < rounded_target
+                                        and car_charge_person.target_value - target_charge >= 0.5
                                     ):
                                         car_charge_person.target_value = target_charge
                                         need_ct_update = True
@@ -5318,7 +5344,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         )
 
     @staticmethod
-    def _car_unplugged_since(car: QSCar, since: datetime, time: datetime, plug_at_save: str | None) -> datetime | None:
+    def _car_unplugged_since(
+        car: QSCar, since: datetime, time: datetime, plug_at_save: str | None, min_off_s: float = 0.0
+    ) -> datetime | None:
         """QS-416: time of an unplug of the car proven in [since, time], else None.
 
         The proof is a TRANSITION (review fix #03 R3-1): a valid "off" sample at or
@@ -5335,6 +5363,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         still seen once the history loads. Holes (`unavailable` / `unknown`) are
         skipped, never a proof; no sensor proves nothing. `since > time` (clock
         behind the save) is an empty window: nothing can be seen.
+
+        QS-431: `min_off_s` > 0 debounces the proof like the live unplug path: only a
+        transition whose "off" lasted at least `min_off_s` before the next "on"
+        reading (or `time`) counts; a shorter flap is skipped.
         """
         if car.car_plugged is None or since > time:
             return None
@@ -5345,11 +5377,15 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         ]
         before = [state for state_time, state in samples if state_time < since]
         previous = plug_at_save if plug_at_save is not None else (before[-1] if before else None)
-        for state_time, state in samples:
+        for index, (state_time, state) in enumerate(samples):
             if state_time < since:
                 continue
             if state == STATE_OFF and previous == STATE_ON:
-                return state_time
+                if min_off_s <= 0:
+                    return state_time
+                back_on_at = next((t for t, s in samples[index + 1 :] if s == STATE_ON), time)
+                if (back_on_at - state_time).total_seconds() >= min_off_s:
+                    return state_time
             previous = state
         return None
 

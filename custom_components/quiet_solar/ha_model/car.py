@@ -273,6 +273,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._system_person_hold_name: str | None = None
         self._system_person_hold_until: datetime | None = None
 
+        # QS-431: a genuine user action on the car since this process started. In
+        # memory only, never persisted: the boot unplug guard wipes the car's user
+        # store only when every entry in it predates the restart.
+        self._user_action_since_boot: bool = False
+
         self.reset()
 
         # Car API staleness detection (Story 3.9)
@@ -399,10 +404,15 @@ class QSCar(HADeviceMixin, AbstractDevice):
         # the car. Direct dict write: it lives in the persisted store.
         if not _USER_REPLAY_FOR_INIT.get():
             self._user_originated[USER_ORIGINATED_USER_FROZEN] = True
+            self._user_action_since_boot = True
 
     def is_user_frozen(self) -> bool:
         """QS-431: True when a genuine user action has taken manual control of the car."""
         return self.get_user_originated(USER_ORIGINATED_USER_FROZEN) is True
+
+    def has_user_action_since_boot(self) -> bool:
+        """QS-431: True when a genuine user action reached the car's store since boot."""
+        return self._user_action_since_boot
 
     def update_to_be_saved_extra_device_info(self, data_to_update: dict, time: datetime):
         super().update_to_be_saved_extra_device_info(data_to_update, time)

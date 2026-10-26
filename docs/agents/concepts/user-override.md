@@ -240,11 +240,20 @@ command state.
   sensor stuck at `off` before the save (the ID.buzz reports `off` while
   plugged) gets a fresh `off` sample after the boot. On a proof, the
   charger pin, the car's charger choice naming that charger and the boot
-  car are dropped, and the normal rules apply. **QS-431:** the proof is
-  a physical unplug for the car too, as in the live unplug branch: its
-  whole user-originated store (the `user_frozen` flag, the person pin,
-  the user markers) and its system person hold are cleared as well —
-  only a charger choice naming *another* charger survives. No proof (a stale `off`,
+  car are dropped, and the normal rules apply. **QS-431:** a proof whose
+  `off` lasted `CHARGER_CHECK_STATE_WINDOW_S` before the next `on`
+  reading (the live unplug path's debounce — `_car_unplugged_since(...,
+  min_off_s)`) is a physical unplug for the car too, as in the live
+  unplug branch: its whole user-originated store (the `user_frozen` flag,
+  the person pin, the user markers) and its system person hold are
+  cleared as well — only a charger choice naming *another* charger
+  survives. Only when the whole store predates the restart: a genuine
+  user action on the car since boot (`QSCar.has_user_action_since_boot()`,
+  an in-memory flag set by the hook outside `_USER_REPLAY_FOR_INIT`, never
+  persisted) postdates the unplug, so the store — and its freeze — is
+  kept. A shorter flap or a post-boot user action lifts only the pins
+  above (the QS-416 behaviour). The INFO line ends with `car user state
+  cleared` / `kept`. No proof (a stale `off`,
   `on`, holes, no sensor, no earlier reading, no or invalid saved time)
   keeps it; a saved time in the future (clock behind) keeps it and leaves
   the guard armed; an `off` reported only after the boot window does not

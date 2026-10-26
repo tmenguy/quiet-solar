@@ -580,13 +580,20 @@ from the current chain. A kept filler kept a stale start (e.g. the target of a
 removed person constraint), and `push_live_constraint`'s same-end carry-over could
 then copy it into the rebuilt constraint and complete it at push (QS-431 incident:
 bump while a person constraint was live → "COMPLETED 44 % best effort", car never
-charged). A steady cycle keeps the same filler object (no churn; `stable_name`
-ignores the start) — including a cycle where the agenda constraint is rebuilt
-with the live SOC as its start: a replaced constraint of the same shape is no
-change. Changes made by `update_live_constraints` between cycles (ASAP
-promotion, completion) are not detected — they do not move the chain's end.
-Known limit: an *active* energy-target filler loses its accumulated
-`current_value` when it is rebuilt.
+charged). A cycle whose real constraints keep their shape keeps the same filler
+object (no churn; `stable_name` ignores the start) — including a cycle where the
+agenda constraint is rebuilt with the live SOC as its start: a replaced
+constraint of the same shape is no change. Known limits:
+- changes made by `update_live_constraints` between cycles (ASAP promotion, a
+  completed or removed constraint) happen outside the cycle's snapshot and are
+  not detected — the filler keeps its start until a later cycle changes the
+  chain;
+- the end is part of the shape: a drift of the person `next_usage_time` moves
+  the person constraint's end, so the filler is rebuilt on each such cycle (a
+  debug log line, no notification — the end is a genuine input of the chain,
+  so no time tolerance is applied);
+- an *active* energy-target filler loses its accumulated `current_value` when
+  it is rebuilt.
 
 ### Person-constraint precedence on a user-frozen car (QS-431)
 
@@ -596,9 +603,11 @@ runs (the filler rule above then rebuilds the chain from the real SOC). The #48
 ASAP escape now retargets a person ASAP only when the car is frozen **and** has a
 target marker; a boot-replayed marker no longer lowers it (met → silent drop →
 re-push loop). The person block updates a live person constraint's target only
-when the **rounded** % changes **and** the need moved by at least 0.5 % (a
-half-percent hysteresis), so neither sub-percent drift nor a need jittering around a
-.5 boundary changes the notified state.
+when the **rounded** % changes, with an asymmetric hysteresis: a rise always
+rewrites (the target never lags below the need — no met → ack → re-push round
+trip), a fall needs the need to have moved by at least 0.5 % too. Sub-percent
+drift does not change the notified state, and a need jittering around a .5
+boundary flips it at most once per crossing.
 
 ### The plug-state rescue no longer needs a currently-attached car (QS-346)
 

@@ -483,6 +483,7 @@ async def test_unplug_during_downtime_unfreezes_car():
     # HA restart: the car is not attached at boot; the persisted pin arms the guard
     saved_at = now - timedelta(minutes=30)
     charger.detach_car()
+    car._user_action_since_boot = False  # in-memory, not persisted: a fresh process
     charger._boot_user_pin = (car.name, saved_at, "on")
     # the car's plug sensor saw the unplug during the downtime
     car.car_plugged = "binary_sensor.zoe_plugged"
@@ -562,28 +563,171 @@ async def test_filler_kept_when_agenda_rebuilt_with_same_shape():
 @pytest.mark.asyncio
 async def test_person_target_rounding_jitter_does_not_rewrite():
     """N2: a person need jittering around a .5 boundary must not flip the target on
-    each poll (half-percent hysteresis); a genuine move still rewrites."""
+    each poll (downward half-percent hysteresis); a genuine move still rewrites.
+
+    Starts above the boundary: an upward crossing always rewrites (R2-N2), so the
+    jitter exercises the downward hysteresis — at most one flip per crossing."""
     charger, car, now, thomas, _ = _fixture()
     deadline = now + timedelta(hours=6)
 
-    _set_need(car, deadline, 44.49, thomas)
+    _set_need(car, deadline, 44.51, thomas)
     t = now
     baseline = await _cycle(charger, t)
-    assert _person_cts(charger)[0].target_value == pytest.approx(44.49)
+    assert _person_cts(charger)[0].target_value == pytest.approx(44.51)
 
-    for jitter in (44.51, 44.48, 44.52):
+    for jitter in (44.49, 44.48, 44.52):
         _set_need(car, deadline, jitter, thomas)
         t += STEP
         h = await _cycle(charger, t)
         person = _person_cts(charger)
         assert len(person) == 1
-        assert person[0].target_value == pytest.approx(44.49)
+        assert person[0].target_value == pytest.approx(44.51)
         assert h == baseline
 
-    _set_need(car, deadline, 45.2, thomas)
+    _set_need(car, deadline, 43.9, thomas)
     t += STEP
     h = await _cycle(charger, t)
     person = _person_cts(charger)
     assert len(person) == 1
-    assert person[0].target_value == pytest.approx(45.2)
+    assert person[0].target_value == pytest.approx(43.9)
     assert h != baseline
+
+
+# --------------------------------------------------------------------------- #
+# Review fix #02 — the boot guard wipes only PRE-restart user state, after a
+# debounced unplug; the charger-card reset mirrors the car-card reset; an upward
+# person move always rewrites
+# --------------------------------------------------------------------------- #
+def _restart_with_plug_history(charger, car, now, plug_history):
+    """HA restart with a persisted pin of ``car`` on ``charger`` (guard armed), the car
+    not attached, the charger unplugged; ``plug_history``: (offset from the save, state)
+    readings of the car's plug sensor during the downtime. Returns the save time."""
+    saved_at = now - timedelta(minutes=30)
+    charger.detach_car()
+    car._user_action_since_boot = False  # in-memory, not persisted: a fresh process
+    charger._boot_user_pin = (car.name, saved_at, "on")
+    car.car_plugged = "binary_sensor.zoe_plugged"
+    car.attach_ha_state_to_probe(car.car_plugged, is_numerical=False)
+    car._entity_probed_state[car.car_plugged] = []
+    for offset, state in plug_history:
+        car._add_state_history(car.car_plugged, state, saved_at + offset, None, {})
+    charger.is_not_plugged = MagicMock(return_value=True)
+    charger.is_plugged = MagicMock(return_value=False)
+    return saved_at
+
+
+@pytest.mark.asyncio
+async def test_boot_guard_keeps_a_user_action_made_after_the_restart():
+    """R2-S1: a user action on the car after the restart postdates the downtime unplug:
+    the late proof lifts the persisted pin (QS-416) but must not wipe the fresh state."""
+    charger, car, now, thomas, _ = _fixture()
+    car.set_qs_bump_solar_charge_priority(True)  # pre-restart user action: freeze + pin
+    _restart_with_plug_history(charger, car, now, [(timedelta(minutes=15), "off")])
+
+    await car.user_set_next_charge_target(80)  # post-restart user action (no charger yet)
+    assert car.get_user_originated("user_frozen") is True
+
+    await charger.check_load_activity_and_constraints(now)
+    assert charger._boot_user_pin is None  # precondition: the guard fired
+    assert charger.get_user_originated("car_name") is None  # QS-416 pin lift unchanged
+    assert car.get_user_originated("user_frozen") is True
+    assert car.get_user_originated("charge_target_percent") == 80
+
+
+@pytest.mark.asyncio
+async def test_boot_guard_plug_flap_keeps_car_user_state():
+    """R2-S2: a one-off on -> off -> on flap of the car plug sensor (shorter than the live
+    path's debounce window) lifts the pin as before, but is no unplug for the car state."""
+    charger, car, now, thomas, _ = _fixture()
+    car.set_qs_bump_solar_charge_priority(True)  # freeze + pin
+    car._system_person_hold_name = "Thomas Menguy"
+    car._system_person_hold_until = now + timedelta(hours=1)
+    _restart_with_plug_history(
+        charger,
+        car,
+        now,
+        [(timedelta(minutes=15), "off"), (timedelta(minutes=15, seconds=5), "on")],
+    )
+
+    await charger.check_load_activity_and_constraints(now)
+    assert charger._boot_user_pin is None  # precondition: the guard fired
+    assert charger.get_user_originated("car_name") is None  # QS-416 pin lift unchanged
+    assert car.get_user_originated("user_frozen") is True
+    assert car._system_person_hold_name == "Thomas Menguy"
+
+
+@pytest.mark.asyncio
+async def test_boot_guard_flap_then_sustained_unplug_unfreezes_car():
+    """R2-S2 guard: a flap does not hide a later sustained unplug of the same downtime."""
+    charger, car, now, thomas, _ = _fixture()
+    car.set_qs_bump_solar_charge_priority(True)  # freeze + pin
+    _restart_with_plug_history(
+        charger,
+        car,
+        now,
+        [
+            (timedelta(minutes=5), "off"),
+            (timedelta(minutes=5, seconds=5), "on"),
+            (timedelta(minutes=15), "off"),
+        ],
+    )
+
+    await charger.check_load_activity_and_constraints(now)
+    assert charger._boot_user_pin is None
+    assert car.get_user_originated("user_frozen") is None
+
+
+@pytest.mark.asyncio
+async def test_charger_card_reset_mirrors_car_card_reset():
+    """R2-N1: the charger-card reset also drops the car's forecasted person, system hold
+    and charge targets, and re-runs the person allocation, like the car-card reset."""
+    charger, car, now, thomas, _ = _fixture()
+    _set_need(car, now + timedelta(hours=6), PERSON_TARGET, thomas)
+    await _cycle(charger, now)
+    assert len(_person_cts(charger)) == 1  # precondition: person constraint live
+
+    await car.user_set_next_charge_target(80)  # user: 80 %, freezes the car
+    car._system_person_hold_name = "Thomas Menguy"
+    car._system_person_hold_until = now + timedelta(hours=1)
+    charger.home.compute_and_set_best_persons_cars_allocations.reset_mock()
+
+    await charger.user_clean_and_reset()  # charger-card reset
+    assert car.get_user_originated("user_frozen") is None
+    assert car.current_forecasted_person is None
+    assert car._system_person_hold_name is None
+    assert car.get_car_target_SOC() == pytest.approx(car.car_default_charge)
+    charger.home.compute_and_set_best_persons_cars_allocations.assert_awaited_once_with(
+        force_update=True, do_notify=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_car_card_reset_runs_the_allocation_once():
+    """R2-N1 guard: the car-card reset drives the charger reset; the car-side steps
+    (and the notifying allocation) must not run twice."""
+    charger, car, now, thomas, _ = _fixture()
+    charger.home.compute_and_set_best_persons_cars_allocations.reset_mock()
+    await car.user_clean_and_reset()
+    charger.home.compute_and_set_best_persons_cars_allocations.assert_awaited_once_with(
+        force_update=True, do_notify=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_person_target_upward_move_rewrites():
+    """R2-N2: a need that rises past a rounded % rewrites the person target at once (no
+    lag below the need), even when it moves by less than half a percent."""
+    charger, car, now, thomas, _ = _fixture()
+    deadline = now + timedelta(hours=6)
+
+    _set_need(car, deadline, 80.4, thomas)
+    t = now
+    await _cycle(charger, t)
+    assert _person_cts(charger)[0].target_value == pytest.approx(80.4)
+
+    _set_need(car, deadline, 80.6, thomas)
+    t += STEP
+    await _cycle(charger, t)
+    person = _person_cts(charger)
+    assert len(person) == 1
+    assert person[0].target_value == pytest.approx(80.6)
