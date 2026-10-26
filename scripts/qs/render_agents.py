@@ -44,6 +44,7 @@ import context as context_mod  # type: ignore[import-not-found]
 import jinja2
 import models  # type: ignore[import-not-found]
 import targets  # type: ignore[import-not-found]
+from control_plane.schema_ledger import CATEGORIES, SEVERITIES  # type: ignore[import-not-found]
 from launchers.phases import PHASE_TO_AGENT  # type: ignore[import-not-found]
 
 from utils import get_issue_from_branch, run_git  # type: ignore[import-not-found]
@@ -293,7 +294,7 @@ def build_render_context(
 
 
 def _make_env(templates_dir: Path) -> jinja2.Environment:
-    return jinja2.Environment(
+    env = jinja2.Environment(
         loader=jinja2.FileSystemLoader(str(templates_dir)),
         undefined=jinja2.StrictUndefined,
         trim_blocks=True,
@@ -305,6 +306,11 @@ def _make_env(templates_dir: Path) -> jinja2.Environment:
         block_start_string="[%",
         block_end_string="%]",
     )
+    # #423: `finding open`'s vocabulary, from the ledger's own constants (env globals, not render-context keys:
+    # task-agnostic, so the second-pipeline agents stay byte-identical at every render site).
+    env.globals["finding_severities"] = SEVERITIES
+    env.globals["finding_categories"] = CATEGORIES
+    return env
 
 
 def _discover_stems(templates_dir: Path) -> list[str]:

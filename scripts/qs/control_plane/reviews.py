@@ -31,7 +31,8 @@ from .schema_reviews import AGENTS, IN_FLIGHT, KINDS, PILOT_PREFIX, REVIEW_TTL_S
 GLOBAL = "global"
 CROSS_RUN = "cross_run"
 TOOL_NAME = "review"
-REVIEW_PERMISSION_MODE = "dontAsk"  # D6: "auto" is the fallback (`launch_args` builds both)
+# D6: `launch_args` builds both; "auto" is unguarded (no allowlist, see control-plane.md)
+REVIEW_PERMISSION_MODE = "dontAsk"
 ERROR_MAX = liveness.BG_ERROR_MAX  # a recorded `reviews.error` keeps at most this many characters (its tail)
 
 
@@ -346,7 +347,10 @@ def allowed_tools(main: Path, python: str, directory: Path) -> list[str]:
 
 
 def launch_args(mode: str, main: Path, python: str, directory: Path) -> list[str]:
-    """The permission arguments of a review launch, in ``dontAsk`` (pinned allowlist) or ``auto`` (the fallback)."""
+    """The permission arguments of a review launch, in ``dontAsk`` (pinned allowlist) or ``auto``.
+
+    ``auto`` is unguarded: no allowlist, see control-plane.md.
+    """
     if mode == "dontAsk":
         return ["--permission-mode", "dontAsk", "--allowedTools=" + ",".join(allowed_tools(main, python, directory))]
     if mode == "auto":

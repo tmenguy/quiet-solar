@@ -16,6 +16,14 @@ Every ``PILOT_EVERY_S`` (a ``ticks.Throttle``), after ``detectors`` and before `
    ``reviews.request_locked`` (the same scope, coalescing and deferral as ``tool review``) and, on a new
    review, starts a **detached** ``cp.py tool review`` process with the review's launch grant. An event whose
    latest launch ``failed`` gets one more attempt (``PILOT_ATTEMPTS``); an ``abandoned`` review is not retried.
+4. **Stop closed review sessions** (#423, last, after the launches): a review session is single-turn, so once its
+   review is ``finished`` / ``failed`` / ``abandoned`` its ``claude --bg`` process has nothing left to do. Every
+   closed review launched within ``STOP_WINDOW_S`` of its ``finished_at`` is a candidate until it is confirmed gone:
+   one listing, a beat, then ``claude stop`` (``HOOK_SUBPROCESS_S``, a beat after each) for every listed agent with
+   the review's ``session_id`` or ``name``, fewest attempts first, within a ``HOOK_SUBPROCESS_S`` budget.
+   Best-effort: a failed stop is logged once per exit code and retried next tick; an unknown listing changes
+   nothing. A candidate no known listing shows is done — one without a ``session_id`` only past ``REQUEST_TTL_S``
+   from its launch (its session may still appear late).
 
 The daemon holds no token: the grant (``review:V<n>.0.<nonce>``) is the launcher's only authority.
 """
@@ -34,7 +42,8 @@ from typing import TYPE_CHECKING, Any
 
 from . import activeloop, alerts, daemon, db, errors, liveness, nodes, paths, reviews, ticks, tokens
 from . import clock as clock_mod
-from .schema_reviews import CURSOR_KEY, PILOT_PREFIX, REQUEST_TTL_S, REVIEW_TTL_S
+from .runner import RunResult
+from .schema_reviews import CLOSED, CURSOR_KEY, PILOT_PREFIX, REQUEST_TTL_S, REVIEW_TTL_S
 
 if TYPE_CHECKING:
     from .activeloop import Seams
@@ -46,6 +55,8 @@ PILOT_ATTEMPTS = 2  # a failed launch is retried once (Q7)
 PILOT_KINDS = frozenset({alerts.OVERLAP_CROSS_RUN, alerts.DUPLICATE_TASK_CROSS_RUN})  # not the cycle kind
 LIVENESS_CONFIRM = 2
 MERGES_PER_TICK = 100
+STOP_WINDOW_S = 7 * 24 * 3600  # a closed review stays a stop candidate this long after its `finished_at` (#423)
+STOP_TAIL = 200  # a failed stop's logged stderr keeps at most this many characters
 ACTOR = "cp:review_pilot"
 
 _THROTTLE = ticks.Throttle(PILOT_EVERY_S)
@@ -64,6 +75,10 @@ class _State:
     children: list[Any] = field(default_factory=list)  # the launcher processes not reaped yet
     # running review → listings in a row without it live (absent or `done`)
     unlisted: dict[str, int] = field(default_factory=dict)
+    # step 4 (#423), each pruned to the closed reviews still in `STOP_WINDOW_S`
+    stopped: set[str] = field(default_factory=set)  # closed reviews confirmed gone
+    attempts: dict[str, int] = field(default_factory=dict)  # stops sent per review (fewest first)
+    stop_logged: set[tuple[str, int]] = field(default_factory=set)  # (review, exit code) already logged
 
 
 _state = _State()
@@ -81,6 +96,7 @@ def review_pilot_hook(conn: sqlite3.Connection, clock: clock_mod.Clock) -> None:
     discover(conn, clock)
     retry_failed(conn, clock)
     drain(conn, clock, seams)
+    stop_closed(conn, clock, seams)
 
 
 # --------------------------------------------------------------------------- 1. reap
@@ -505,6 +521,86 @@ def start_launcher(
         return False
     _state.children.append(proc)
     return True
+
+
+# --------------------------------------------------------------------------- 4. stop closed review sessions (#423)
+
+
+def _closed_reviews(conn: sqlite3.Connection, clock: clock_mod.Clock) -> list[sqlite3.Row]:
+    """Closed reviews whose ``claude --bg`` ran, closed within ``STOP_WINDOW_S`` (oldest first)."""
+    marks = ", ".join("?" for _ in CLOSED)
+    return conn.execute(
+        f"SELECT id, name, session_id, launch_at FROM reviews WHERE state IN ({marks}) AND launch_at IS NOT NULL"
+        " AND finished_at >= ? ORDER BY finished_at, id",
+        (*CLOSED, clock_mod.stamp(clock, plus=-STOP_WINDOW_S)),
+    ).fetchall()
+
+
+def _matches(row: sqlite3.Row, listing: Sequence[liveness.Agent]) -> list[liveness.Agent]:
+    """Every listed agent of the review (its ``session_id``, or its unique ``name``: a duplicate fork too)."""
+    return [
+        a
+        for a in listing
+        if (a.id or a.session_id)
+        and ((row["session_id"] is not None and a.session_id == row["session_id"]) or a.name == row["name"])
+    ]
+
+
+def _stop(seams: Seams, target: str) -> RunResult:
+    try:
+        return seams.claude.stop(target, timeout=ticks.HOOK_SUBPROCESS_S)
+    except Exception as exc:  # noqa: BLE001 — best-effort: any failure (a NUL in the target) is a failed stop
+        return RunResult(127, "", str(exc))
+
+
+def _log_stop_failure(review_id: str, res: RunResult) -> None:
+    """One stderr line per ``(review, exit code)``: the line carries the stderr tail, so ``_log_once`` cannot dedupe it."""
+    if (review_id, res.returncode) in _state.stop_logged:
+        return
+    _state.stop_logged.add((review_id, res.returncode))
+    tail = liveness.word_tail(res.stderr.strip(), STOP_TAIL)
+    sys.stderr.write(f"[cp-review-pilot] review {review_id}: claude stop exited {res.returncode}: {tail}\n")
+    sys.stderr.flush()
+
+
+def stop_closed(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) -> list[str]:
+    """Read, list, beat, stop, beat: the closed reviews' sessions → the review ids a stop was sent to.
+
+    Changes no row (its only writes are the beats). Matches are computed for every candidate before any stop; the
+    ``HOOK_SUBPROCESS_S`` budget bounds only the stops.
+    """
+    rows = _closed_reviews(conn, clock)
+    window = {r["id"] for r in rows}
+    _state.stopped = _state.stopped & window
+    _state.attempts = {k: v for k, v in _state.attempts.items() if k in window}
+    _state.stop_logged = {p for p in _state.stop_logged if p[0] in window}
+    candidates = [r for r in rows if r["id"] not in _state.stopped]
+    if not candidates:
+        return []
+    listing = seams.claude.try_agents(timeout=ticks.HOOK_SUBPROCESS_S)
+    daemon.beat(conn, clock)
+    if listing is None:
+        return []  # unknown: nothing stopped, nothing marked; the next tick retries
+    matches = {r["id"]: _matches(r, listing) for r in candidates}
+    settled = clock_mod.stamp(clock, plus=-REQUEST_TTL_S)
+    for row in candidates:  # gone (L3/L9); one never identified only once its session can no longer appear late
+        if not matches[row["id"]] and (row["session_id"] is not None or row["launch_at"] <= settled):
+            _state.stopped.add(row["id"])
+    started = clock.now()
+    sent: list[str] = []
+    ordered = sorted(candidates, key=lambda r: _state.attempts.get(r["id"], 0))  # stable: oldest first on a tie
+    for row, found in [(r, a) for r in ordered for a in matches[r["id"]]]:
+        if (clock.now() - started).total_seconds() >= ticks.HOOK_SUBPROCESS_S:
+            break  # the rest next tick
+        rid = row["id"]
+        res = _stop(seams, found.id or found.session_id)
+        daemon.beat(conn, clock)
+        _state.attempts[rid] = _state.attempts.get(rid, 0) + 1
+        if rid not in sent:
+            sent.append(rid)
+        if not res.ok:
+            _log_stop_failure(rid, res)
+    return sent
 
 
 def _reset_for_tests() -> None:

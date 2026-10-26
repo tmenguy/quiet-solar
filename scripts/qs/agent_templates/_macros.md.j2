@@ -271,6 +271,9 @@ outside `in/`.
    `finding open --task <T> --phase <build if head_state is branch or merged, else plan> --source [[ source ]] --input <file> --token <token>`,
    one call per task[% if kind == "cross_run" %] (a cross-run finding is opened on each task it
    touches)[% endif %].
+[% if finding_severities is defined %]
+   `severity` is exactly one of [[ "`" ~ finding_severities | join("`, `") ~ "`" ]]; `category` exactly one of [[ "`" ~ finding_categories | join("`, `") ~ "`" ]] (anything else is `USAGE`).
+[% endif %]
 6. Write the finish file in your `in/` directory, call
    `review finish --input <file> --token <token>` once, then stop:
 

@@ -1126,7 +1126,7 @@ def test_review_agents_render_both_harnesses_bound_and_unbound(tmp_path: Path, s
 @pytest.mark.parametrize("stem", sorted(_REVIEW_STEMS))
 @pytest.mark.parametrize("hdir", [".claude", ".opencode"])
 def test_review_agents_pin_the_command_rule_on_both_harnesses(tmp_path: Path, stem: str, hdir: str) -> None:
-    """The rule is mode-independent: true under `dontAsk` and under the `auto` fallback (#407 S7)."""
+    """The rule is mode-independent: true under `dontAsk` and under `auto` (#407 S7)."""
     text = (_render_real(tmp_path, bound=False) / hdir / "agents" / f"{stem}.md").read_text()
     assert (
         "**The command form.** Use only these six commands, and `Read` / `Write`\n"
@@ -1183,3 +1183,36 @@ def test_review_agents_pin_the_contract(tmp_path: Path, stem: str, source: str) 
     else:
         assert "A cross-run review writes no `blast_radius`" in text
         assert "a cross-run finding is opened on each task it\n   touches" in text
+
+
+def _vocabulary_line(severities: tuple[str, ...], categories: tuple[str, ...]) -> str:
+    sev = ", ".join(f"`{v}`" for v in severities)
+    cat = ", ".join(f"`{v}`" for v in categories)
+    return f"   `severity` is exactly one of {sev}; `category` exactly one of {cat} (anything else is `USAGE`).\n"
+
+
+_STEP5_ENDS = {
+    "qs-global-review": "one call per task.\n",
+    "qs-cross-run-review": "touches).\n",
+}
+
+
+@pytest.mark.parametrize("stem", sorted(_REVIEW_STEMS))
+@pytest.mark.parametrize("hdir", [".claude", ".opencode"])
+def test_review_agents_state_the_finding_vocabulary(tmp_path: Path, stem: str, hdir: str) -> None:
+    """#423 item 2: step 5 states `finding open`'s values, from the ledger's constants, in declared order."""
+    from control_plane import schema_ledger  # type: ignore[import-not-found]
+
+    text = (_render_real(tmp_path, bound=False) / hdir / "agents" / f"{stem}.md").read_text()
+    line = _vocabulary_line(schema_ledger.SEVERITIES, schema_ledger.CATEGORIES)
+    assert _STEP5_ENDS[stem] + line + "6. Write" in text
+
+
+def test_the_finding_vocabulary_follows_the_ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """#423 item 2: the very constants the ledger checks; a new category reaches the agents."""
+    from control_plane import schema_ledger  # type: ignore[import-not-found]
+
+    assert r.CATEGORIES is schema_ledger.CATEGORIES and r.SEVERITIES is schema_ledger.SEVERITIES
+    monkeypatch.setattr(r, "CATEGORIES", (*schema_ledger.CATEGORIES, "zzz"))
+    text = (_render_real(tmp_path, bound=False) / ".claude" / "agents" / "qs-cross-run-review.md").read_text()
+    assert _vocabulary_line(schema_ledger.SEVERITIES, (*schema_ledger.CATEGORIES, "zzz")) in text
