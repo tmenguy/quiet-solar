@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-10-16
+last_verified: 2026-10-26
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -562,6 +562,39 @@ place of the sensor is treated as trusted.
 `_probe_and_enforce_stopped_charge_command_state` is unchanged: QS still stops
 the charge, it just no longer claims the target is reached. The zero-power
 notification now also suggests unplugging and re-plugging the car.
+
+### The filler is artificial: tagged, rebuilt on any chain change (QS-431)
+
+The best-effort chain the charger appends after the real constraints (filler /
+solar priority, no deadline, `from_user=False`) is tagged
+`{CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_FILLER}`
+(`QSChargerGeneric._is_filler_constraint`; an untagged, non-user, no-deadline
+constraint persisted before the tag counts too). It starts where the real chain
+ends, so it is only valid for that chain: `check_load_activity_and_constraints`
+snapshots the real (non-filler) constraints at cycle start
+(`_non_filler_constraints_signature`: identity, load param, type, target, end) and,
+when the cycle changed them (removed, pushed, retargeted, moved), drops every filler
+(`_drop_filler_constraints`) right before the best-effort block, which rebuilds it
+from the current chain. A kept filler kept a stale start (e.g. the target of a
+removed person constraint), and `push_live_constraint`'s same-end carry-over could
+then copy it into the rebuilt constraint and complete it at push (QS-431 incident:
+bump while a person constraint was live → "COMPLETED 44 % best effort", car never
+charged). A steady cycle keeps the same filler object (no churn; `stable_name`
+ignores the start). Changes made by `update_live_constraints` between cycles (ASAP
+promotion, completion) are not detected — they do not move the chain's end.
+Known limit: an *active* energy-target filler loses its accumulated
+`current_value` when it is rebuilt.
+
+### Person-constraint precedence on a user-frozen car (QS-431)
+
+`check_load_activity_and_constraints` suppresses the person constraint on a
+user-frozen car (`QSCar.is_user_frozen()`): the person block's removal branch
+runs (the filler rule above then rebuilds the chain from the real SOC). The #48
+ASAP escape now retargets a person ASAP only when the car is frozen **and** has a
+target marker; a boot-replayed marker no longer lowers it (met → silent drop →
+re-push loop). The person block updates a live person constraint's target only
+when the **rounded** % changes, so sub-percent drift of the need no longer changes
+the notified state.
 
 ### The plug-state rescue no longer needs a currently-attached car (QS-346)
 

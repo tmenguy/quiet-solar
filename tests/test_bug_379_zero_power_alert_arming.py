@@ -70,6 +70,13 @@ class _SocConstraint:
         self.first_value_update = T0 - timedelta(hours=1)
         self.last_value_update = T0 - timedelta(minutes=1)
         self.last_value_change_update = T0 - timedelta(minutes=10)
+        # QS-431: the charger's filler rule reads these on every live constraint; a
+        # deadline + no tag makes this a real (non-filler) constraint
+        self.load_param = None
+        self.load_info = None
+        self.from_user = False
+        self.type = 0
+        self.end_of_constraint = T0 + timedelta(hours=8)
 
     def is_constraint_met(self, time: datetime, current_value: float) -> bool:
         return False

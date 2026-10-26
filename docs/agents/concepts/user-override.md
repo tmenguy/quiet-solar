@@ -181,6 +181,14 @@ command state.
   This is by design (QS-353 D1) — but only a *user* action may trigger
   it. A **system** action (the daily person notification) must set a
   time-boxed system hold instead, never write user-originated state.
+  **QS-431:** the hook also sets the `user_frozen` flag
+  (`USER_ORIGINATED_USER_FROZEN`, read via `QSCar.is_user_frozen()`) —
+  only outside `_USER_REPLAY_FOR_INIT`, so an entity restore replay
+  never freezes. A frozen car gets no automatic person constraint until
+  the store is cleared (`clear_all_user_originated`: unplug, reset,
+  pin taken, stale/unauthorised pin); a person ASAP keeps its person
+  target unless the car is frozen **and** carries a target marker
+  (refined #48 escape).
   **QS-416:** the same hook also **pins the car↔charger association**:
   when the car is attached, it sets the charger's
   `USER_ORIGINATED_CAR_NAME` to the car, so no better-scoring car can take

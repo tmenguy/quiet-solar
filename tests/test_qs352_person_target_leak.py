@@ -34,6 +34,7 @@ from custom_components.quiet_solar.const import (
     USER_ORIGINATED_CHARGE_TIME,
     USER_ORIGINATED_FORCE_CHARGE,
 )
+from custom_components.quiet_solar.ha_model.car import user_replay_context
 from custom_components.quiet_solar.home_model.constraints import (
     MultiStepsPowerLoadConstraintChargePercent,
 )
@@ -144,7 +145,9 @@ async def _run_step1(charger, car, now, magali, default=80.0):
     assert car._next_charge_target == 41
     non_person = _non_person_cts(charger)
     assert len(non_person) == 1
-    assert non_person[0].initial_value == 37.0
+    # QS-431: the pre-seeded filler is rebuilt behind the new person constraint (it is
+    # chained after it), so it now starts at the person target, not at the stale 37.
+    assert non_person[0].initial_value == pytest.approx(PERSON_TARGET)
     assert non_person[0].target_value == default
 
 
@@ -317,13 +320,17 @@ async def test_no_restore_when_target_already_default(caplog):
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
 async def test_user_target_set_before_person_restores_user_value(caplog):
-    """user-set 60 -> person leak (41) -> person removed -> _next_charge_target back to 60."""
+    """user-set 60 -> person leak (41) -> person removed -> _next_charge_target back to 60.
+
+    QS-431: reachable only via boot replay — a user-set target freezes the car (no person constraint).
+    """
     hass, home, charger, car, now, magali, thomas = _base_fixture()
 
     _preseed_filler(charger, car, now)
 
     await car.set_next_charge_target_percent(60)
-    car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 60)
+    with user_replay_context(True):
+        car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 60)
 
     await _run_step1(charger, car, now, magali)
     assert car._next_charge_target == 41  # the push site overwrote the user's 60
@@ -351,14 +358,18 @@ async def test_user_target_set_before_person_restores_user_value(caplog):
 @pytest.mark.asyncio
 async def test_post_reboot_user_default_restores_after_person_removed(caplog):
     """Post-reboot select-restore writes user_target=80 (int); the person leak (41) must
-    not linger in the select — the user-target branch restores 80."""
+    not linger in the select — the user-target branch restores 80.
+
+    QS-431: reachable only via boot replay — a user-set target freezes the car (no person constraint).
+    """
     hass, home, charger, car, now, magali, thomas = _base_fixture()
 
     _preseed_filler(charger, car, now)
 
     # The select restore writes an int via user_set_next_charge_target.
     await car.set_next_charge_target_percent(80)
-    car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 80)
+    with user_replay_context(True):
+        car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 80)
 
     await _run_step1(charger, car, now, magali)
     assert car._next_charge_target == 41
@@ -403,13 +414,17 @@ async def test_unplug_with_live_person_constraint_clears_leaked_target(caplog):
 @pytest.mark.asyncio
 async def test_unplug_with_live_person_constraint_clears_target():
     """Review #02 finding #1: the clear must fire even with a user target marker present
-    (unplug wipes all user-originated state anyway), so the person leak must not linger."""
+    (unplug wipes all user-originated state anyway), so the person leak must not linger.
+
+    QS-431: reachable only via boot replay — a user-set target freezes the car (no person constraint).
+    """
     hass, home, charger, car, now, magali, thomas = _base_fixture()
 
     _preseed_filler(charger, car, now)
 
     await car.set_next_charge_target_percent(60)
-    car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 60)
+    with user_replay_context(True):
+        car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 60)
 
     await _run_step1(charger, car, now, magali)
     assert car._next_charge_target == 41  # the person push clobbered the user's 60
@@ -581,12 +596,16 @@ async def test_timed_charge_after_person_removed_uses_default(caplog):
 
 @pytest.mark.asyncio
 async def test_force_charge_after_person_removed_uses_user_target(caplog):
-    """#8(iii): the early restore realigns to a user target when one is set."""
+    """#8(iii): the early restore realigns to a user target when one is set.
+
+    QS-431: reachable only via boot replay — a user-set target freezes the car (no person constraint).
+    """
     hass, home, charger, car, now, magali, thomas = _base_fixture()
 
     _preseed_filler(charger, car, now)
     await car.set_next_charge_target_percent(60)
-    car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 60)
+    with user_replay_context(True):
+        car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 60)
     await _run_step1(charger, car, now, magali)
     assert car._next_charge_target == 41
 
@@ -1029,13 +1048,17 @@ async def test_restore_does_not_churn_across_cycles(caplog):
 @pytest.mark.asyncio
 async def test_zero_user_target_blocks_default_restore(caplog):
     """user_target == 0 is an explicit override: the default-restore branch is skipped;
-    with finding #2 in place the user-target branch re-applies 0."""
+    with finding #2 in place the user-target branch re-applies 0.
+
+    QS-431: reachable only via boot replay — a user-set target freezes the car (no person constraint).
+    """
     hass, home, charger, car, now, magali, thomas = _base_fixture()
 
     _preseed_filler(charger, car, now)
 
     await car.set_next_charge_target_percent(0)
-    car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 0)
+    with user_replay_context(True):
+        car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 0)
     assert car.get_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT) == 0
 
     await _run_step1(charger, car, now, magali)

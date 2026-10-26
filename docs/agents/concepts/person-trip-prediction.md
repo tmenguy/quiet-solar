@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/person.py
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-09-16
+last_verified: 2026-10-26
 ---
 
 # Person, Car, and trip prediction
@@ -196,6 +196,23 @@ Person re-allocated away / covered / need met → person constraint removed
 - Confusing person-car allocation with car-charger assignment. They
   are independent: a person can own multiple cars; a car can be
   plugged into any charger.
+- Pushing a person constraint on a **user-frozen car** (QS-431). Any
+  genuine user action on a car (target %, solar bump, charge now, timed
+  charge, clean constraints, picking the person or the charger on the
+  car card) sets `user_frozen` in its user-originated store
+  (`QSCar.is_user_frozen()`). A frozen car gets **no** automatic person
+  constraint: `_person_constraint_ends_this_cycle` returns True, so a
+  live non-ASAP person constraint is removed (the filler chained behind
+  it is rebuilt from the real SOC — see charger-budgeting) and none is
+  pushed.
+  The person need is still **computed** — it keeps driving allocation
+  and the "trip not covered" notifications. Explicit consequence:
+  **pinning a person on a car disables that car's person-trip charging
+  until unplug / reset** (or the pin is taken by another car). The
+  freeze survives restarts. An HA restart replay, the QS-353 system
+  hold and the charger-card car pick do **not** freeze. A person
+  constraint already ASAP at freeze time runs to completion, retargeted
+  to the user's target marker if any.
 
 ## See also
 

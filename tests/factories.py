@@ -948,6 +948,10 @@ class TestCarDouble:
     def has_user_originated(self, key: str) -> bool:
         return key in self._user_originated
 
+    def is_user_frozen(self) -> bool:
+        """QS-431: mirrors ``QSCar.is_user_frozen``."""
+        return self._user_originated.get("user_frozen") is True
+
     def clear_user_originated(self, key: str) -> None:
         self._user_originated.pop(key, None)
 
