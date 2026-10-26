@@ -42,24 +42,23 @@ def trust_hint(trust_dir: Path | str) -> str:
 def word_tail(text: str, limit: int) -> str:
     """The last ``limit`` characters of ``text``, starting on a word boundary when one is in reach (#423).
 
-    ``limit <= 0`` → ``""``; a text that fits is returned whole. A cut that falls on a boundary keeps the whole first
-    word (left-stripped, unless that leaves nothing); a cut inside a word drops that partial word and the whitespace
-    run after it only when together they take at most ``limit // 2`` characters and something but whitespace
-    remains — otherwise (a long partial token, a folder path) the raw cut is kept. Never over ``limit``; never empty
-    for a non-empty ``text`` and a positive ``limit``.
+    ``limit <= 0`` → ``""``; a text that fits is returned whole. A cut that falls on a boundary or inside a
+    whitespace run keeps the whole first word (left-stripped, unless that leaves nothing); a cut inside a word drops
+    that partial word and the whitespace run after it only when together they take at most ``limit // 2``
+    characters — otherwise (a long partial token, a folder path) the raw cut is kept. Never over ``limit``; never
+    empty for a non-empty ``text`` and a positive ``limit``.
     """
     if limit <= 0:
         return ""
     if len(text) <= limit:
         return text
     cut = text[-limit:]
-    if text[-limit - 1].isspace():
+    if text[-limit - 1].isspace() or cut[:1].isspace():
         return cut.lstrip() or cut
     gap = re.search(r"\s+", cut)  # the partial word and the whitespace run after it end at `gap.end()`
     if gap is None or gap.end() > limit // 2:
         return cut  # no boundary, or dropping would lose too much of the tail
-    rest = cut[gap.end() :]
-    return rest if rest.strip() else cut
+    return cut[gap.end() :]  # never empty: a run ending the cut ends past `limit // 2`
 
 
 def bg_failure(res: runner.RunResult, trust_dir: Path, limit: int) -> str:

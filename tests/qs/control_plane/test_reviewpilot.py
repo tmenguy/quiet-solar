@@ -755,6 +755,12 @@ def stops(fake_runner: Any) -> list[str]:
     return [c.argv[2] for c in calls]
 
 
+def later(pw: dict[str, Any], seconds: float = reviewpilot.PILOT_EVERY_S) -> list[str]:
+    """The next tick's step 4, ``seconds`` later (a review stopped once is retried one ``PILOT_EVERY_S`` later)."""
+    pw["clock"].advance(seconds)
+    return stop(pw)
+
+
 def closed(pw: dict[str, Any], rid: str, state: str = "finished", **kw: Any) -> None:
     """A closed review whose ``claude --bg`` ran, closed recently (overridable)."""
     kw.setdefault("launch_age", 100.0)
@@ -793,9 +799,9 @@ class TestStopClosed:
         assert stop(pw) == ["V1"]
         assert pw["claude"].listings == 1 and stops(fake_runner) == ["short-1"]
         pw["claude"].listing = []
-        assert stop(pw) == [] and pw["claude"].listings == 2 and stops(fake_runner) == ["short-1"]
+        assert later(pw) == [] and pw["claude"].listings == 2 and stops(fake_runner) == ["short-1"]
         assert "V1" in reviewpilot._state.stopped
-        assert stop(pw) == [] and pw["claude"].listings == 2 and len(stops(fake_runner)) == 1
+        assert later(pw) == [] and pw["claude"].listings == 2 and len(stops(fake_runner)) == 1
 
     @pytest.mark.parametrize(("state", "status"), [("abandoned", "busy"), ("failed", "idle")])
     def test_abandoned_and_failed_are_stopped_too(self, pw, fake_runner, state: str, status: str) -> None:
@@ -817,17 +823,18 @@ class TestStopClosed:
         assert stop(pw) == ["V1"] and stops(fake_runner) == ["a1", "S-b"]
 
     def test_a_session_and_its_same_named_fork(self, pw, fake_runner) -> None:
-        """AC2: both are stopped; done only once neither is listed."""
+        """AC2: both are stopped; done only once neither is listed. Two stops in a tick are one attempt."""
         closed(pw, "V1", session="S-1")
         fork = agent("S-f", "n-V1", id="fork")
         pw["claude"].listing = [agent("S-1", id="short-1"), fork]
         stop(pw)
-        assert stops(fake_runner) == ["short-1", "fork"]
+        assert stops(fake_runner) == ["short-1", "fork"] and reviewpilot._state.attempts == {"V1": 1}
         pw["claude"].listing = [fork]
-        stop(pw)
+        later(pw)
         assert stops(fake_runner) == ["short-1", "fork", "fork"] and "V1" not in reviewpilot._state.stopped
+        assert reviewpilot._state.attempts == {"V1": 2}
         pw["claude"].listing = []
-        stop(pw)
+        later(pw, 2 * reviewpilot.PILOT_EVERY_S)
         assert "V1" in reviewpilot._state.stopped
 
     def test_a_late_session_is_stopped_before_the_ttl(self, pw, fake_runner) -> None:
@@ -880,13 +887,13 @@ class TestStopClosed:
         fake_runner.on(["claude", "stop", "short-1"], RunResult(code, "", "the CLI said de\\` in a long line"))
         assert stop(pw) == ["V1", "V2"]
         pw["claude"].listing = [agent("S-1", id="short-1")]
-        assert stop(pw) == ["V1"]
+        assert later(pw) == ["V1"]
         assert stops(fake_runner) == ["short-1", "short-2", "short-1"]
         lines = capsys.readouterr().err.splitlines()
         assert lines == [f"[cp-review-pilot] review V1: claude stop exited {code}: the CLI said de\\` in a long line"]
         fake_runner.on(["claude", "stop", "short-1"], RunResult(code + 1, "", "other"))
-        stop(pw)
-        stop(pw)
+        assert later(pw, 2 * reviewpilot.PILOT_EVERY_S) == ["V1"]
+        assert later(pw, 4 * reviewpilot.PILOT_EVERY_S) == ["V1"]
         assert capsys.readouterr().err.splitlines() == [
             f"[cp-review-pilot] review V1: claude stop exited {code + 1}: other"
         ]
@@ -986,6 +993,44 @@ class TestStopClosed:
         assert stop(pw) == ["V1"]
         assert stop(pw) == ["V2", "V1"]
         assert stops(fake_runner) == ["short-1", "short-2", "short-1"]
+
+    def test_a_stop_that_keeps_failing_backs_off(self, pw, fake_runner) -> None:
+        """AC5: retried after 30, 60, 120 s… up to ``STOP_BACKOFF_MAX_S``; a tick in between neither lists nor stops."""
+        from control_plane.runner import RunResult
+
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        fake_runner.on(["claude", "stop"], RunResult(124, "", "timed out"))
+        sent: list[float] = []
+        for n in range(400):  # every `PILOT_EVERY_S`, 12 000 s in all
+            before = pw["claude"].listings
+            if stop(pw):
+                sent.append(n * reviewpilot.PILOT_EVERY_S)
+            else:
+                assert pw["claude"].listings == before  # the only candidate is backing off: no listing
+            pw["clock"].advance(reviewpilot.PILOT_EVERY_S)
+        delays = [b - a for a, b in zip(sent, sent[1:], strict=False)]
+        assert delays == [30.0, 60.0, 120.0, 240.0, 480.0, 960.0, 1920.0, 3600.0, 3600.0]
+        assert reviewpilot.STOP_BACKOFF_MAX_S == 3600 and pw["claude"].listings == len(sent) == len(stops(fake_runner))
+        assert reviewpilot._state.attempts == {"V1": len(sent)}
+
+    def test_a_stop_that_exits_0_but_stays_listed_is_logged_once(self, pw, fake_runner, capsys) -> None:
+        """AC4: the session is still listed after a successful stop: one line, however many ticks it lasts."""
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        assert stop(pw) == ["V1"] and capsys.readouterr().err == ""
+        assert later(pw) == ["V1"]
+        assert later(pw, 2 * reviewpilot.PILOT_EVERY_S) == ["V1"]
+        assert capsys.readouterr().err.splitlines() == [
+            "[cp-review-pilot] review V1: claude stop exited 0 but the session is still listed"
+        ]
+
+    def test_the_backoff_is_pruned_with_the_window(self, pw, fake_runner) -> None:
+        """AC3: a review that leaves ``STOP_WINDOW_S`` takes its retry time with it."""
+        closed(pw, "V1", session="S-1", finished_age=reviewpilot.STOP_WINDOW_S - 10)
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        assert stop(pw) == ["V1"] and set(reviewpilot._state.retry_at) == {"V1"}
+        assert later(pw) == [] and reviewpilot._state.retry_at == {} and reviewpilot._state.attempts == {}
 
     def test_the_hook_stops_after_the_launches(self, pw, monkeypatch, fake_runner) -> None:
         """AC6: through ``review_pilot_hook``, the stop comes after ``drain``'s launcher."""

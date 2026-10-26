@@ -16,15 +16,18 @@ Every ``PILOT_EVERY_S`` (a ``ticks.Throttle``), after ``detectors`` and before `
    ``reviews.request_locked`` (the same scope, coalescing and deferral as ``tool review``) and, on a new
    review, starts a **detached** ``cp.py tool review`` process with the review's launch grant. An event whose
    latest launch ``failed`` gets one more attempt (``PILOT_ATTEMPTS``); an ``abandoned`` review is not retried.
-4. **Stop closed review sessions** (#423, last, after the launches): a review session is single-turn, so once its
-   review is ``finished`` / ``failed`` / ``abandoned`` its ``claude --bg`` process is idle, or — an ``abandoned``
-   one, expired past ``REVIEW_TTL_S`` — may still be busy on a turn whose token is void: either way it is stopped.
-   Every closed review launched within ``STOP_WINDOW_S`` of its ``finished_at`` is a candidate until it is confirmed gone:
-   one listing, a beat, then ``claude stop`` (``HOOK_SUBPROCESS_S``, a beat after each) for every listed agent with
-   the review's ``session_id`` or ``name``, fewest attempts first, within a ``HOOK_SUBPROCESS_S`` budget.
-   Best-effort: a failed stop is logged once per exit code and retried next tick; an unknown listing changes
-   nothing. A candidate no known listing shows is done — one without a ``session_id`` only past ``REQUEST_TTL_S``
-   from its launch (its session may still appear late).
+4. **Stop closed review sessions** (#423, last, after the launches): a review session is single-turn, so its
+   ``claude --bg`` process is usually idle and listed ``done`` once its review is ``finished``; a ``failed`` or
+   ``abandoned`` review's session may still be busy (a launch that timed out, a ``REVIEW_TTL_S`` expiry), and the
+   stop interrupts it on purpose, since its token is void. Every closed review whose ``claude --bg`` ran
+   (``launch_at`` set) and whose ``finished_at`` is within ``STOP_WINDOW_S`` is a candidate until it is confirmed
+   gone: one listing, a beat, then ``claude stop`` (``HOOK_SUBPROCESS_S``, a beat after each) for every listed agent
+   with the review's ``session_id`` or ``name``, fewest attempts first, within a ``HOOK_SUBPROCESS_S`` budget. A
+   review that got stops is retried with doubling delays — ``PILOT_EVERY_S``, then twice that, up to
+   ``STOP_BACKOFF_MAX_S``; while it backs off it is skipped (no stop, and no listing for it alone).
+   Best-effort: a failed stop is logged once per exit code, a stop that exited 0 but left the session listed once;
+   an unknown listing changes nothing. A candidate no known listing shows is done — one without a ``session_id``
+   only past ``REQUEST_TTL_S`` from its launch (its session may still appear late).
 
 The daemon holds no token: the grant (``review:V<n>.0.<nonce>``) is the launcher's only authority.
 """
@@ -39,6 +42,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from . import activeloop, alerts, daemon, db, errors, liveness, nodes, paths, reviews, ticks, tokens
@@ -57,6 +61,7 @@ PILOT_KINDS = frozenset({alerts.OVERLAP_CROSS_RUN, alerts.DUPLICATE_TASK_CROSS_R
 LIVENESS_CONFIRM = 2
 MERGES_PER_TICK = 100
 STOP_WINDOW_S = 7 * 24 * 3600  # a closed review stays a stop candidate this long after its `finished_at` (#423)
+STOP_BACKOFF_MAX_S = 3600.0  # the longest delay between two ticks that stop the same review (#423)
 STOP_TAIL = 200  # a failed stop's logged output tail keeps at most this many characters
 ACTOR = "cp:review_pilot"
 
@@ -78,7 +83,8 @@ class _State:
     unlisted: dict[str, int] = field(default_factory=dict)
     # step 4 (#423), each pruned to the closed reviews still in `STOP_WINDOW_S`
     stopped: set[str] = field(default_factory=set)  # closed reviews confirmed gone
-    attempts: dict[str, int] = field(default_factory=dict)  # stops sent per review (fewest first)
+    attempts: dict[str, int] = field(default_factory=dict)  # ticks that sent the review a stop (fewest first)
+    retry_at: dict[str, datetime] = field(default_factory=dict)  # a review backing off: skipped until then
     stop_logged: set[tuple[str, int]] = field(default_factory=set)  # (review, exit code) already logged
 
 
@@ -566,18 +572,36 @@ def _log_stop_failure(review_id: str, res: RunResult) -> None:
     sys.stderr.flush()
 
 
+def _log_still_listed(review_id: str) -> None:
+    """One stderr line per review whose stops all exited 0 but whose session is still listed."""
+    if (review_id, 0) in _state.stop_logged or any(r == review_id and c != 0 for r, c in _state.stop_logged):
+        return
+    _state.stop_logged.add((review_id, 0))
+    sys.stderr.write(f"[cp-review-pilot] review {review_id}: claude stop exited 0 but the session is still listed\n")
+    sys.stderr.flush()
+
+
+def _backoff(review_id: str) -> timedelta:
+    """The delay before the review's next stop: ``PILOT_EVERY_S`` doubled per attempt, capped at
+    ``STOP_BACKOFF_MAX_S`` — less half a tick, so a throttled tick a little early still retries."""
+    delay = min(STOP_BACKOFF_MAX_S, PILOT_EVERY_S * 2 ** (_state.attempts[review_id] - 1))
+    return timedelta(seconds=delay - PILOT_EVERY_S / 2)
+
+
 def stop_closed(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) -> list[str]:
     """Read, list, beat, stop, beat: the closed reviews' sessions → the review ids a stop was sent to.
 
     Changes no row (its only writes are the beats). Matches are computed for every candidate before any stop; the
-    ``HOOK_SUBPROCESS_S`` budget bounds only the stops.
+    ``HOOK_SUBPROCESS_S`` budget bounds only the stops. A review backing off (``retry_at``) is no candidate.
     """
     rows = _closed_reviews(conn, clock)
     window = {r["id"] for r in rows}
     _state.stopped = _state.stopped & window
     _state.attempts = {k: v for k, v in _state.attempts.items() if k in window}
+    _state.retry_at = {k: v for k, v in _state.retry_at.items() if k in window}
     _state.stop_logged = {p for p in _state.stop_logged if p[0] in window}
-    candidates = [r for r in rows if r["id"] not in _state.stopped]
+    now = clock.now()
+    candidates = [r for r in rows if r["id"] not in _state.stopped and _state.retry_at.get(r["id"], now) <= now]
     if not candidates:
         return []
     listing = seams.claude.try_agents(timeout=ticks.HOOK_SUBPROCESS_S)
@@ -589,6 +613,8 @@ def stop_closed(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) 
     for row in candidates:  # gone (L3/L9); one never identified only once its session can no longer appear late
         if not matches[row["id"]] and (row["session_id"] is not None or row["launch_at"] <= settled):
             _state.stopped.add(row["id"])
+        elif matches[row["id"]] and _state.attempts.get(row["id"], 0) >= 1:
+            _log_still_listed(row["id"])
     started = clock.now()
     sent: list[str] = []
     ordered = sorted(candidates, key=lambda r: _state.attempts.get(r["id"], 0))  # stable: oldest first on a tie
@@ -599,9 +625,10 @@ def stop_closed(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) 
         rid = row["id"]
         res = _stop(seams, found.id or found.session_id)
         daemon.beat(conn, clock)
-        _state.attempts[rid] = _state.attempts.get(rid, 0) + 1
-        if rid not in sent:
+        if rid not in sent:  # one attempt per tick: a same-named fork does not double it
             sent.append(rid)
+            _state.attempts[rid] = _state.attempts.get(rid, 0) + 1
+            _state.retry_at[rid] = started + _backoff(rid)
         if not res.ok:
             _log_stop_failure(rid, res)
     return sent

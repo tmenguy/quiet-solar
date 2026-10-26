@@ -174,6 +174,7 @@ class TestBgFailure:
         ("alpha beta gamma", 10, "beta gamma"),  # a cut on a boundary keeps the whole first word
         ("alpha   beta", 6, "beta"),  # a cut on a boundary inside a whitespace run is left-stripped
         ("ab" + " " * 5, 3, "   "),  # a cut on a boundary that is all whitespace: the raw cut
+        ("word" + " " * 10 + "end", 13, "end"),  # a cut inside a long whitespace run: left-stripped
         ("ab cd", 3, "cd"),  # a cut just before a whitespace run: the empty partial word and the run dropped
         ("abcdefgh", 3, "fgh"),  # no whitespace: the raw cut
         ("alpha beta\n", 4, "eta\n"),  # a partial token followed only by trailing whitespace: the raw cut
