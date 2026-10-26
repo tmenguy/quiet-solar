@@ -271,6 +271,8 @@ outside `in/`.
    `finding open --task <T> --phase <build if head_state is branch or merged, else plan> --source [[ source ]] --input <file> --token <token>`,
    one call per task[% if kind == "cross_run" %] (a cross-run finding is opened on each task it
    touches)[% endif %].
+{# #423: `_make_env` always sets these globals; the guard is kept on purpose: an older render_agents.py
+    (rendering this template from another checkout) sets no finding_* globals. #}
 [% if finding_severities is defined %]
    `severity` is exactly one of [[ "`" ~ finding_severities | join("`, `") ~ "`" ]]; `category` exactly one of [[ "`" ~ finding_categories | join("`, `") ~ "`" ]] (anything else is `USAGE`).
 [% endif %]
