@@ -43,9 +43,10 @@ def word_tail(text: str, limit: int) -> str:
     """The last ``limit`` characters of ``text``, starting on a word boundary when one is in reach (#423).
 
     ``limit <= 0`` → ``""``; a text that fits is returned whole. A cut that falls on a boundary keeps the whole first
-    word (left-stripped, unless that leaves nothing); a cut inside a word drops that partial word, unless nothing but
-    whitespace would remain, in which case the raw cut is kept. Never over ``limit``; never empty for a non-empty
-    ``text`` and a positive ``limit``.
+    word (left-stripped, unless that leaves nothing); a cut inside a word drops that partial word and the whitespace
+    run after it only when together they take at most ``limit // 2`` characters and something but whitespace
+    remains — otherwise (a long partial token, a folder path) the raw cut is kept. Never over ``limit``; never empty
+    for a non-empty ``text`` and a positive ``limit``.
     """
     if limit <= 0:
         return ""
@@ -54,8 +55,10 @@ def word_tail(text: str, limit: int) -> str:
     cut = text[-limit:]
     if text[-limit - 1].isspace():
         return cut.lstrip() or cut
-    gap = re.search(r"\s+", cut)  # drop the partial word and the whitespace run after it
-    rest = cut[gap.end() :] if gap is not None else ""
+    gap = re.search(r"\s+", cut)  # the partial word and the whitespace run after it end at `gap.end()`
+    if gap is None or gap.end() > limit // 2:
+        return cut  # no boundary, or dropping would lose too much of the tail
+    rest = cut[gap.end() :]
     return rest if rest.strip() else cut
 
 

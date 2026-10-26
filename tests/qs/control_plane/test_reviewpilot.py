@@ -904,6 +904,23 @@ class TestStopClosed:
         assert stop(pw) == ["V1"]
         assert capsys.readouterr().err == "[cp-review-pilot] review V1: claude stop exited 127: embedded null byte\n"
 
+    @pytest.mark.parametrize(
+        ("out", "err", "line"),
+        [
+            ("said on stdout\n", "  \n", "claude stop exited 1: said on stdout"),  # stderr empty: stdout's tail
+            ("", "", "claude stop exited 1"),  # no output: no dangling separator
+        ],
+    )
+    def test_a_failed_stop_with_an_empty_stderr(self, pw, fake_runner, capsys, out: str, err: str, line: str) -> None:
+        """AC4: the logged tail falls back to stdout; with no output at all the line ends at the exit code."""
+        from control_plane.runner import RunResult
+
+        closed(pw, "V1", session="S-1")
+        pw["claude"].listing = [agent("S-1", id="short-1")]
+        fake_runner.on(["claude", "stop"], RunResult(1, out, err))
+        assert stop(pw) == ["V1"]
+        assert capsys.readouterr().err == f"[cp-review-pilot] review V1: {line}\n"
+
     def test_an_unknown_listing_changes_nothing(self, pw, monkeypatch, fake_runner) -> None:
         """AC4: no stop, nothing marked; exactly a listing and its beat."""
         events = recorder(pw, monkeypatch, fake_runner)
@@ -937,6 +954,21 @@ class TestStopClosed:
         fake_runner.on(["claude", "stop"], slow)
         assert stop(pw) == ["V1"] and stops(fake_runner) == ["short-1"]
         assert reviewpilot._state.stopped == {"V4"}
+
+    def test_a_clock_stepping_back_spends_the_budget(self, pw, fake_runner) -> None:
+        """AC5: a negative elapsed time (an NTP step back) ends the stops: one sent, the rest next tick."""
+        from control_plane.runner import RunResult
+
+        for n, age in ((1, 30), (2, 20), (3, 10)):
+            closed(pw, f"V{n}", session=f"S-{n}", finished_age=age)
+        pw["claude"].listing = [agent(f"S-{n}", id=f"short-{n}") for n in (1, 2, 3)]
+
+        def step_back(c: Any) -> RunResult:
+            pw["clock"].advance(-60)
+            return RunResult(0, "", "")
+
+        fake_runner.on(["claude", "stop"], step_back)
+        assert stop(pw) == ["V1"] and stops(fake_runner) == ["short-1"]
 
     def test_fewest_attempts_first(self, pw, fake_runner) -> None:
         """AC5: a stop that keeps failing never starves a newer candidate."""

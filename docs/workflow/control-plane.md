@@ -575,10 +575,10 @@ The tick hook `review_pilot` (after `detectors`, before `hook_route`; every `PIL
    ```
 
    (`start_new_session`, stdin closed, output to `launcher.log`, cwd `<MAIN>`, the environment through `daemon.strip_env`, with `QS_CP_DB` set to the daemon's DB, resolved: a relative path would name another file from `<MAIN>`). Any failure there moves the review to `failed`. With no `popen` seam the pilot requests nothing (logged once), and stops nothing either.
-4. **Stop closed review sessions** (#423; last, after the launches). A review session is single-turn: once its review is `finished`, `failed` or `abandoned`, its `claude --bg` process is idle and listed `done` (L1), and the pilot stops it on its next tick, best-effort. It changes no row (its only writes are beats):
+4. **Stop closed review sessions** (#423; last, after the launches). A review session is single-turn: once its review is `finished` or `failed`, its `claude --bg` process is idle and listed `done` (L1); an `abandoned` one may still be busy (a `REVIEW_TTL_S` expiry), and the stop interrupts it on purpose, since its token is void. Either way the pilot stops it on its next tick, best-effort. It changes no row (its only writes are beats):
    - **Candidates:** the closed reviews with `launch_at` set (their `claude --bg` ran) and `finished_at` within `STOP_WINDOW_S` (7 days), oldest `finished_at` first, minus those already confirmed gone (in memory). None: no listing.
    - **One listing** (`HOOK_SUBPROCESS_S`), then a beat; a failed listing stops and marks nothing. A review's matches are every listed agent with a target (`id`, else `session_id`) that has the review's `session_id` or its `name` (`qs-review-<db tag>-V<n>`, unique per review, so a same-named duplicate fork is stopped too).
-   - **`claude stop <target>`** (`HOOK_SUBPROCESS_S` each, a beat after each), fewest attempts first (a stop that keeps failing never starves a newer review), until the tick has spent `HOOK_SUBPROCESS_S` on stops; the rest go next tick. A non-zero exit (or any exception, as exit 127) is retried next tick and logged once per review and exit code (`[cp-review-pilot] review V<n>: claude stop exited <code>: <tail>`).
+   - **`claude stop <target>`** (`HOOK_SUBPROCESS_S` each, a beat after each), fewest attempts first (a stop that keeps failing never starves a newer review), until the tick has spent `HOOK_SUBPROCESS_S` on stops (a wall clock that steps back counts as spent); the rest go next tick. A non-zero exit (or any exception, as exit 127) is retried next tick and logged once per review and exit code (`[cp-review-pilot] review V<n>: claude stop exited <code>[: <tail>]`, the tail of stderr, else of stdout, at most `STOP_TAIL` characters; no `: <tail>` when both are empty).
    - **Done:** a candidate the listing does not show (a stopped session leaves the default listing, L3/L9); one without a `session_id` (a launch that timed out, or a review finished before it was listed) only once its `launch_at` is `REQUEST_TTL_S` old, since its session may still appear late. A new daemon starts cold and spends one listing to re-confirm.
    - **Worst case:** about 60 s in one tick (a 20 s listing, then stops started within the 20 s budget, the last taking up to 20 s), only while closed sessions are listed and `claude stop` is slow; the beats keep the daemon live, and the tick's later hooks wait that long.
 
@@ -903,7 +903,7 @@ Most are overridable by a function argument. These are module-level only (tests 
 | `REVIEW_TTL_S` / `REQUEST_TTL_S` | 3600 / 600 | `schema_reviews` |
 | `REVIEW_PERMISSION_MODE` / `GIT_TIMEOUT_S` | `"dontAsk"` (`"auto"` unguarded) / 60 | `reviews` |
 | `READ_MAX_BYTES` / `READ_TIMEOUT_S` | 256 KiB / 60 | `gitread` |
-| `PILOT_EVERY_S` / `PILOT_RETRY_S` / `PILOT_ATTEMPTS` / `LIVENESS_CONFIRM` / `MERGES_PER_TICK` / `STOP_WINDOW_S` | 30 / 60 / 2 / 2 / 100 / 7 days | `reviewpilot` |
+| `PILOT_EVERY_S` / `PILOT_RETRY_S` / `PILOT_ATTEMPTS` / `LIVENESS_CONFIRM` / `MERGES_PER_TICK` / `STOP_WINDOW_S` / `STOP_TAIL` | 30 / 60 / 2 / 2 / 100 / 7 days / 200 | `reviewpilot` |
 | `PILOT_KINDS` | `overlap_cross_run`, `duplicate_task_cross_run` | `reviewpilot` |
 
 ## Seams
@@ -958,4 +958,4 @@ Most are overridable by a function argument. These are module-level only (tests 
 - **The DB a review talks to** is the launcher's: `--settings` carries `env.QS_CP_DB`, and the pilot's launcher gets the daemon's DB as an absolute `QS_CP_DB`.
 - **The review pilot's merge rule** sees only overlaps the detector saw (an `overlap_cross_run` row, open or cleared).
 - **Review directories are kept** (they are small): delete old ones by hand, like the `v<N>` backups.
-- **The review-session stop window** (#423). The pilot stops a closed review's session only within `STOP_WINDOW_S` (7 days) of its `finished_at`: a review closed while the daemon stayed down that whole time keeps its idle session until stopped by hand (`claude stop <id>`).
+- **The review-session stop window** (#423). The pilot stops a closed review's session only within `STOP_WINDOW_S` (7 days) of its `finished_at`: a review closed while the daemon stayed down that whole time keeps its idle session until stopped by hand (`claude stop <id>`). A closed review's session resumed by hand (`claude --resume <id>`) inside the window is stopped on the pilot's next tick: the match ignores the listing's kind.

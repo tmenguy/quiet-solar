@@ -177,6 +177,9 @@ class TestBgFailure:
         ("ab cd", 3, "cd"),  # a cut just before a whitespace run: the empty partial word and the run dropped
         ("abcdefgh", 3, "fgh"),  # no whitespace: the raw cut
         ("alpha beta\n", 4, "eta\n"),  # a partial token followed only by trailing whitespace: the raw cut
+        ("failed: " + "/a" * 40 + " x", 50, ("/a" * 40 + " x")[-50:]),  # a long partial token is kept: the raw cut
+        ("X" + "abcd efghi", 10, "efghi"),  # the partial word and its gap end at exactly `limit // 2`: dropped
+        ("X" + "abcde fghi", 10, "abcde fghi"),  # they end at `limit // 2 + 1`: the raw cut
     ],
 )
 def test_word_tail(text: str, limit: int, expected: str) -> None:

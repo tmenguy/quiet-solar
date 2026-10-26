@@ -17,8 +17,9 @@ Every ``PILOT_EVERY_S`` (a ``ticks.Throttle``), after ``detectors`` and before `
    review, starts a **detached** ``cp.py tool review`` process with the review's launch grant. An event whose
    latest launch ``failed`` gets one more attempt (``PILOT_ATTEMPTS``); an ``abandoned`` review is not retried.
 4. **Stop closed review sessions** (#423, last, after the launches): a review session is single-turn, so once its
-   review is ``finished`` / ``failed`` / ``abandoned`` its ``claude --bg`` process has nothing left to do. Every
-   closed review launched within ``STOP_WINDOW_S`` of its ``finished_at`` is a candidate until it is confirmed gone:
+   review is ``finished`` / ``failed`` / ``abandoned`` its ``claude --bg`` process is idle, or — an ``abandoned``
+   one, expired past ``REVIEW_TTL_S`` — may still be busy on a turn whose token is void: either way it is stopped.
+   Every closed review launched within ``STOP_WINDOW_S`` of its ``finished_at`` is a candidate until it is confirmed gone:
    one listing, a beat, then ``claude stop`` (``HOOK_SUBPROCESS_S``, a beat after each) for every listed agent with
    the review's ``session_id`` or ``name``, fewest attempts first, within a ``HOOK_SUBPROCESS_S`` budget.
    Best-effort: a failed stop is logged once per exit code and retried next tick; an unknown listing changes
@@ -56,7 +57,7 @@ PILOT_KINDS = frozenset({alerts.OVERLAP_CROSS_RUN, alerts.DUPLICATE_TASK_CROSS_R
 LIVENESS_CONFIRM = 2
 MERGES_PER_TICK = 100
 STOP_WINDOW_S = 7 * 24 * 3600  # a closed review stays a stop candidate this long after its `finished_at` (#423)
-STOP_TAIL = 200  # a failed stop's logged stderr keeps at most this many characters
+STOP_TAIL = 200  # a failed stop's logged output tail keeps at most this many characters
 ACTOR = "cp:review_pilot"
 
 _THROTTLE = ticks.Throttle(PILOT_EVERY_S)
@@ -554,12 +555,14 @@ def _stop(seams: Seams, target: str) -> RunResult:
 
 
 def _log_stop_failure(review_id: str, res: RunResult) -> None:
-    """One stderr line per ``(review, exit code)``: the line carries the stderr tail, so ``_log_once`` cannot dedupe it."""
+    """One stderr line per ``(review, exit code)``: the line carries the output's tail (stderr's, else stdout's; no
+    ``: <tail>`` when both are empty), so ``_log_once`` cannot dedupe it."""
     if (review_id, res.returncode) in _state.stop_logged:
         return
     _state.stop_logged.add((review_id, res.returncode))
-    tail = liveness.word_tail(res.stderr.strip(), STOP_TAIL)
-    sys.stderr.write(f"[cp-review-pilot] review {review_id}: claude stop exited {res.returncode}: {tail}\n")
+    tail = liveness.word_tail(res.stderr.strip() or res.stdout.strip(), STOP_TAIL)  # stderr's, else stdout's
+    detail = f": {tail}" if tail else ""
+    sys.stderr.write(f"[cp-review-pilot] review {review_id}: claude stop exited {res.returncode}{detail}\n")
     sys.stderr.flush()
 
 
@@ -590,7 +593,8 @@ def stop_closed(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) 
     sent: list[str] = []
     ordered = sorted(candidates, key=lambda r: _state.attempts.get(r["id"], 0))  # stable: oldest first on a tie
     for row, found in [(r, a) for r in ordered for a in matches[r["id"]]]:
-        if (clock.now() - started).total_seconds() >= ticks.HOOK_SUBPROCESS_S:
+        elapsed = (clock.now() - started).total_seconds()
+        if elapsed < 0 or elapsed >= ticks.HOOK_SUBPROCESS_S:  # a clock stepped back (NTP) spends the budget too
             break  # the rest next tick
         rid = row["id"]
         res = _stop(seams, found.id or found.session_id)
