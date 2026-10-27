@@ -345,10 +345,13 @@ def _ingest(ctx: tools.StepCtx) -> None:
     seen: set[int] = set()
     comments = []
     for comment in _pages(ctx, f"repos/{{owner}}/{{repo}}/pulls/{pr}/comments"):
-        if not isinstance(comment, dict) or comment.get("pull_request_review_id") not in wanted:
+        if not isinstance(comment, dict):
+            continue
+        review_id = comment.get("pull_request_review_id")
+        if not (type(review_id) is int and review_id in wanted):  # type first: unhashable, or `True == 1` (R3)
             continue
         cid = comment.get("id")
-        if comment.get("in_reply_to_id") is not None or cid in seen:
+        if comment.get("in_reply_to_id") is not None or (type(cid) is int and cid in seen):
             continue  # a thread reply, or the same comment twice
         if type(cid) is int:  # only an integer id de-duplicates: an id-less comment never swallows the next
             seen.add(cid)

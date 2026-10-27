@@ -682,6 +682,28 @@ def test_only_integer_comment_ids_are_de_duplicated(c: C) -> None:
     assert sorted(r["file"] for r in c.findings()) == ["dup.py", "n1.py", "n2.py", "n3.py"]
 
 
+def test_odd_comment_ids_are_type_checked_before_membership(c: C) -> None:
+    """R3 polish: an unhashable ``id`` or ``pull_request_review_id`` is never a ``TypeError``, and a ``bool``
+    ``pull_request_review_id`` never matches review id 1 (``True == 1``)."""
+    c.round()
+    reviews = fixture("handmade-reviews.json")
+    reviews[0].append({"id": 1, "user": {"login": "coderabbitai[bot]"}, "commit_id": H, "body": ""})
+    base = fixture("handmade-comments.json")[0][1]  # b.py, a Major of review 9001
+    comments = [
+        [
+            {**base, "id": [1], "path": "list-id.py"},  # kept: an unhashable id just never de-duplicates
+            {**base, "id": 81, "pull_request_review_id": {}, "path": "dict-review.py"},
+            {**base, "id": 82, "pull_request_review_id": True, "path": "bool-review.py"},
+            {**base, "id": 83, "pull_request_review_id": 1, "path": "review-1.py"},
+        ]
+    ]
+    c.gh(reviews=reviews, comments=comments)
+    code, out = c.tool("coderabbit")
+    assert code == 0, out
+    assert out["result"]["review_ids"] == [9001, 1]
+    assert sorted(r["file"] for r in c.findings()) == ["list-id.py", "review-1.py"]
+
+
 def test_two_pages_are_flattened_and_several_reviews_merged(c: C) -> None:
     c.round()
     reviews = fixture("handmade-reviews.json")

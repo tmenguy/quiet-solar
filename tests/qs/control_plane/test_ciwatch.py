@@ -83,7 +83,8 @@ def _suite(
 ) -> Any:
     """One check suite of the head commit (#425 D10); ``slug=None`` is a suite with a null ``app``; ``run`` /
     ``workflow`` give it a ``workflowRun`` (``run=None``: a suite with no workflow run yet); ``suite_id`` is the
-    suite's own ``databaseId`` (one per run attempt, R2-S1)."""
+    suite's own ``databaseId`` (a re-run attempt reuses its run's suite, so two suites of one run are only a
+    theoretical tie, broken by this id; R3)."""
     suite = {"status": status, "conclusion": conclusion, "app": None if slug is None else {"slug": slug}}
     suite["workflowRun"] = None if run is None else {"databaseId": run, "workflow": {"databaseId": workflow}}
     if suite_id is not None:
@@ -560,7 +561,7 @@ _OTHER_RUN_FAILED = {"__typename": "CheckRun", "name": "cursor", "conclusion": "
                 ],
             ),
             "green",
-            id="a-re-run-attempt-passes-old-attempt-first",
+            id="theoretical-tie-in-one-run-passing-higher-suite-id-last",
         ),
         pytest.param(
             _node(
@@ -571,7 +572,7 @@ _OTHER_RUN_FAILED = {"__typename": "CheckRun", "name": "cursor", "conclusion": "
                 ],
             ),
             "green",
-            id="a-re-run-attempt-passes-new-attempt-first",
+            id="theoretical-tie-in-one-run-passing-higher-suite-id-first",
         ),
         pytest.param(
             _node(
@@ -582,7 +583,7 @@ _OTHER_RUN_FAILED = {"__typename": "CheckRun", "name": "cursor", "conclusion": "
                 ],
             ),
             "red",
-            id="a-re-run-attempt-fails-old-attempt-first",
+            id="theoretical-tie-in-one-run-failing-higher-suite-id-last",
         ),
         pytest.param(
             _node(
@@ -593,7 +594,7 @@ _OTHER_RUN_FAILED = {"__typename": "CheckRun", "name": "cursor", "conclusion": "
                 ],
             ),
             "red",
-            id="a-re-run-attempt-fails-new-attempt-first",
+            id="theoretical-tie-in-one-run-failing-higher-suite-id-first",
         ),
         pytest.param(
             _node(
@@ -604,7 +605,7 @@ _OTHER_RUN_FAILED = {"__typename": "CheckRun", "name": "cursor", "conclusion": "
                 ],
             ),
             "green",
-            id="a-suite-with-no-id-is-the-oldest-attempt",
+            id="theoretical-tie-a-suite-with-no-id-ranks-lowest",
         ),
         pytest.param(
             _node(
@@ -636,10 +637,18 @@ def test_the_query_asks_for_the_check_suites(real_github, fake_runner) -> None:
     )
 
 
-def test_a_null_check_suites_is_pending_with_no_suite(real_github, fake_runner) -> None:
-    """R2-S3: a ``null`` ``checkSuites`` is a head with no suite yet, never an unparseable answer."""
+@pytest.mark.parametrize(
+    "check_suites",
+    [
+        pytest.param(None, id="a-null-connection"),
+        pytest.param({"pageInfo": {"hasNextPage": False}, "nodes": None}, id="a-null-nodes-list"),  # R3 polish
+    ],
+)
+def test_a_null_check_suites_is_pending_with_no_suite(real_github, fake_runner, check_suites: Any) -> None:
+    """R2-S3: a ``null`` ``checkSuites`` (or a ``null`` ``nodes`` list) is a head with no suite yet, never an
+    unparseable answer."""
     node = _node("FAILURE", suites=RED)
-    node["commits"]["nodes"][0]["commit"]["checkSuites"] = None
+    node["commits"]["nodes"][0]["commit"]["checkSuites"] = check_suites
     fake_runner.on(("gh", "api", "graphql"), _graphql({7: node}))
     prs, _ = real_github.prs([7])
     pr = prs[7]
