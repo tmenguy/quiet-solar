@@ -25,11 +25,13 @@ These tests catch bugs where:
 - A wait is expressed as "the mirror is not ``on``" instead of positively confirming the
   target, so an ``unknown``/``unavailable`` mirror silently satisfies a turn-off.
 - A cloud-side exception aborts the script before the diagnostic can fire. The cloud write lives
-  in its own ``parallel:`` branch. Since HA 2026.10 (``helpers/script.py``
-  ``_async_step_call_service``), ``continue_on_error`` also swallows pyatmo's plain
-  ``Exception`` subclasses by wrapping them in ``HomeAssistantError``, so on current HA the
-  isolation is defense-in-depth. It is kept because it does not depend on HA's wrapping
-  behaviour, and it is exercised by the mutation case.
+  in its own ``parallel:`` branch, for two reasons. (i) Latency, on every HA version: a slow,
+  retrying (429 Retry-After) or hung cloud call must not delay the 10 s confirmation wait and
+  its diagnostic, which run in the sibling branch, so the diagnostic's timing stays independent
+  of cloud latency. (ii) Exception isolation: needed on HA <= 2026.8, and defense-in-depth since
+  HA 2026.10 (``helpers/script.py`` ``_async_step_call_service``), where ``continue_on_error``
+  also swallows pyatmo's plain ``Exception`` subclasses by wrapping them in
+  ``HomeAssistantError``. The exception path is exercised by the mutation case.
 - A predicate, or ``enabled: false``, can prevent either actuation write from executing.
 
 **Permanent gate note.** ``config/configuration.jinja`` is a non-Python file, so testmon cannot
