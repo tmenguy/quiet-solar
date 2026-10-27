@@ -238,8 +238,8 @@ of the worktree is yours to edit.
       never start a new merge over it), and step 7 goes on from its
       return: item 3, then item 4's red-gate rule;
    2. `catchup.counted` is false (blocked at the bound; clearing it
-      set `catchups` = 0) → step 7 from `catchup.from`: its `done`
-      pre-check, then item 1;
+      set `catchups` = 0) → step 7 from `catchup.from` (from `done`: the
+      pre-check first), then item 1;
    3. `catchup.merge` is `null`: `git rev-parse HEAD` = `round.json`'s
       `head` → step 7 item 2 (the counter is already written: never
       increment it again); `HEAD` ≠ `head` → item 3's recording (the
@@ -384,9 +384,11 @@ report of the same round supersedes an earlier one). Each round:
 6. **Triage** ("Triage") — every row of the phase classified. A
    `conflict` exit always goes to step 7, after the round's
    `continuing` report (unless already posted). Otherwise: `pending.json`
-   holds a fix → the round's `continuing` report (unless already
-   posted), then the `fix` protocol (a plan-level fix: the plan loop on
-   the delta; a code-level fix: the next round); a
+   holds a fix whose finding is still open (an entry whose finding is no
+   longer open is dropped in the same pass) → the round's `continuing`
+   report (unless already posted), then the `fix` protocol (a
+   plan-level fix: the plan loop on the delta; a code-level fix: the
+   next round); a
    `convergence.build.blocking` not empty, or CI not green on the
    current head → the round's `continuing` report (unless already
    posted), next round; else step 7 (the round's report comes after
@@ -399,9 +401,9 @@ report of the same round supersedes an earlier one). Each round:
    counter: a `conflict` during the wait, and before done. From `done`,
    `git fetch origin main` and the ancestor test come first:
    `origin/main` an ancestor of `HEAD` (`git merge-base --is-ancestor
-   origin/main HEAD` succeeds) → step 8 directly (its first write
-   clears `catchup` and `base_merge`; no other write, no count);
-   otherwise item 1. From `conflict`, item 1 first: a stale exit is
+   origin/main HEAD` succeeds) → step 6's pending-fix check, then step 8
+   (its first write clears `catchup` and `base_merge`; no other write, no
+   count); otherwise item 1. From `conflict`, item 1 first: a stale exit is
    counted too, which bounds a stale `mergeable` spin.
    1. `catchups` already 3 → one write, `step: catchup` and `catchup` =
       `{"from": <the trigger>, "counted": false, "merge": null, "clean":
@@ -412,10 +414,11 @@ report of the same round supersedes an earlier one). Each round:
       "reviewed": null, "retried": false}`.
    2. `git fetch origin main`, unless the `done` path just did it.
       `origin/main` an ancestor of `HEAD` → nothing to merge: from
-      `done` (reached only on a resume), step 6's pending-fix check,
-      then step 8; from `conflict` (a stale `mergeable` answer), one
-      write, `catchup` = `null` and `step: wait` (back to the wait: CI
-      must still go green; `base_merge` is untouched, so a pushed merge
+      `done` and `HEAD` = `round.json`'s `head`, step 6's pending-fix
+      check, then step 8 (otherwise go on to the merge: unpushed commits
+      go through items 3–6); from `conflict` (a stale `mergeable`
+      answer), one write, `catchup` = `null` and `step: wait` (back to
+      the wait: CI must still go green; `base_merge` is untouched, so a pushed merge
       stays the next `--base`). Otherwise `git merge --no-ff
       origin/main` (a merge commit always exists); never start a new
       merge over an open `MERGE_HEAD`.
@@ -428,9 +431,9 @@ report of the same round supersedes an earlier one). Each round:
       rule: `MERGE_HEAD` still open → the "finish the open merge"
       invocation (item 4's one more invocation); no merge and no
       `MERGE_HEAD` → back to item 2, at most once per catch-up
-      (`catchup.retried` = true, in one write); a second empty result →
-      blocked (cause `catchups`, "merge not committed" and the
-      implementer's output tail in the summary).
+      (`catchup.retried` = true, in one write); a second empty result
+      (whatever `MERGE_HEAD` says) → blocked (cause `catchups`, "merge
+      not committed" and the implementer's output tail in the summary).
    4. `qs-node-implementer` (a new `inv`), given the code-level fixes in
       `pending.json`:
       - clean → "gate only; fix on top of the merge if red";
@@ -447,10 +450,12 @@ report of the same round supersedes an earlier one). Each round:
       red → blocked (cause `catchups`, the `gate_key` and the gate's
       output tail in the summary), the merge left committed locally
       (start-up rule 5 resumes it on unblock).
-   5. **Resolution review**, when (`catchup.clean` is false or `HEAD` ≠
-      `catchup.merge`) and `HEAD` ≠ `catchup.reviewed`:
-      `qs-node-edge-case` on `git show --remerge-diff <catchup.merge>`
-      plus the fix diff (`git diff <catchup.merge>..HEAD`), its findings
+   5. **Resolution review**, when (`catchup.clean` is false, or `HEAD` ≠
+      `catchup.merge`, or `<catchup.merge>^1` ≠ `round.json`'s `head`)
+      and `HEAD` ≠ `catchup.reviewed`: `qs-node-edge-case` on `git show
+      --remerge-diff <catchup.merge>`, the commits beside the merge (`git
+      diff <head>..<catchup.merge>^1`, when that range is not empty) and
+      the fix diff (`git diff <catchup.merge>..HEAD`), its findings
       opened on the **current** build round (no `round start`: the
       conflict-resolution delta is not a round), then triage, then
       `catchup.reviewed` = `HEAD`.
@@ -480,8 +485,11 @@ report of the same round supersedes an earlier one). Each round:
    `base_merge` = `null` in the same write): `digest put` (what was done, decisions, deferred),
    the round's `converged` report (phase `build`, fields `{"blocking":
    []}`), then `task state --to ready_to_merge`, and end the turn. On a
-   resume, a `converged` report visible in `reports` means only the
-   state move is left. The merge is not yours.
+   resume at `step: done`: a `converged` report visible in `reports` →
+   only the state move is left, and a fix in `pending.json` is handled
+   as "a `fix` after done" (an objection); no `converged` report visible
+   and `pending.json` holds a fix whose finding is open → one write back
+   to `step: triage`, then step 6's routing. The merge is not yours.
 
 ### The wait loop
 
@@ -757,10 +765,12 @@ cleared) **only when its cause is cleared**: a `question` cause by the
 `answer` whose `question_id` matches; any other cause by a message from
 the orchestrator (a `fix`, or an `info` saying to go on). Clearing
 `ci_wait` sets `wait_from` = now; clearing `catchups` sets `catchups` =
-0 (the node then resumes at `step`, and start-up rule 5 decides).
+0 and, when `catchup` is not `null`, `catchup.retried` = false (the node
+then resumes at `step`, and start-up rule 5 decides).
 Clearing `objection` re-reads the finding: `rejected` / `settled` /
-`deferred` (the orchestrator decided) → go on without it; still open →
-the objection was overruled, apply the fix as sent. Otherwise post
+`deferred` (the orchestrator decided) → its entry leaves `pending.json`
+as `blocked_on` is cleared, and go on without it; still open → the
+objection was overruled, apply the fix as sent. Otherwise post
 nothing, stay `blocked` and end the turn with one line.
 
 ## The `fix` protocol
@@ -774,7 +784,8 @@ plan-level fix on `--phase plan --round <the latest plan round>`), then
 "code"|"plan", "what"}`, and wakes you.
 
 - Append it to `pending.json`, ack it, and apply it **at the end of the
-  current round** (step 6 checks `pending.json` before step 7 or 8): in
+  current round** (step 6 checks `pending.json` before step 7 or 8; a
+  `conflict` exit's catch-up applies the code-level fixes itself): in
   the plan loop it joins the next plan revision; in
   the build loop a code-level fix is a must-fix of the next round; a
   plan-level fix sends you back to the plan loop **on the delta only**
@@ -784,8 +795,10 @@ plan-level fix on `--phase plan --round <the latest plan round>`), then
   `building`** (task states only move forward); then the build loop
   resumes adapting the code already written, the round counters going
   on. Never re-triage a fix: classify it `must_fix`; a later finding
-  that would revert it is `settled` with the fix's rationale. An applied
-  fix leaves `pending.json`; after the commit (or plan revision) that
+  that would revert it is `settled` with the fix's rationale. A fix
+  leaves `pending.json` once applied, or once its finding is no longer
+  open (`rejected` / `settled` / `deferred` by the orchestrator); after
+  the commit (or plan revision) that
   applies it, `finding state <id> --to resolved --commit …`.
 - **A `fix` after done** (the task `ready_to_merge`): do not reopen the
   work. Ack it, `msg post --to orchestrator --kind objection` with
