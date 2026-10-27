@@ -326,7 +326,7 @@ def _ingest(ctx: tools.StepCtx) -> None:
         r
         for r in _pages(ctx, f"repos/{{owner}}/{{repo}}/pulls/{pr}/reviews")
         if isinstance(r, dict)
-        and isinstance(r.get("id"), int)  # an entry without an id is skipped, never a crash (S5)
+        and type(r.get("id")) is int  # an entry without an integer id (a `bool` is none) is skipped (S5)
         and isinstance(r.get("user"), dict)
         and r["user"].get("login") == BOT
         and str(r.get("commit_id")).lower() == head
@@ -342,14 +342,16 @@ def _ingest(ctx: tools.StepCtx) -> None:
             ctx.record_output(out)
         return
     wanted = set(out["review_ids"])
-    seen: set[Any] = set()
+    seen: set[int] = set()
     comments = []
     for comment in _pages(ctx, f"repos/{{owner}}/{{repo}}/pulls/{pr}/comments"):
         if not isinstance(comment, dict) or comment.get("pull_request_review_id") not in wanted:
             continue
-        if comment.get("in_reply_to_id") is not None or comment.get("id") in seen:
+        cid = comment.get("id")
+        if comment.get("in_reply_to_id") is not None or cid in seen:
             continue  # a thread reply, or the same comment twice
-        seen.add(comment.get("id"))
+        if type(cid) is int:  # only an integer id de-duplicates: an id-less comment never swallows the next
+            seen.add(cid)
         comments.append(comment)
     batch, out["dropped"] = items(comments)
     with ctx.write() as conn:

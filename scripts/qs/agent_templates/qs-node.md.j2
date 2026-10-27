@@ -179,9 +179,11 @@ of the worktree is yours to edit.
   "head", "pushed_at", "wait_from" (epoch, the start of the current CI
   wait), "cr" (`trigger` — the request is still owed —, `pending`,
   `reviewed`, `ceiling`, `skipped`), "cr_head" (the head CodeRabbit is
-  asked about), "cr_from" (epoch of entering `cr: trigger`, then of
-  the trigger's `triggered` / `already` answer: [[ crwait ]] s from it
-  bound `trigger` and `pending` alike), "catchups", "inv", "attempts", "not_fixed" (the
+  asked about), "cr_from" (epoch: `cr_from` is set on entering `cr:
+  trigger` and reset when the request is answered (`triggered` /
+  `already`), because a requested review needs its own full window;
+  [[ crwait ]] s from it bound `trigger` and `pending` alike, so a round
+  waits at most 2×[[ crwait ]] s for CodeRabbit), "catchups", "inv", "attempts", "not_fixed" (the
   ids the implementer returned `not_fixed` last round), "blocked_on"
   (`null` or `{"cause": "question"|"ci_wait"|"catchups"|"objection"|"classifier"|"error",
   "question_id", "finding_id"}`)}`. `step` is one of `writer`,
@@ -306,7 +308,9 @@ report of the same round supersedes an earlier one). Each round:
    for this head** (in this repo it reviews only on request): `cr_head`
    = the head, `cr: trigger`, `cr_from` = now, then `tool
    coderabbit-trigger`:
-   - `triggered` or `already` → `cr: pending`, `cr_from` = now;
+   - `triggered` or `already` → `cr: pending`, `cr_from` = now (the
+     review's own window: a round waits at most 2×[[ crwait ]] s for
+     CodeRabbit);
    - `ceiling` → `cr: ceiling` (the task's request ceiling is reached);
    - `BUSY` → stays `cr: trigger`, re-called with the same key between
      wait-loop calls (also after a resume or a rotation: `round.json`
@@ -549,16 +553,21 @@ A red head's item is `probe.py ci-finding --pr "$PR" --head "$HEAD"
 **Between loop calls:**
 
 - a popped `msg` → handled and acked ("Messages");
-- `cr: trigger` → re-call `tool coderabbit-trigger` (build step 2); past
-  [[ crwait ]] s since `cr_from` → `cr: skipped` ("CodeRabbit trigger
-  failed");
-- `cr: pending` → `tool coderabbit` for `cr_head`: `reviewed` → `cr:
-  reviewed` (its `ids` are the round's CodeRabbit findings; a true
-  `body_comments` → "review-body comments not ingested, see the PR" in
-  the summary); `BUSY` (exit 6, "not reviewed yet") → stays `pending`,
-  the same key re-called after the next loop call; any other error →
-  `cr: skipped` ("CodeRabbit ingest failed"); past [[ crwait ]] s since
-  `cr_from` → `cr: skipped` ("CodeRabbit skipped: no review in time");
+- In `cr: trigger` / `cr: pending`, **always re-call the tool first**
+  — also after a resume or once CI is terminal: the clock alone never
+  skips CodeRabbit. Then only an answer that is still `BUSY`, and comes
+  after [[ crwait ]] s since `cr_from`, turns `cr` into `skipped`:
+  - `cr: trigger` → re-call `tool coderabbit-trigger` (build step 2) and
+    act on its answer there; still `BUSY` past the wait → `cr: skipped`
+    ("CodeRabbit trigger failed");
+  - `cr: pending` → `tool coderabbit` for `cr_head`: `reviewed` → `cr:
+    reviewed` (its `ids` are the round's CodeRabbit findings; a true
+    `body_comments` → "review-body comments not ingested, see the PR"
+    in the summary); `BUSY` (exit 6, "not reviewed yet") → stays
+    `pending`, the same key re-called after the next loop call, and
+    still `BUSY` past the wait → `cr: skipped` ("CodeRabbit skipped: no
+    review in time"); any other error → `cr: skipped` ("CodeRabbit
+    ingest failed");
 - `conflict: true` (GitHub runs no PR workflow while the PR conflicts
   with `main`) → leave the wait, finish steps 5–6 for this round (its
   report is `continuing`), then the catch-up (step 7);
@@ -566,8 +575,8 @@ A red head's item is `probe.py ci-finding --pr "$PR" --head "$HEAD"
   blocked (cause `ci_wait`).
 
 The wait ends when CI is terminal and `cr` is no longer `pending`; once
-CI is terminal, a `cr: trigger` still unanswered becomes `cr: skipped`
-("CodeRabbit trigger failed").
+CI is terminal, a `cr: trigger` whose re-call still answers `BUSY`
+becomes `cr: skipped` ("CodeRabbit trigger failed").
 
 ## Triage
 

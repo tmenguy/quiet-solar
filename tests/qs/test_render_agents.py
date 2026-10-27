@@ -1348,9 +1348,38 @@ def test_node_bounds_an_unanswered_trigger_by_the_coderabbit_wait(tmp_path: Path
     flat = _flat(_node_text(tmp_path))
     assert "`cr: trigger`, `cr_from` = now" in flat
     wait = str(node_policy.CR_WAIT_S)
-    assert f"re-call `tool coderabbit-trigger` (build step 2); past {wait} s since `cr_from` → `cr: skipped`" in flat
+    assert "re-call `tool coderabbit-trigger` (build step 2)" in flat
     assert "The wait ends when CI is terminal and `cr` is no longer `pending`" in flat
     assert "neither `pending` nor `trigger`" not in flat
+    assert f"past {wait} s since `cr_from` → `cr: skipped`" not in flat  # never the clock alone (R2-S4)
+
+
+def test_node_re_calls_the_coderabbit_tool_before_skipping_it(tmp_path: Path) -> None:
+    """Fix plan #02 R2-S4: a resumed node, or one that finds CI terminal, re-calls the tool first; only an
+    answer still `BUSY` past the wait turns `cr` into `skipped`."""
+    from control_plane import node_policy  # type: ignore[import-not-found]
+
+    flat = _flat(_node_text(tmp_path))
+    wait = str(node_policy.CR_WAIT_S)
+    assert "In `cr: trigger` / `cr: pending`, **always re-call the tool first**" in flat
+    assert "also after a resume or once CI is terminal" in flat
+    assert f"only an answer that is still `BUSY`, and comes after {wait} s since `cr_from`, turns `cr` into" in flat
+    assert (
+        "once CI is terminal, a `cr: trigger` whose re-call still answers `BUSY` becomes `cr: skipped`" in flat
+    )
+    assert "a `cr: trigger` still unanswered becomes" not in flat
+
+
+def test_node_says_the_coderabbit_wait_is_at_most_two_windows(tmp_path: Path) -> None:
+    """Fix plan #02 R2-S5: `cr_from` is reset when the request is answered, so a round waits 2×`CR_WAIT_S`."""
+    from control_plane import node_policy  # type: ignore[import-not-found]
+
+    flat = _flat(_node_text(tmp_path))
+    wait = str(node_policy.CR_WAIT_S)
+    reset = "`cr_from` is set on entering `cr: trigger` and reset when the request is answered (`triggered` / `already`)"
+    assert reset in flat
+    assert f"a round waits at most 2×{wait} s for CodeRabbit" in flat
+    assert "then of the trigger's `triggered` / `already` answer" not in flat
 
 
 def test_plan_concrete_expects_the_files_a_plan_creates_to_be_missing(tmp_path: Path) -> None:
@@ -1359,6 +1388,16 @@ def test_plan_concrete_expects_the_files_a_plan_creates_to_be_missing(tmp_path: 
     assert "A file the plan says it **modifies or reads** and you cannot find: `must_fix`" in flat
     assert "A file the plan says it **creates** is expected to be missing" in flat
     assert "A file the plan references and you cannot find" not in flat
+
+
+def test_plan_concrete_file_specificity_agrees_with_create_targets(tmp_path: Path) -> None:
+    """Fix plan #02 polish: existence is asked of the paths a plan modifies or reads; a bad create-target has
+    an explicit severity, and so does one that already exists."""
+    flat = _flat(_node_text(tmp_path, "qs-node-plan-concrete"))
+    assert "Do the paths it modifies or reads exist?" in flat
+    assert "Are exact paths given? Do they exist?" not in flat
+    assert "is wrong (a directory that does not exist and the plan does not create, the wrong package): `should_fix`" in flat
+    assert "A create-target that already exists: `should_fix` (the plan must say \"modify\")" in flat
 
 
 def test_node_constants_follow_node_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

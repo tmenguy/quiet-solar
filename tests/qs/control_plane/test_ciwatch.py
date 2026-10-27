@@ -79,11 +79,15 @@ def _suite(
     slug: str | None = "github-actions",
     run: int | None = None,
     workflow: int | None = None,
+    suite_id: int | None = None,
 ) -> Any:
     """One check suite of the head commit (#425 D10); ``slug=None`` is a suite with a null ``app``; ``run`` /
-    ``workflow`` give it a ``workflowRun`` (``run=None``: a suite with no workflow run yet)."""
+    ``workflow`` give it a ``workflowRun`` (``run=None``: a suite with no workflow run yet); ``suite_id`` is the
+    suite's own ``databaseId`` (one per run attempt, R2-S1)."""
     suite = {"status": status, "conclusion": conclusion, "app": None if slug is None else {"slug": slug}}
     suite["workflowRun"] = None if run is None else {"databaseId": run, "workflow": {"databaseId": workflow}}
+    if suite_id is not None:
+        suite["databaseId"] = suite_id
     return suite
 
 
@@ -547,6 +551,72 @@ _OTHER_RUN_FAILED = {"__typename": "CheckRun", "name": "cursor", "conclusion": "
             "green",
             id="a-run-with-no-workflow-is-kept",
         ),
+        pytest.param(
+            _node(
+                "FAILURE",
+                suites=[
+                    _suite("COMPLETED", "FAILURE", run=6, workflow=10, suite_id=100),
+                    _suite(run=6, workflow=10, suite_id=101),
+                ],
+            ),
+            "green",
+            id="a-re-run-attempt-passes-old-attempt-first",
+        ),
+        pytest.param(
+            _node(
+                "FAILURE",
+                suites=[
+                    _suite(run=6, workflow=10, suite_id=101),
+                    _suite("COMPLETED", "FAILURE", run=6, workflow=10, suite_id=100),
+                ],
+            ),
+            "green",
+            id="a-re-run-attempt-passes-new-attempt-first",
+        ),
+        pytest.param(
+            _node(
+                "FAILURE",
+                suites=[
+                    _suite(run=6, workflow=10, suite_id=100),
+                    _suite("COMPLETED", "FAILURE", run=6, workflow=10, suite_id=101),
+                ],
+            ),
+            "red",
+            id="a-re-run-attempt-fails-old-attempt-first",
+        ),
+        pytest.param(
+            _node(
+                "FAILURE",
+                suites=[
+                    _suite("COMPLETED", "FAILURE", run=6, workflow=10, suite_id=101),
+                    _suite(run=6, workflow=10, suite_id=100),
+                ],
+            ),
+            "red",
+            id="a-re-run-attempt-fails-new-attempt-first",
+        ),
+        pytest.param(
+            _node(
+                "FAILURE",
+                suites=[
+                    _suite("COMPLETED", "FAILURE", run=6, workflow=10),
+                    _suite(run=6, workflow=10, suite_id=100),
+                ],
+            ),
+            "green",
+            id="a-suite-with-no-id-is-the-oldest-attempt",
+        ),
+        pytest.param(
+            _node(
+                "FAILURE",
+                suites=[
+                    _suite("COMPLETED", "FAILURE", run=7, workflow=10, suite_id=50),
+                    _suite(run=6, workflow=10, suite_id=900),
+                ],
+            ),
+            "red",
+            id="the-run-id-ranks-before-the-suite-id",
+        ),
     ],
 )
 def test_the_verdict_comes_from_the_actions_suites(real_github, fake_runner, node: Any, expected: str) -> None:
@@ -561,9 +631,20 @@ def test_the_query_asks_for_the_check_suites(real_github, fake_runner) -> None:
     real_github.prs([7])
     q = fake_runner.matching("gh", "api", "graphql")[0].argv[-1]
     assert (
-        "checkSuites(first:20){ pageInfo{hasNextPage} nodes{ status conclusion app{ slug }"
-        " workflowRun{ databaseId workflow{ databaseId } } } }" in q
+        "checkSuites(first:20, filterBy:{appId:15368}){ pageInfo{hasNextPage} nodes{ databaseId status conclusion"
+        " app{ slug } workflowRun{ databaseId workflow{ databaseId } } } }" in q
     )
+
+
+def test_a_null_check_suites_is_pending_with_no_suite(real_github, fake_runner) -> None:
+    """R2-S3: a ``null`` ``checkSuites`` is a head with no suite yet, never an unparseable answer."""
+    node = _node("FAILURE", suites=RED)
+    node["commits"]["nodes"][0]["commit"]["checkSuites"] = None
+    fake_runner.on(("gh", "api", "graphql"), _graphql({7: node}))
+    prs, _ = real_github.prs([7])
+    pr = prs[7]
+    assert pr is not None and (pr.verdict, pr.suites) == ("PENDING", 0)
+    assert ciwatch.ci_state(pr) == ("pending", "h1")
 
 
 def test_a_failed_run_is_red_only_when_its_suite_completes(
@@ -591,6 +672,7 @@ def test_a_null_rollup_with_a_queued_suite_is_pending_and_fast(
 
 def test_the_verdict_constants() -> None:
     assert ciwatch.CI_APP == "github-actions"
+    assert ciwatch.CI_APP_ID == 15368  # the GitHub Actions app: the query asks only for its suites (R2-S2)
     assert frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"}) == ciwatch.PASSING_SUITE_CONCLUSIONS
     assert not hasattr(ciwatch, "PENDING_ROLLUPS")
     assert [f.name for f in dataclasses.fields(ciwatch.PrCi)] == [

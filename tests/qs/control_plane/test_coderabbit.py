@@ -652,14 +652,34 @@ def test_the_new_header_form_of_pr432(c: C) -> None:
 
 
 def test_a_review_with_no_integer_id_is_skipped(c: C) -> None:
-    """S5: a bot review of the head with no (or an odd) ``id`` is skipped, never a crash."""
+    """S5: a bot review of the head with no (or an odd) ``id`` is skipped, never a crash; a ``bool`` is not an
+    integer id (R2 polish: ``True == 1``)."""
     c.round()
     reviews = fixture("handmade-reviews.json")
-    for bad in ({}, {"id": "9002"}):
+    for bad in ({}, {"id": "9002"}, {"id": True}):
         reviews[0].append({**bad, "user": {"login": "coderabbitai[bot]"}, "commit_id": H, "body": ""})
     c.gh(reviews=reviews, comments=fixture("handmade-comments.json"))
     code, out = c.tool("coderabbit")
     assert code == 0 and out["result"]["review_ids"] == [9001], out
+
+
+def test_only_integer_comment_ids_are_de_duplicated(c: C) -> None:
+    """R2 polish: an id-less comment never swallows the next one; the same integer id twice is one finding."""
+    c.round()
+    base = fixture("handmade-comments.json")[0][1]  # b.py, a Major
+    comments = [
+        [
+            {**base, "id": None, "path": "n1.py"},
+            {**base, "id": None, "path": "n2.py"},
+            {k: v for k, v in base.items() if k != "id"} | {"path": "n3.py"},
+            {**base, "id": 77, "path": "dup.py"},
+            {**base, "id": 77, "path": "dup.py"},
+        ]
+    ]
+    c.gh(reviews=fixture("handmade-reviews.json"), comments=comments)
+    code, out = c.tool("coderabbit")
+    assert code == 0, out
+    assert sorted(r["file"] for r in c.findings()) == ["dup.py", "n1.py", "n2.py", "n3.py"]
 
 
 def test_two_pages_are_flattened_and_several_reviews_merged(c: C) -> None:

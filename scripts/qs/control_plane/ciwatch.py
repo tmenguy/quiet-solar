@@ -14,10 +14,11 @@
   misses a ``needs:`` job whose check run does not exist yet. No Actions suite → ``PENDING``; a completed
   suite whose conclusion is not in ``PASSING_SUITE_CONCLUSIONS`` → ``FAILURE`` (so red waits for the suite
   to finish); every suite completed and passing → ``SUCCESS`` (``PENDING`` when the suite list is
-  truncated: CI is assumed to be GitHub Actions with at most 20 suites per head). GitHub creates one suite
-  per workflow run, so a re-run on the same head (a close/reopen without a push) leaves the old suite next
-  to the new one: only the latest suite of each workflow (the highest ``workflowRun.databaseId``) counts; a
-  suite with no workflow run yet always counts. The rollup's ``failing`` checks and ``truncated`` flag still
+  truncated: the query asks only for ``CI_APP_ID``'s suites, at most 20 Actions suites per head, and the
+  slug filter stays a backstop; a ``null`` suite list is no suite). GitHub creates one suite per workflow run
+  and per run attempt, so a re-run on the same head (a close/reopen without a push, or "re-run jobs") leaves
+  the old suite next to the new one: only the latest suite of each workflow (the highest
+  ``(workflowRun.databaseId, suite databaseId)``) counts; a suite with no workflow run yet always counts. The rollup's ``failing`` checks and ``truncated`` flag still
   feed the ``ci_red`` alert's payload; a status named there no longer makes the verdict red.
 - ``ci_red`` is derived from the stored rows on every tick (``must-fix``), whether or not a poll ran.
 - The schedule: ``CI_FAST_S`` after a poll that saw a moved head or a pending verdict with at least one
@@ -56,6 +57,7 @@ CI_RESET_CAP_S = 3600.0  # GitHub's rate window is one hour: a later `resetAt` i
 FAILING_CONCLUSIONS = frozenset({"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"})
 FAILING_STATUSES = frozenset({"FAILURE", "ERROR"})  # the statuses named in `failing` (never the verdict)
 CI_APP = "github-actions"  # #425 D10: the only app whose check suites make the verdict
+CI_APP_ID = 15368  # GitHub Actions' app id: the query asks only for its suites (R2-S2); `CI_APP` stays a backstop
 PASSING_SUITE_CONCLUSIONS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
 CLOSED_STATES = frozenset({"MERGED", "CLOSED"})
 
@@ -69,8 +71,8 @@ _PR_FIELDS = (
     "state headRefOid commits(last:1){ nodes{ commit{ statusCheckRollup{ state"
     " contexts(first:100){ pageInfo{hasNextPage} nodes{ __typename"
     " ... on CheckRun{ name conclusion detailsUrl } ... on StatusContext{ context state targetUrl } } } }"
-    " checkSuites(first:20){ pageInfo{hasNextPage} nodes{ status conclusion app{ slug }"
-    " workflowRun{ databaseId workflow{ databaseId } } } } } } }"
+    f" checkSuites(first:20, filterBy:{{appId:{CI_APP_ID}}}){{ pageInfo{{hasNextPage}} nodes{{ databaseId status"
+    " conclusion app{ slug } workflowRun{ databaseId workflow{ databaseId } } } } } } }"
 )
 
 
@@ -119,21 +121,24 @@ def query(owner: str, name: str, numbers: Sequence[int]) -> str:
     )
 
 
-def _run_of(suite: dict[str, Any]) -> tuple[Any, int] | None:
-    """``(workflow id, run id)`` of a suite's workflow run; ``None`` when it has none yet (or an odd one)."""
+def _run_of(suite: dict[str, Any]) -> tuple[Any, tuple[int, int]] | None:
+    """``(workflow id, (run id, suite id))`` of a suite's workflow run; ``None`` when it has none yet (or an odd
+    one). A re-run attempt keeps the run id and gets a new suite, whose id grows (R2-S1); a suite with no id
+    ranks as the oldest attempt of its run."""
     run = suite.get("workflowRun")
     if not isinstance(run, dict) or not isinstance(run.get("databaseId"), int):
         return None
     workflow = run.get("workflow")
     if not isinstance(workflow, dict) or workflow.get("databaseId") is None:
         return None
-    return workflow["databaseId"], run["databaseId"]
+    suite_id = suite.get("databaseId")
+    return workflow["databaseId"], (run["databaseId"], suite_id if type(suite_id) is int else -1)
 
 
 def _latest_per_workflow(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Only the latest suite of each workflow (a re-run on the same head leaves the old suite, S2)."""
     kept: list[dict[str, Any]] = []
-    latest: dict[Any, tuple[int, dict[str, Any]]] = {}
+    latest: dict[Any, tuple[tuple[int, int], dict[str, Any]]] = {}
     for suite in actions:
         ids = _run_of(suite)
         if ids is None:
@@ -143,9 +148,11 @@ def _latest_per_workflow(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return kept + [suite for _, suite in latest.values()]
 
 
-def _verdict(suites: dict[str, Any]) -> tuple[str, int]:
+def _verdict(suites: dict[str, Any] | None) -> tuple[str, int]:
     """The CI verdict of a head from its check suites (#425 D10): the ``CI_APP`` suites only, the latest of
-    each workflow; and how many ``CI_APP`` suites the head has."""
+    each workflow; and how many ``CI_APP`` suites the head has. A ``null`` connection is no suite (R2-S3)."""
+    if suites is None:
+        return "PENDING", 0
     actions = [
         s
         for s in suites["nodes"]
