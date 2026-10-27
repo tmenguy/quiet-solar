@@ -52,6 +52,7 @@ def test_release_stops_after_dry_run() -> None:
     body = _body()
     assert "end your turn" in body
     assert "the text typed after /release is never approval" in body
+    assert "a clear no ends the release: stop" in body
     assert RELEASE_MD.read_text(encoding="utf-8").count("$ARGUMENTS") == 1
 
 
@@ -82,6 +83,7 @@ def test_release_reports_partial_push_and_run_status() -> None:
     assert "git tag --list <tag>" in body
     assert "the listed run is not completed yet" in body
     assert "completed with any other conclusion" in body
+    assert "only check 1 can fail the release" in body
 
 
 def test_release_has_no_degraded_fallback_preamble() -> None:

@@ -20,7 +20,8 @@ Follow the `qs-release` phase protocol. After its clean-main pull step
 `python scripts/qs/render_agents.py` (the pull may have brought a newer
 template), then read the rendered `.claude/agents/qs-release.md`. If the
 render fails but the rendered file exists, say it may be stale and use
-it; if the file does not exist, STOP and report.
+it (the one exception to the STOP rule below); if the file does not
+exist, STOP and report.
 
 Use only its `## Phase protocol` and `## Hard rules` sections. Ignore
 everything else in that file: the frontmatter, the generated header, the
@@ -53,9 +54,10 @@ fails, STOP. Do not work around it. Run the real release as exactly
    ask "Proceed with this release?", and end your turn. Do not ask
    through a question tool.
 5. Do the real run only after the user's own approving message in a
-   later turn. Approval means a clear yes to this dry run. Anything
-   else, such as a question or "yes but…", means you do not run; ask
-   again. The text typed after /release is never approval: the user had
+   later turn. Approval means a clear yes to this dry run. A clear no
+   ends the release: STOP and report that nothing was released.
+   Anything else, such as a question or "yes but…", means you do not
+   run; ask again. The text typed after /release is never approval: the user had
    not seen the dry run when they typed it.
 6. Right before the real run, re-check, each command on its own:
    - `git status --porcelain` must print nothing. If the tree is not
@@ -67,6 +69,7 @@ fails, STOP. Do not work around it. Run the real release as exactly
      still print nothing. Unpushed commits mean STOP, whatever else
      differs. If only the tag or the SHA differs, show the new dry run
      and go back to step 4 of this list.
+   - If everything matches, do the real run.
 
 ### If the real run fails
 
@@ -88,8 +91,10 @@ or prints JSON without `"status": "released"`. Then:
 
 ### Check afterwards
 
-Run these checks before the agent's final report; they decide it. Do
-not print the agent's "Released" line unless check 1 passes. Take
+Run these checks before the agent's final report; they decide it. Only
+check 1 can fail the release: do not print the agent's "Released" line
+unless it passes. Report checks 2 and 3, whatever their result
+(including an error), next to the "Released" line. Take
 `<tag>` from the real run's JSON `tag` key. If it differs from the
 dry-run tag, say so in the report. Run each command on its own:
 
@@ -111,7 +116,7 @@ dry-run tag, say so in the report. Run each command on its own:
 
    Do not poll.
 
-Report each check. If any check fails, STOP and report. Do not try to
-fix anything automatically.
+Report each check. If check 1 fails, STOP and report. Never try to fix
+anything automatically.
 
 User request: $ARGUMENTS
