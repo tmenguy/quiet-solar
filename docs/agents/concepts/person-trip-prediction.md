@@ -220,6 +220,16 @@ Person re-allocated away / covered / need met → person constraint removed
   frozen until the next live unplug or a reset — accepted by the user,
   not to be fixed ("yes 1. : I don't care it will never really happen ,
   document it , it is very hard to properly fix, so don't fix it").
+  **Documented limitations (review fix #05):** the live unplug ends the
+  freeze only for the **attached** car — a frozen car detached from its
+  charger first (charger-card "no car" pick, `CHANGE CONNECTED CAR`
+  detach) stays frozen, with no automatic person constraint on its next
+  session, until a car-card or charger-card reset (or the departure
+  auto-reset, for a car with a tracker); and selecting the person already
+  shown does not count as a user action (no change), so re-picking the
+  forecasted person after a restart does not freeze — any other user
+  action does. Accepted by the user, not to be fixed ("don't fix",
+  2026-10-27).
 
 ## See also
 

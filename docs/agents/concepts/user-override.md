@@ -186,11 +186,24 @@ command state.
   only outside `_USER_REPLAY_FOR_INIT`, so an entity restore replay
   never freezes. A frozen car gets no automatic person constraint until
   the store is cleared (`clear_all_user_originated`: an unplug HA sees
-  live — not one made while HA is down, see the QS-416 boot guard below
-  — the reset button of the car card **or** of the charger card, pin
-  taken, stale/unauthorised pin); a person ASAP keeps its person
+  live of the **attached** car — not one made while HA is down, see the
+  QS-416 boot guard below — the reset button of the car card **or** of
+  the charger card, the departure auto-reset, pin taken,
+  stale/unauthorised pin); a person ASAP keeps its person
   target unless the car is frozen **and** carries a target marker
-  (refined #48 escape).
+  (refined #48 escape). **Documented limitations (QS-431 review fix
+  #05):** the unplug branch clears the car's store only under
+  `if self.car:`, so a frozen car detached from its charger before it is
+  physically unplugged (a charger-card "no car" pick, a `CHANGE
+  CONNECTED CAR` detach) stays frozen through that unplug and the next
+  plug-in, until a car-card or charger-card reset (or the departure
+  auto-reset, for a car with a tracker). Selecting the person already
+  shown does not count as a user action (no change —
+  `user_set_person_for_car` returns early on the same value), so
+  re-picking the forecasted person the restart replay wrote does not
+  freeze; any other user action freezes the car. The user ruled "don't
+  fix" (2026-10-27, the "Document, don't fix" option) — accepted, not to
+  be fixed.
   **QS-416:** the same hook also **pins the car↔charger association**:
   when the car is attached, it sets the charger's
   `USER_ORIGINATED_CAR_NAME` to the car, so no better-scoring car can take

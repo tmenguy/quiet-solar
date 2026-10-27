@@ -4942,7 +4942,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                                     # of the person need must not change the notified state. A
                                     # rise of the rounded % always rewrites (the rounded target is
                                     # never below the rounded need; the raw target may sit up to
-                                    # just under 1 % on either side within one rounded bucket); a
+                                    # just under 1 % on either side within one rounded bucket, or
+                                    # less than 0.5 % above the need across a bucket boundary); a
                                     # fall needs a half-percent move too, so a need jittering
                                     # around a .5 boundary flips at most once
                                     rounded_target = int(round(car_charge_person.target_value))

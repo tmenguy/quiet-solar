@@ -606,7 +606,8 @@ re-push loop). The person block updates a live person constraint's target only
 when the **rounded** % changes, with an asymmetric hysteresis: a rise always
 rewrites (the rounded target is never below the rounded need — no met → ack →
 re-push round trip; the raw target may sit up to just under 1 % on either side
-within one rounded bucket), a fall needs the need to have moved by at least
+within one rounded bucket, or less than 0.5 % above the need across a bucket
+boundary), a fall needs the need to have moved by at least
 0.5 % too. Sub-percent
 drift does not change the notified state, and a need jittering around a .5
 boundary flips it at most once per crossing.
