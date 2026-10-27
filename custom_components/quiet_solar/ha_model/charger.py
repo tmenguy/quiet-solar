@@ -136,6 +136,7 @@ from ..const import (
     CONF_DEVICE_EFFICIENCY,
     CONSTRAINT_FORECASTED_PERSON_KEY,
     CONSTRAINT_ORIGINATOR_AGENDA,
+    CONSTRAINT_ORIGINATOR_FILLER,
     CONSTRAINT_ORIGINATOR_KEY,
     CONSTRAINT_ORIGINATOR_MANUAL,
     CONSTRAINT_ORIGINATOR_PERSON,
@@ -2689,8 +2690,23 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
     async def user_clean_and_reset(self):
         # manual reset the user selected car for charger
-        await super().user_clean_and_reset()
+        # QS-431: the charger-card buttons act on the attached car (and freeze it): the
+        # charger-card reset resets the car's user side too, like the car-card reset
+        # (its car-side steps, without the recursion back into this charger). When the
+        # car-card reset drives this one, the car already left (`car.charger` is None)
+        # and has run those steps itself: they — and the notifying allocation — run once.
+        car = self.car if self.car is not None and self.car.charger is self else None
+        if car is not None:
+            self._clear_leaked_person_target_if_needed()  # constraints still live
+        await super().user_clean_and_reset()  # detaches the car
+        if car is not None:
+            car.clear_all_user_originated()
+            car.clear_system_person_hold()
+            car.current_forecasted_person = None
+            car.reset_charge_targets()  # lazy default (QS-352), no native-limit write
         await self.update_charger_for_user_change()
+        if car is not None and self.home:
+            await self.home.compute_and_set_best_persons_cars_allocations(force_update=True, do_notify=True)
 
     async def user_clean_constraints(self):
         await super().user_clean_constraints()
@@ -4191,6 +4207,38 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             )
             self.car.clear_next_charge_target()
 
+    @staticmethod
+    def _is_filler_constraint(ct: LoadConstraint) -> bool:
+        """QS-431: is ``ct`` part of the charger's artificial best-effort chain?
+
+        Tagged with ``CONSTRAINT_ORIGINATOR_FILLER`` — or, for a filler persisted before
+        the tag existed, untagged, not user-originated and without a deadline (the only
+        constraint the charger ever built that way).
+        """
+        if ct.load_info:
+            return ct.load_info.get(CONSTRAINT_ORIGINATOR_KEY) == CONSTRAINT_ORIGINATOR_FILLER
+        return not ct.from_user and ct.end_of_constraint == DATETIME_MAX_UTC
+
+    def _non_filler_constraints_signature(self) -> list[tuple]:
+        """QS-431: shape of the real (non-filler) constraints, to detect a change.
+
+        Shape only — what the filler's start depends on. No object identity: the
+        agenda constraint is rebuilt every cycle with the live SOC as its start, and a
+        replaced constraint of the same shape must keep the filler (no churn).
+        """
+        return [
+            (ct.load_param, ct.type, ct.target_value, ct.end_of_constraint)
+            for ct in self._constraints
+            if ct is not None and not self._is_filler_constraint(ct)
+        ]
+
+    def _drop_filler_constraints(self, time: datetime) -> None:
+        """QS-431: remove the filler chain; the best-effort block rebuilds it this cycle."""
+        kept = [ct for ct in self._constraints if ct is not None and not self._is_filler_constraint(ct)]
+        if len(kept) != len(self._constraints):
+            _LOGGER.debug("check_load_activity_and_constraints: %s dropping filler constraints to rebuild", self.name)
+            self.set_live_constraints(time, kept)
+
     def _person_constraint_ends_this_cycle(
         self,
         person,
@@ -4210,6 +4258,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         need survives only when the person is assigned, range-uncovered, its
         preconditions are present, the charge-time is not the CLEARED sentinel, the
         agenda (if any) is far enough out, and the car is not already charged enough."""
+        # QS-431: a car frozen by a user action gets no person constraint.
+        if self.car.is_user_frozen() is True:
+            return True
         if (
             person is None
             or next_usage_time is None
@@ -4240,6 +4291,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         do_force_solve = False
         if not self._constraints:
             self._constraints = []
+
+        # QS-431: what the real (non-filler) constraints look like before this cycle
+        # touches them — the filler is rebuilt below whenever they changed.
+        non_filler_signature_at_start = self._non_filler_constraints_signature()
 
         if self._asked_for_reboot_at_time is not None:
             if not self._is_reboot_wait_expired(time):
@@ -4610,13 +4665,16 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                             force_constraint = ct
                             ct.reset_load_param(self.car.name)
                             # Person-originated ASAP constraints keep their person-specific target
-                            # unless the user explicitly overrode the charge target
+                            # unless the user explicitly overrode the charge target. QS-431: an
+                            # override is a target marker on a user-FROZEN car — a boot-replayed
+                            # marker must neither lower it (met -> dropped -> re-pushed loop) nor
+                            # raise it to a replayed default.
                             has_person_info = (
                                 force_constraint.load_info is not None
                                 and force_constraint.load_info.get(CONSTRAINT_FORECASTED_PERSON_KEY) is not None
                             )
                             if (
-                                user_target is not None or not has_person_info
+                                (self.car.is_user_frozen() is True and user_target is not None) or not has_person_info
                             ) and force_constraint.target_value != target_charge:
                                 force_constraint.target_value = target_charge
                                 do_force_solve = True
@@ -4847,8 +4905,18 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     )
 
                     if do_remove_all_person_constraints:
+                        car_frozen = self.car.is_user_frozen() is True
+                        if car_frozen:
+                            self.log_info_on_change(
+                                f"person_ct_suppressed_frozen:{self.car.name}",
+                                True,
+                                time,
+                                "check_load_activity_and_constraints: plugged car %s person constraint suppressed:"
+                                " car frozen by user",
+                                self.car.name,
+                            )
                         # inside the applicable window the only "ends" reason is "already charged"
-                        if person_need_applies:
+                        elif person_need_applies:
                             _LOGGER.info(
                                 f"check_load_activity_and_constraints: plugged car {self.car.name} is already charged enough for the next person {person.name} usage at {next_usage_time} need min target charge {person_min_target_charge}"
                             )
@@ -4870,7 +4938,20 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                                     if car_charge_person.end_of_constraint != next_usage_time:
                                         car_charge_person.end_of_constraint = next_usage_time
                                         need_ct_update = True
-                                    if car_charge_person.target_value != target_charge:
+                                    # QS-431: compare at display precision — a sub-percent drift
+                                    # of the person need must not change the notified state. A
+                                    # rise of the rounded % always rewrites (the rounded target is
+                                    # never below the rounded need; the raw target may sit up to
+                                    # just under 1 % on either side within one rounded bucket, or
+                                    # less than 0.5 % above the need across a bucket boundary); a
+                                    # fall needs a half-percent move too, so a need jittering
+                                    # around a .5 boundary flips at most once
+                                    rounded_target = int(round(car_charge_person.target_value))
+                                    rounded_need = int(round(target_charge))
+                                    if rounded_need > rounded_target or (
+                                        rounded_need < rounded_target
+                                        and car_charge_person.target_value - target_charge >= 0.5
+                                    ):
                                         car_charge_person.target_value = target_charge
                                         need_ct_update = True
                                     if need_ct_update:
@@ -5003,6 +5084,15 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                                 self.set_live_constraints(time, self._constraints)
                                 do_force_solve = True
 
+            # QS-431: the filler is artificial — it is chained after the real constraints
+            # (it starts where they end). As soon as this cycle touched any of them (removed,
+            # pushed, retargeted, moved), drop it so the block below rebuilds it from the
+            # current chain: a kept filler would keep a stale start (e.g. the target of a
+            # removed person constraint) and, through the same-end carry-over of
+            # `push_live_constraint`, could complete its rebuilt replacement at push.
+            if self._non_filler_constraints_signature() != non_filler_signature_at_start:
+                self._drop_filler_constraints(time)
+
             if realized_charge_target is None or (
                 is_target_percent and realized_charge_target < self.car.car_default_charge
             ):
@@ -5059,6 +5149,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                         time=time,
                         load=self,
                         load_param=self.car.name,
+                        load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_FILLER},
                         from_user=False,
                         artificial_step_to_final_value=artificial_step_to_final_value,
                         initial_value=realized_charge_target,

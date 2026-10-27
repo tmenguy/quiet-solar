@@ -282,6 +282,9 @@ the directory to open.
   the slash commands are still for. Same for `setup-task --no-worktree`:
   the work dir *is* the main checkout, so that run reports
   `phase_agent_pinned: false` and there is no GUI pin to open.
+  `/release` runs inline in the main session, not through a subagent,
+  because auto mode's public-surface rule only accepts the user's direct
+  consent (QS-434).
 - **GUI self-isolation drops the pin.** The pin file is gitignored *by
   design*, so it does not exist in a git worktree the GUI creates for
   itself when isolation is enabled: the tracked `.claude/agents/*.md`

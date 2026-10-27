@@ -4,7 +4,7 @@ slug: user-override
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-10-16
+last_verified: 2026-10-27
 ---
 
 # User override
@@ -181,6 +181,29 @@ command state.
   This is by design (QS-353 D1) — but only a *user* action may trigger
   it. A **system** action (the daily person notification) must set a
   time-boxed system hold instead, never write user-originated state.
+  **QS-431:** the hook also sets the `user_frozen` flag
+  (`USER_ORIGINATED_USER_FROZEN`, read via `QSCar.is_user_frozen()`) —
+  only outside `_USER_REPLAY_FOR_INIT`, so an entity restore replay
+  never freezes. A frozen car gets no automatic person constraint until
+  the store is cleared (`clear_all_user_originated`: an unplug HA sees
+  live of the **attached** car — not one made while HA is down, see the
+  QS-416 boot guard below — the reset button of the car card **or** of
+  the charger card, the departure auto-reset, pin taken,
+  stale/unauthorised pin); a person ASAP keeps its person
+  target unless the car is frozen **and** carries a target marker
+  (refined #48 escape). **Documented limitations (QS-431 review fix
+  #05):** the unplug branch clears the car's store only under
+  `if self.car:`, so a frozen car detached from its charger before it is
+  physically unplugged (a charger-card "no car" pick, a `CHANGE
+  CONNECTED CAR` detach) stays frozen through that unplug and the next
+  plug-in, until a car-card or charger-card reset (or the departure
+  auto-reset, for a car with a tracker). Selecting the person already
+  shown does not count as a user action (no change —
+  `user_set_person_for_car` returns early on the same value), so
+  re-picking the forecasted person the restart replay wrote does not
+  freeze; any other user action freezes the car. The user ruled "don't
+  fix" (2026-10-27, the "Document, don't fix" option) — accepted, not to
+  be fixed.
   **QS-416:** the same hook also **pins the car↔charger association**:
   when the car is attached, it sets the charger's
   `USER_ORIGINATED_CAR_NAME` to the car, so no better-scoring car can take
@@ -230,9 +253,19 @@ command state.
   sensor stuck at `off` before the save (the ID.buzz reports `off` while
   plugged) gets a fresh `off` sample after the boot. On a proof, the
   charger pin, the car's charger choice naming that charger and the boot
-  car are dropped, and the normal rules apply. No proof (a stale `off`,
+  car are dropped, and the normal rules apply. **QS-431:** the guard
+  lifts only those pins — the car's user-originated store (and so its
+  `user_frozen` freeze) is never wiped at boot. **Documented limitation:**
+  an unplug that happens while HA is down is not detected for the
+  freeze; the car stays frozen (no automatic person constraint) until the
+  next unplug HA sees live, or a reset. A boot-time wipe inferred from
+  the car's cloud plug sensor was tried and removed (QS-431 review fix
+  #04 — a stale `off` after a plain restart wiped a car that never left
+  its charger); the user ruled: "yes 1. : I don't care it will never
+  really happen , document it , it is very hard to properly fix, so
+  don't fix it" — accepted, not to be fixed. No proof (a stale `off`,
   `on`, holes, no sensor, no earlier reading, no or invalid saved time)
-  keeps it; a saved time in the future (clock behind) keeps it and leaves
+  keeps the pin; a saved time in the future (clock behind) keeps it and leaves
   the guard armed; an `off` reported only after the boot window does not
   lift it; a pin the user sets after the restart is never lifted. The
   saved time (and plug reading) is re-stamped at every save once the

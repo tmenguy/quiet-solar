@@ -36,6 +36,7 @@ from custom_components.quiet_solar.const import (
     USER_ORIGINATED_CHARGE_TARGET_PERCENT,
     USER_ORIGINATED_CHARGE_TIME,
     USER_ORIGINATED_CHARGER_NAME,
+    USER_ORIGINATED_USER_FROZEN,
 )
 from tests.utils.charger_harness import make_hass, make_home, make_real_car
 
@@ -446,6 +447,7 @@ async def test_ac11_person_change_resets_person_bound_state(seed_via_field):
         "force_charge": False,
         USER_ORIGINATED_CHARGE_TIME: CHARGE_TIME_CONSTRAINTS_CLEARED,
         USER_ORIGINATED_CHARGER_NAME: "wallbox",
+        USER_ORIGINATED_USER_FROZEN: True,
     }
     # fields reset BEFORE the lazy getter re-materialises the default
     assert car._next_charge_target is None
@@ -468,6 +470,7 @@ async def test_ac12_person_change_to_force_no_person():
         "force_charge": False,
         USER_ORIGINATED_CHARGE_TIME: CHARGE_TIME_CONSTRAINTS_CLEARED,
         USER_ORIGINATED_CHARGER_NAME: "wallbox",
+        USER_ORIGINATED_USER_FROZEN: True,
     }
     assert car._next_charge_target is None
     assert car._system_person_hold_name is None

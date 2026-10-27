@@ -296,8 +296,15 @@ template:
 {#-  2. The untrusted branch emits none, not the string 'unknown'. cv.boolean is     -#}
 {#-     applied without none_on_unknown_unavailable, so a string logs an ERROR on    -#}
 {#-     every evaluation.                                                            -#}
-{#-  3. The cloud write sits alone in a parallel: branch because pyatmo raises       -#}
-{#-     plain Exception subclasses, which continue_on_error does NOT swallow.        -#}
+{#-  3. The cloud write sits alone in a parallel: branch, for two reasons:           -#}
+{#-     (i) LATENCY, on every HA version: a slow, retrying (429 Retry-After)         -#}
+{#-     or hung cloud call must not delay the 10 s confirmation wait and its         -#}
+{#-     diagnostic, which run in the sibling branch. Flattening the cloud            -#}
+{#-     write out of parallel: would serialise them.                                 -#}
+{#-     (ii) EXCEPTION ISOLATION: needed on HA <= 2026.8, defense-in-depth           -#}
+{#-     since HA 2026.10, where continue_on_error also swallows pyatmo's             -#}
+{#-     plain Exception subclasses (wrapped in HomeAssistantError; a cloud           -#}
+{#-     failure is then only a script ERROR log line). See QS-436.                   -#}
 {#-  4. Do NOT reorder hk_ok = is_state(link) and is_state(hub). Jinja               -#}
 {#-     short-circuits, so WHICH ENTITIES GET TRACKED DEPENDS ON THE RENDER PATH:    -#}
 {#-     while the link reads off the hub is never evaluated, so it is not            -#}
