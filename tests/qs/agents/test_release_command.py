@@ -66,6 +66,16 @@ def test_release_verifies_after_run() -> None:
     assert "do not re-run `python scripts/qs/release.py`" in body
 
 
+def test_release_guards_real_run() -> None:
+    """Review fix #01: no dirty-tree loop, no drift, no silent partial push."""
+    body = _body()
+    assert "if the tree is not clean, stop" in body
+    assert "git log --oneline origin/main..main` must print nothing" in body
+    assert "git tag --list <dry-run tag>" in body
+    assert "completed with any other conclusion" in body
+    assert "always run `python scripts/qs/render_agents.py`" in body
+
+
 def test_release_has_no_degraded_fallback_preamble() -> None:
     body = _body()
     assert "degraded fallback" not in body
