@@ -194,7 +194,7 @@ def test_guard_with_an_open_run_and_work_for_every_hook(
         [recent, recent, recent, recent],
     )
     fake_claude.listing = [agent(ORCH, "r1", status="idle"), agent("S-9", id="short-9")]
-    fake_github.prs_by_number[7] = ciwatch.PrCi("OPEN", "h", "FAILURE", ("tests",), False)
+    fake_github.prs_by_number[7] = ciwatch.PrCi("OPEN", "h", "FAILURE", ("tests",), False, 1)
 
     def refuse(*a: Any, **k: Any) -> Any:
         raise AssertionError(f"a real subprocess or socket under cp.py daemon: {a!r}")

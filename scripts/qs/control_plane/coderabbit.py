@@ -1,10 +1,14 @@
 """The CodeRabbit tools (#425 D7): ``tool coderabbit-trigger`` asks for a head's review, ``tool coderabbit`` ingests it.
 
-In this repo CodeRabbit reviews only on request: every pushed head gets the commit status ``CodeRabbit`` =
-"Review skipped: manual review required…"; a ``@coderabbitai review`` comment moves it to ``pending`` "Review in
-progress", then "Review completed". The review object (``commit_id`` = the head) is posted before the "completed"
-status, and some completed reviews post none at all (nothing to say). This module assumes CodeRabbit stays on
-manual review here: with auto-review on, the trigger answers ``already`` and ``CR_MAX_REVIEWS`` bounds nothing.
+In this repo CodeRabbit reviews only on request. Until 2026-10-26 every pushed head got the commit status
+``CodeRabbit`` = "Review skipped: manual review required…"; a ``@coderabbitai review`` comment moved it to
+``pending`` "Review in progress", then "Review completed". Since 2026-10-27 (PR #433) CodeRabbit reports through a
+**check run** named ``CodeRabbit`` of the ``coderabbitai`` app instead: ``completed`` / ``skipped`` "Review
+skipped" on a push, ``in_progress`` once requested, then ``completed`` / ``success`` "Finished". Both signals are
+read, the newer wins (``head_state``). The review object (``commit_id`` = the head) is posted before the
+"completed" signal, and some completed reviews post none at all (nothing to say). This module assumes CodeRabbit
+stays on manual review here: with auto-review on, the trigger answers ``already`` and ``CR_MAX_REVIEWS`` bounds
+nothing.
 
 - ``tool coderabbit-trigger`` (args ``{"head"}``, one step ``trigger``): the task's ``triggered`` results reaching
   ``CR_MAX_REVIEWS`` → ``ceiling`` (no ``gh`` call); a head whose CodeRabbit state is ``completed`` or
@@ -14,7 +18,7 @@ manual review here: with auto-review on, the trigger answers ``already`` and ``C
 - ``tool coderabbit`` (args ``{"head"}``, one step ``ingest``): the head's latest build round (none → ``BUSY``);
   the bot's reviews of the head → their inline comments (thread replies dropped, de-duplicated by id) → one
   ``source: coderabbit`` finding each, at most ``CR_MAX_FINDINGS``, most severe first, on that round. No review
-  object: a "Review completed" status at least ``CR_SETTLE_S`` old is a review with nothing to say; anything else
+  object: a ``completed`` head state at least ``CR_SETTLE_S`` old is a review with nothing to say; anything else
   is ``BUSY`` ("not reviewed yet"). Review-body comments (Nitpick, Outside diff range, Duplicate) are not
   ingested; ``body_comments`` says whether there were some.
 
@@ -40,6 +44,11 @@ INGEST = "coderabbit"
 BOT = "coderabbitai[bot]"
 REVIEWER = "coderabbitai"  # the `reviewer` of every ingested finding
 STATUS_CONTEXT = "CodeRabbit"
+CHECK_NAME = "CodeRabbit"  # the check run CodeRabbit reports through since 2026-10-27 (M1)
+CHECK_APP = "coderabbitai"
+CHECK_IN_PROGRESS = frozenset({"queued", "in_progress", "waiting", "requested", "pending"})
+_NOT_A_REVIEW_RE = re.compile(r"rate limited|skipped", re.IGNORECASE)
+_EPOCH = datetime.min.replace(tzinfo=UTC)
 GH_TIMEOUT_S = 120
 TITLE_MAX = 120
 _HEAD_RE = re.compile(r"[0-9a-fA-F]{40}")
@@ -172,8 +181,8 @@ def _busy(what: str, detail: str) -> errors.CpError:
     return errors.CpError("BUSY", f"{what}: {detail}; replay the same key later")
 
 
-def _pages(ctx: tools.StepCtx, path: str) -> list[Any]:
-    """``gh api --paginate --slurp <path>``, every page's list flattened; ``BUSY`` on a failed or odd answer."""
+def _slurp(ctx: tools.StepCtx, path: str) -> list[Any]:
+    """``gh api --paginate --slurp <path>``: the list of pages; ``BUSY`` on a failed or unparseable answer."""
     res = ctx.runner.run(["gh", "api", "--paginate", "--slurp", path], cwd=ctx.main, timeout=GH_TIMEOUT_S)
     if not res.ok:
         raise _busy(f"gh api {path}", f"exited {res.returncode}")
@@ -181,9 +190,35 @@ def _pages(ctx: tools.StepCtx, path: str) -> list[Any]:
         pages = json.loads(res.stdout)
     except ValueError as exc:
         raise _busy(f"gh api {path}", "unparseable answer") from exc
-    if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+    if not isinstance(pages, list):
+        raise _busy(f"gh api {path}", "unexpected answer")
+    return pages
+
+
+def _pages(ctx: tools.StepCtx, path: str) -> list[Any]:
+    """Every page's list flattened (a list endpoint); ``BUSY`` on a failed or odd answer."""
+    pages = _slurp(ctx, path)
+    if not all(isinstance(page, list) for page in pages):
         raise _busy(f"gh api {path}", "unexpected answer")
     return [entry for page in pages for entry in page]
+
+
+def _check_runs(ctx: tools.StepCtx, head: str) -> list[dict[str, Any]]:
+    """The head's ``CodeRabbit`` check runs of the ``coderabbitai`` app. The endpoint answers an object per page
+    (``{total_count, check_runs}``), not a list; ``BUSY`` on a failed or odd answer."""
+    path = f"repos/{{owner}}/{{repo}}/commits/{head}/check-runs?check_name={CHECK_NAME}"
+    pages = _slurp(ctx, path)
+    if not all(isinstance(page, dict) and isinstance(page.get("check_runs"), list) for page in pages):
+        raise _busy(f"gh api {path}", "unexpected answer")
+    return [
+        run
+        for page in pages
+        for run in page["check_runs"]
+        if isinstance(run, dict)
+        and run.get("name") == CHECK_NAME
+        and isinstance(run.get("app"), dict)
+        and run["app"].get("slug") == CHECK_APP
+    ]
 
 
 def _stamp(value: Any) -> datetime | None:
@@ -194,24 +229,55 @@ def _stamp(value: Any) -> datetime | None:
     return at if at.tzinfo is not None else at.replace(tzinfo=UTC)
 
 
+def _status_state(status: Mapping[str, Any]) -> tuple[str, datetime | None]:
+    at = _stamp(status.get("created_at"))
+    if status.get("state") == "pending":
+        return "in_progress", at
+    if "Review completed" in str(status.get("description")):
+        return "completed", at
+    return "not_requested", at
+
+
+def _check_state(run: Mapping[str, Any]) -> tuple[str, datetime | None]:
+    if run.get("status") in CHECK_IN_PROGRESS:
+        return "in_progress", _stamp(run.get("started_at"))
+    at = _stamp(run.get("completed_at"))
+    output = run.get("output")
+    if run.get("status") != "completed" or run.get("conclusion") != "success" or not isinstance(output, dict):
+        return "not_requested", at
+    said = f"{output.get('title') or ''}\n{str(output.get('summary') or '').partition(chr(10))[0]}"
+    if _NOT_A_REVIEW_RE.search(said):  # the title or the summary's first line: never a step of its table
+        return "not_requested", at
+    return "completed", at
+
+
+def _order(entry: tuple[str, datetime | None, int, Any]) -> tuple[bool, datetime, int, int]:
+    """The latest entry: by its time (an unparseable one first), a check run over a status, then by id."""
+    _, at, kind, ident = entry
+    return at is not None, at or _EPOCH, kind, ident if isinstance(ident, int) else -1
+
+
 def head_state(ctx: tools.StepCtx, head: str) -> tuple[str, datetime | None]:
-    """The head's CodeRabbit state from its latest ``CodeRabbit`` status: ``completed`` / ``in_progress`` /
-    ``not_requested`` (none, "Review skipped…", "Review rate limited"), and that status's time (``None`` when
-    unparseable)."""
-    entries = [
-        s
+    """The head's CodeRabbit state from the newer of its ``CodeRabbit`` statuses and check runs (M1: CodeRabbit
+    reports through a check run since 2026-10-27), and that entry's time (``None`` when unparseable).
+
+    - ``in_progress``: a ``pending`` status; a ``queued`` / ``in_progress`` check run (at its ``started_at``).
+    - ``completed``: a "Review completed" status; a ``completed`` / ``success`` check run (at its
+      ``completed_at``) whose title or summary's first line does not say "rate limited" or "skipped".
+    - ``not_requested``: neither exists, "Review skipped…", "Review rate limited", any other conclusion.
+
+    The latest entry is chosen deterministically: by ``(time, kind, id)``. A failed or odd ``gh`` answer of
+    either endpoint is ``BUSY``."""
+    entries: list[tuple[str, datetime | None, int, Any]] = [
+        (*_status_state(s), 0, s.get("id"))
         for s in _pages(ctx, f"repos/{{owner}}/{{repo}}/commits/{head}/statuses")
         if isinstance(s, dict) and s.get("context") == STATUS_CONTEXT
     ]
+    entries += [(*_check_state(run), 1, run.get("id")) for run in _check_runs(ctx, head)]
     if not entries:
         return "not_requested", None
-    latest = max(entries, key=lambda s: str(s.get("created_at")))
-    at = _stamp(latest.get("created_at"))
-    if latest.get("state") == "pending":
-        return "in_progress", at
-    if "Review completed" in str(latest.get("description")):
-        return "completed", at
-    return "not_requested", at
+    state, at, _, _ = max(entries, key=_order)
+    return state, at
 
 
 # --------------------------------------------------------------------------- the steps
@@ -260,6 +326,7 @@ def _ingest(ctx: tools.StepCtx) -> None:
         r
         for r in _pages(ctx, f"repos/{{owner}}/{{repo}}/pulls/{pr}/reviews")
         if isinstance(r, dict)
+        and isinstance(r.get("id"), int)  # an entry without an id is skipped, never a crash (S5)
         and isinstance(r.get("user"), dict)
         and r["user"].get("login") == BOT
         and str(r.get("commit_id")).lower() == head

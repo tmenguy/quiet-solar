@@ -14,12 +14,15 @@
   misses a ``needs:`` job whose check run does not exist yet. No Actions suite → ``PENDING``; a completed
   suite whose conclusion is not in ``PASSING_SUITE_CONCLUSIONS`` → ``FAILURE`` (so red waits for the suite
   to finish); every suite completed and passing → ``SUCCESS`` (``PENDING`` when the suite list is
-  truncated: CI is assumed to be GitHub Actions with at most 20 suites per head). The rollup's ``failing``
-  checks and ``truncated`` flag still feed the ``ci_red`` alert's payload; a status named there no longer
-  makes the verdict red.
+  truncated: CI is assumed to be GitHub Actions with at most 20 suites per head). GitHub creates one suite
+  per workflow run, so a re-run on the same head (a close/reopen without a push) leaves the old suite next
+  to the new one: only the latest suite of each workflow (the highest ``workflowRun.databaseId``) counts; a
+  suite with no workflow run yet always counts. The rollup's ``failing`` checks and ``truncated`` flag still
+  feed the ``ci_red`` alert's payload; a status named there no longer makes the verdict red.
 - ``ci_red`` is derived from the stored rows on every tick (``must-fix``), whether or not a poll ran.
-- The schedule: ``CI_FAST_S`` after a poll that saw a pending verdict or a moved head, else
-  ``CI_SLOW_S``; failures back off from ``CI_BACKOFF_MIN_S`` to ``CI_BACKOFF_MAX_S``; below
+- The schedule: ``CI_FAST_S`` after a poll that saw a moved head or a pending verdict with at least one
+  Actions suite, else ``CI_SLOW_S`` (a head with no Actions suite at all — a conflicting PR, ``[skip ci]``,
+  Actions down — stays ``PENDING`` but is polled slowly once its head is seen); failures back off from ``CI_BACKOFF_MIN_S`` to ``CI_BACKOFF_MAX_S``; below
   ``CI_RATE_FLOOR`` remaining calls, no poll before GitHub's ``resetAt`` (at most ``CI_RESET_CAP_S``
   away). A new daemon polls at once.
 """
@@ -66,7 +69,8 @@ _PR_FIELDS = (
     "state headRefOid commits(last:1){ nodes{ commit{ statusCheckRollup{ state"
     " contexts(first:100){ pageInfo{hasNextPage} nodes{ __typename"
     " ... on CheckRun{ name conclusion detailsUrl } ... on StatusContext{ context state targetUrl } } } }"
-    " checkSuites(first:20){ pageInfo{hasNextPage} nodes{ status conclusion app{ slug } } } } } }"
+    " checkSuites(first:20){ pageInfo{hasNextPage} nodes{ status conclusion app{ slug }"
+    " workflowRun{ databaseId workflow{ databaseId } } } } } } }"
 )
 
 
@@ -90,6 +94,7 @@ class PrCi:
     verdict: str | None  # SUCCESS / FAILURE / PENDING from the Actions suites; None only with no commit (#425 D10)
     failing: tuple[str, ...]
     truncated: bool
+    suites: int  # how many GitHub Actions suites the head has (0: polled slowly once seen, S1)
 
 
 @dataclass(frozen=True)
@@ -114,31 +119,57 @@ def query(owner: str, name: str, numbers: Sequence[int]) -> str:
     )
 
 
-def _verdict(suites: dict[str, Any]) -> str:
-    """The CI verdict of a head from its check suites (#425 D10): the ``CI_APP`` suites only."""
+def _run_of(suite: dict[str, Any]) -> tuple[Any, int] | None:
+    """``(workflow id, run id)`` of a suite's workflow run; ``None`` when it has none yet (or an odd one)."""
+    run = suite.get("workflowRun")
+    if not isinstance(run, dict) or not isinstance(run.get("databaseId"), int):
+        return None
+    workflow = run.get("workflow")
+    if not isinstance(workflow, dict) or workflow.get("databaseId") is None:
+        return None
+    return workflow["databaseId"], run["databaseId"]
+
+
+def _latest_per_workflow(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Only the latest suite of each workflow (a re-run on the same head leaves the old suite, S2)."""
+    kept: list[dict[str, Any]] = []
+    latest: dict[Any, tuple[int, dict[str, Any]]] = {}
+    for suite in actions:
+        ids = _run_of(suite)
+        if ids is None:
+            kept.append(suite)  # no workflow run yet: counted as it is
+        elif ids[0] not in latest or ids[1] > latest[ids[0]][0]:
+            latest[ids[0]] = (ids[1], suite)
+    return kept + [suite for _, suite in latest.values()]
+
+
+def _verdict(suites: dict[str, Any]) -> tuple[str, int]:
+    """The CI verdict of a head from its check suites (#425 D10): the ``CI_APP`` suites only, the latest of
+    each workflow; and how many ``CI_APP`` suites the head has."""
     actions = [
         s
         for s in suites["nodes"]
         if isinstance(s, dict) and isinstance(s.get("app"), dict) and s["app"].get("slug") == CI_APP
     ]
     if not actions:
-        return "PENDING"
-    if any(s.get("status") == "COMPLETED" and s.get("conclusion") not in PASSING_SUITE_CONCLUSIONS for s in actions):
-        return "FAILURE"
-    if all(s.get("status") == "COMPLETED" for s in actions) and not suites["pageInfo"]["hasNextPage"]:
-        return "SUCCESS"
-    return "PENDING"
+        return "PENDING", 0
+    latest = _latest_per_workflow(actions)
+    if any(s.get("status") == "COMPLETED" and s.get("conclusion") not in PASSING_SUITE_CONCLUSIONS for s in latest):
+        return "FAILURE", len(actions)
+    if all(s.get("status") == "COMPLETED" for s in latest) and not suites["pageInfo"]["hasNextPage"]:
+        return "SUCCESS", len(actions)
+    return "PENDING", len(actions)
 
 
 def _pr(node: dict[str, Any]) -> PrCi:
     commits = node["commits"]["nodes"]
     if not commits:
-        return PrCi(node["state"], node["headRefOid"], None, (), False)
+        return PrCi(node["state"], node["headRefOid"], None, (), False, 0)
     commit = commits[0]["commit"]
-    verdict = _verdict(commit["checkSuites"])
+    verdict, count = _verdict(commit["checkSuites"])
     rollup = commit["statusCheckRollup"]
     if rollup is None:
-        return PrCi(node["state"], node["headRefOid"], verdict, (), False)
+        return PrCi(node["state"], node["headRefOid"], verdict, (), False, count)
     failing = []
     for ctx in rollup["contexts"]["nodes"]:
         if not isinstance(ctx, dict):
@@ -148,7 +179,7 @@ def _pr(node: dict[str, Any]) -> PrCi:
         elif ctx.get("__typename") == "StatusContext" and ctx.get("state") in FAILING_STATUSES:
             failing.append(str(ctx.get("context")))
     truncated = bool(rollup["contexts"]["pageInfo"]["hasNextPage"])
-    return PrCi(node["state"], node["headRefOid"], verdict, tuple(failing), truncated)
+    return PrCi(node["state"], node["headRefOid"], verdict, tuple(failing), truncated, count)
 
 
 class GitHub:
@@ -273,7 +304,7 @@ class CiWatcher:
                 if pr is None:
                     continue  # unknown this poll (a NOT_FOUND alias): no write
                 state, sha = ci_state(pr)
-                if state is not None and (pr.verdict == "PENDING" or sha != row["ci_sha"]):
+                if state is not None and (sha != row["ci_sha"] or (pr.verdict == "PENDING" and pr.suites > 0)):
                     fast = True
                 self.failing[row["id"]] = (sha, pr.failing, pr.truncated)
                 if (state, sha) != (row["ci_state"], row["ci_sha"]):

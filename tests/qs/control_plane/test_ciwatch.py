@@ -16,9 +16,13 @@ from .conftest import Call, FakeRunner, insert_task, open_run, run_cli, sql
 
 
 def _pr(
-    state: str = "OPEN", head: str = "h1", verdict: str | None = "SUCCESS", failing: tuple[str, ...] = ()
+    state: str = "OPEN",
+    head: str = "h1",
+    verdict: str | None = "SUCCESS",
+    failing: tuple[str, ...] = (),
+    suites: int = 1,
 ) -> ciwatch.PrCi:
-    return ciwatch.PrCi(state, head, verdict, failing, False)
+    return ciwatch.PrCi(state, head, verdict, failing, False, suites)
 
 
 def _tick(conn: Any, fake_clock: clock.FakeClock) -> None:
@@ -69,9 +73,18 @@ def _graphql(
     return respond
 
 
-def _suite(status: str = "COMPLETED", conclusion: str | None = "SUCCESS", slug: str | None = "github-actions") -> Any:
-    """One check suite of the head commit (#425 D10); ``slug=None`` is a suite with a null ``app``."""
-    return {"status": status, "conclusion": conclusion, "app": None if slug is None else {"slug": slug}}
+def _suite(
+    status: str = "COMPLETED",
+    conclusion: str | None = "SUCCESS",
+    slug: str | None = "github-actions",
+    run: int | None = None,
+    workflow: int | None = None,
+) -> Any:
+    """One check suite of the head commit (#425 D10); ``slug=None`` is a suite with a null ``app``; ``run`` /
+    ``workflow`` give it a ``workflowRun`` (``run=None``: a suite with no workflow run yet)."""
+    suite = {"status": status, "conclusion": conclusion, "app": None if slug is None else {"slug": slug}}
+    suite["workflowRun"] = None if run is None else {"databaseId": run, "workflow": {"databaseId": workflow}}
+    return suite
 
 
 def _node(
@@ -205,7 +218,7 @@ class TestRealGitHub:
         node = {"state": "OPEN", "headRefOid": "h", "commits": {"nodes": []}}
         fake_runner.on(("gh", "api", "graphql"), _graphql({7: node}))
         prs, rate = real_github.prs([7])
-        assert prs[7] == ciwatch.PrCi("OPEN", "h", None, (), False) and rate.remaining == 4000
+        assert prs[7] == ciwatch.PrCi("OPEN", "h", None, (), False, 0) and rate.remaining == 4000
 
     @pytest.mark.parametrize(
         "url",
@@ -261,6 +274,21 @@ class TestSchedule:
         fake_clock.advance(30)
         _tick(conn, fake_clock)
         assert self._wait(fake_clock) == expected
+
+    def test_a_head_with_no_actions_suite_is_polled_slowly_once_seen(
+        self, conn, migrated, watched, fake_github, fake_clock
+    ) -> None:
+        """S1: no Actions suite (a conflicting PR, `[skip ci]`, Actions down) stays PENDING but polls slowly."""
+        fake_github.prs_by_number[7] = _pr(verdict="PENDING", suites=0)
+        _tick(conn, fake_clock)  # a moved head (no ci_sha yet): fast, the suites may not exist yet
+        assert self._wait(fake_clock) == ciwatch.CI_FAST_S
+        fake_clock.advance(ciwatch.CI_FAST_S)
+        _tick(conn, fake_clock)  # the same head, still no suite: slow
+        assert self._wait(fake_clock) == ciwatch.CI_SLOW_S and _ci(migrated, "T1") == ("pending", "h1")
+        fake_github.prs_by_number[7] = _pr(verdict="PENDING", head="h2", suites=0)
+        fake_clock.advance(ciwatch.CI_SLOW_S)
+        _tick(conn, fake_clock)  # a new head, no suite yet: fast again
+        assert self._wait(fake_clock) == ciwatch.CI_FAST_S
 
     def test_not_due_means_no_call(self, conn, migrated, watched, fake_github, fake_clock) -> None:
         fake_github.prs_by_number[7] = _pr()
@@ -489,6 +517,36 @@ _OTHER_RUN_FAILED = {"__typename": "CheckRun", "name": "cursor", "conclusion": "
             id="a-completed-failure-is-red-at-once",
         ),
         pytest.param(_node("SUCCESS", suites=[None, *GREEN]), "green", id="a-null-suite-item"),
+        pytest.param(
+            _node("SUCCESS", suites=[_suite("COMPLETED", "FAILURE", run=1, workflow=10), _suite(run=2, workflow=10)]),
+            "green",
+            id="a-rerun-passes-the-stale-failure-is-dropped",
+        ),
+        pytest.param(
+            _node("FAILURE", suites=[_suite("COMPLETED", "FAILURE", run=3, workflow=10), _suite(run=2, workflow=10)]),
+            "red",
+            id="a-rerun-fails-the-older-pass-is-dropped",
+        ),
+        pytest.param(
+            _node("FAILURE", suites=[_suite(run=5, workflow=10), _suite("COMPLETED", "FAILURE", run=4, workflow=11)]),
+            "red",
+            id="two-workflows-each-counted",
+        ),
+        pytest.param(
+            _node("SUCCESS", suites=[_suite(run=5, workflow=10), _suite(run=4, workflow=11)]),
+            "green",
+            id="two-workflows-both-passing",
+        ),
+        pytest.param(
+            _node("FAILURE", suites=[_suite("COMPLETED", "FAILURE"), _suite(run=9, workflow=10)]),
+            "red",
+            id="a-suite-with-no-workflow-run-is-kept",
+        ),
+        pytest.param(
+            _node("SUCCESS", suites=[{**_suite(), "workflowRun": {"databaseId": 3, "workflow": None}}, *GREEN]),
+            "green",
+            id="a-run-with-no-workflow-is-kept",
+        ),
     ],
 )
 def test_the_verdict_comes_from_the_actions_suites(real_github, fake_runner, node: Any, expected: str) -> None:
@@ -502,7 +560,10 @@ def test_the_query_asks_for_the_check_suites(real_github, fake_runner) -> None:
     fake_runner.on(("gh", "api", "graphql"), _graphql({7: _node("SUCCESS", suites=GREEN)}))
     real_github.prs([7])
     q = fake_runner.matching("gh", "api", "graphql")[0].argv[-1]
-    assert "checkSuites(first:20){ pageInfo{hasNextPage} nodes{ status conclusion app{ slug } } }" in q
+    assert (
+        "checkSuites(first:20){ pageInfo{hasNextPage} nodes{ status conclusion app{ slug }"
+        " workflowRun{ databaseId workflow{ databaseId } } } }" in q
+    )
 
 
 def test_a_failed_run_is_red_only_when_its_suite_completes(
@@ -532,4 +593,11 @@ def test_the_verdict_constants() -> None:
     assert ciwatch.CI_APP == "github-actions"
     assert frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"}) == ciwatch.PASSING_SUITE_CONCLUSIONS
     assert not hasattr(ciwatch, "PENDING_ROLLUPS")
-    assert [f.name for f in dataclasses.fields(ciwatch.PrCi)] == ["state", "head", "verdict", "failing", "truncated"]
+    assert [f.name for f in dataclasses.fields(ciwatch.PrCi)] == [
+        "state",
+        "head",
+        "verdict",
+        "failing",
+        "truncated",
+        "suites",
+    ]

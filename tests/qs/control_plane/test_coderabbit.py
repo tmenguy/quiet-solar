@@ -2,7 +2,9 @@
 
 Fixtures (``fixtures/coderabbit/``): trimmed captures from PR #430 (reviews ``5598133439`` / ``5601237998``, their
 inline comments, the head's ``CodeRabbit`` statuses), a PR #432 comment (the ``·`` header form), the "Review rate
-limited" status seen on PR #420, and hand-made cases.
+limited" status seen on PR #420, the ``CodeRabbit`` check runs of PR #435 (``check-runs-completed.json``: head
+``01fc582e``, "Finished"; ``check-runs-skipped.json``: head ``bed28561``, "Review skipped" — CodeRabbit reports
+through a check run since 2026-10-27), and hand-made cases (``check-runs-in-progress.json`` among them).
 """
 
 from __future__ import annotations
@@ -40,6 +42,38 @@ def statuses_argv(head: str = H) -> tuple[str, ...]:
     return ("gh", "api", "--paginate", "--slurp", f"repos/{{owner}}/{{repo}}/commits/{head}/statuses")
 
 
+def checks_argv(head: str = H) -> tuple[str, ...]:
+    path = f"repos/{{owner}}/{{repo}}/commits/{head}/check-runs?check_name=CodeRabbit"
+    return ("gh", "api", "--paginate", "--slurp", path)
+
+
+NO_CHECKS = [{"total_count": 0, "check_runs": []}]
+
+
+def check_run(
+    status: str = "completed",
+    conclusion: str | None = "success",
+    at: str = "2026-10-27T15:37:32Z",
+    *,
+    run_id: int = 1,
+    title: str = "Finished",
+    summary: str = "Result: Success - Review completed",
+    slug: str = "coderabbitai",
+) -> dict[str, Any]:
+    """A hand-made ``CodeRabbit`` check run; ``at`` is its ``completed_at`` (``started_at`` when not completed)."""
+    done = status == "completed"
+    return {
+        "id": run_id,
+        "name": "CodeRabbit",
+        "status": status,
+        "conclusion": conclusion,
+        "started_at": None if done else at,
+        "completed_at": at if done else None,
+        "output": {"title": title, "summary": summary},
+        "app": {"slug": slug},
+    }
+
+
 COMMENT = ("gh", "pr", "comment", "7", "--body", "@coderabbitai review")
 
 
@@ -66,8 +100,14 @@ class C:
         assert code == 0, out
         return int(out["round"])
 
-    def gh(self, reviews: Any = None, comments: Any = None, statuses: Any = None, head: str = H) -> None:
-        for argv, data in ((reviews_argv(), reviews), (comments_argv(), comments), (statuses_argv(head), statuses)):
+    def gh(
+        self, reviews: Any = None, comments: Any = None, statuses: Any = None, head: str = H, checks: Any = None
+    ) -> None:
+        """Register the answers; with ``statuses`` and no ``checks``, the head has no ``CodeRabbit`` check run."""
+        if statuses is not None and checks is None:
+            checks = NO_CHECKS
+        pairs = ((reviews_argv(), reviews), (comments_argv(), comments), (statuses_argv(head), statuses))
+        for argv, data in (*pairs, (checks_argv(head), checks)):
             if data is not None:
                 self.runner.on(argv, json.dumps(data))
 
@@ -94,6 +134,10 @@ def c(migrated: Path, tmp_path: Path, fake_runner: FakeRunner, fake_clock: clock
 
 def _completed_at() -> str:
     return str(fixture("statuses-completed.json")[0][0]["created_at"])
+
+
+def _check_completed_at() -> str:
+    return str(fixture("check-runs-completed.json")[0]["check_runs"][0]["completed_at"])
 
 
 # --------------------------------------------------------------------------- the registry
@@ -221,6 +265,198 @@ def test_trigger_failed_comment_is_busy(c: C) -> None:
 def test_trigger_with_a_run_token(c: C) -> None:
     c.gh(statuses=[[]])
     assert c.tool("coderabbit-trigger", token=c.token)[1]["result"] == {"status": "triggered"}
+
+
+# --------------------------------------------------------------------------- the head's state from its check run (M1)
+
+
+@pytest.mark.parametrize(
+    "checks",
+    [
+        "check-runs-completed.json",
+        "check-runs-in-progress.json",
+        [{"total_count": 1, "check_runs": [check_run("queued", None)]}],
+    ],
+)
+def test_trigger_answers_already_on_a_check_run_reviewed_or_in_progress(c: C, checks: Any) -> None:
+    c.gh(statuses=[[]], checks=fixture(checks) if isinstance(checks, str) else checks)
+    code, out = c.tool("coderabbit-trigger")
+    assert code == 0 and out["result"] == {"status": "already"}, out
+    assert c.runner.matching(*COMMENT) == []
+    [call] = c.runner.matching(*checks_argv())
+    assert call.timeout == coderabbit.GH_TIMEOUT_S
+
+
+@pytest.mark.parametrize(
+    "run",
+    [
+        pytest.param(None, id="live-review-skipped"),
+        pytest.param(check_run(title="Review rate limited"), id="rate-limited-title"),
+        pytest.param(check_run(title="Done", summary="Result: Skipped - Review skipped\n| a | Completed |"), id="skip"),
+        pytest.param(check_run(conclusion="failure"), id="a-failed-run"),
+        pytest.param(check_run(conclusion="cancelled", title="Cancelled"), id="a-cancelled-run"),
+        pytest.param(check_run(slug="someone-else"), id="another-apps-run"),
+        pytest.param({**check_run(), "name": "CodeRabbit lint"}, id="another-name"),
+        pytest.param({**check_run(), "app": None}, id="a-null-app"),
+        pytest.param({**check_run(), "status": None}, id="an-odd-status"),
+        pytest.param({**check_run(), "output": None}, id="a-null-output-is-not-a-review"),
+        pytest.param("not a run", id="not-a-dict"),
+    ],
+)
+def test_trigger_requests_a_review_on_a_check_run_that_is_not_a_review(c: C, run: Any) -> None:
+    checks = fixture("check-runs-skipped.json") if run is None else [{"total_count": 1, "check_runs": [run]}]
+    c.gh(statuses=[[]], checks=checks)
+    code, out = c.tool("coderabbit-trigger")
+    assert out["result"] == {"status": "triggered"}, out
+
+
+def test_a_success_whose_steps_say_skipped_is_still_a_review(c: C) -> None:
+    """Only the title and the summary's first line count: a skipped step in the table is not a skipped review."""
+    run = check_run(summary="Result: Success - Review completed\n| Run analysis checks | Skipped | 0s |")
+    c.gh(statuses=[[]], checks=[{"total_count": 1, "check_runs": [run]}])
+    assert c.tool("coderabbit-trigger")[1]["result"] == {"status": "already"}
+
+
+@pytest.mark.parametrize(
+    ("statuses", "checks", "expected"),
+    [
+        pytest.param("statuses-skipped.json", "check-runs-completed.json", "already", id="newer-check-run-completed"),
+        pytest.param("statuses-completed.json", "check-runs-skipped.json", "triggered", id="newer-check-run-skipped"),
+        pytest.param(
+            [
+                [
+                    {
+                        "context": "CodeRabbit",
+                        "state": "success",
+                        "description": "Review skipped: x",
+                        "created_at": "2026-10-28T00:00:00Z",
+                    }
+                ]
+            ],
+            "check-runs-completed.json",
+            "triggered",
+            id="newer-status-skipped",
+        ),
+        pytest.param(
+            [
+                [
+                    {
+                        "context": "CodeRabbit",
+                        "state": "pending",
+                        "description": "Review in progress",
+                        "created_at": "2026-10-28T00:00:00Z",
+                    }
+                ]
+            ],
+            "check-runs-skipped.json",
+            "already",
+            id="newer-status-in-progress",
+        ),
+    ],
+)
+def test_the_newer_of_status_and_check_run_wins(c: C, statuses: Any, checks: str, expected: str) -> None:
+    c.gh(statuses=fixture(statuses) if isinstance(statuses, str) else statuses, checks=fixture(checks))
+    assert c.tool("coderabbit-trigger")[1]["result"] == {"status": expected}
+
+
+@pytest.mark.parametrize(
+    ("runs", "expected"),
+    [
+        pytest.param([check_run(run_id=2), check_run("in_progress", None, run_id=1)], "already", id="same-stamp-id-2"),
+        pytest.param(
+            [check_run(conclusion="skipped", title="Review skipped", run_id=2), check_run(run_id=1)],
+            "triggered",
+            id="same-stamp-the-higher-id-wins",
+        ),
+        pytest.param(
+            [check_run(conclusion="skipped", title="Review skipped", at="soon", run_id=9), check_run(run_id=1)],
+            "already",
+            id="an-unparseable-stamp-loses",
+        ),
+        pytest.param(
+            [{**check_run(conclusion="skipped", title="Review skipped"), "id": None}, check_run(run_id=0)],
+            "already",
+            id="a-missing-id-loses-a-tie",
+        ),
+    ],
+)
+def test_the_latest_check_run_is_chosen_deterministically(c: C, runs: list[Any], expected: str) -> None:
+    for order in (runs, list(reversed(runs))):
+        c.runner.calls.clear()
+        c.gh(statuses=[[]], checks=[{"total_count": len(order), "check_runs": order}])
+        key = f"task:T1:coderabbit-trigger:{len(c.runner.rules)}"
+        assert c.tool("coderabbit-trigger", key=key)[1]["result"] == {"status": expected}
+
+
+def test_a_check_run_ties_with_a_status_and_wins(c: C) -> None:
+    st = [
+        [
+            {
+                "context": "CodeRabbit",
+                "state": "success",
+                "description": "Review skipped: x",
+                "created_at": "2026-10-27T15:37:32Z",
+            }
+        ]
+    ]
+    c.gh(statuses=st, checks=[{"total_count": 1, "check_runs": [check_run()]}])
+    assert c.tool("coderabbit-trigger")[1]["result"] == {"status": "already"}
+
+
+def test_two_check_run_pages_are_flattened(c: C) -> None:
+    pages = [*fixture("check-runs-skipped.json"), *fixture("check-runs-completed.json")]
+    c.gh(statuses=[[]], checks=pages)
+    assert c.tool("coderabbit-trigger")[1]["result"] == {"status": "triggered"}  # the skipped run is the newer
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        RunResult(1, "", "HTTP 502"),
+        RunResult(0, "not json", ""),
+        RunResult(0, '{"total_count": 0, "check_runs": []}', ""),  # not slurped: not a list of pages
+        RunResult(0, "[[]]", ""),
+        RunResult(0, '[{"total_count": 1}]', ""),
+        RunResult(0, '[{"check_runs": {}}]', ""),
+    ],
+)
+def test_a_failed_or_unparseable_check_runs_answer_is_busy(c: C, result: RunResult) -> None:
+    c.gh(statuses=fixture("statuses-skipped.json"))
+    c.runner.on(checks_argv(), result)
+    code, out = c.tool("coderabbit-trigger")
+    assert code == 6 and out["error"] == "BUSY", out
+    assert c.calls("coderabbit-trigger") == [] and c.runner.matching(*COMMENT) == []
+    c.round()
+    c.gh(reviews=[[]])
+    code, out = c.tool("coderabbit")
+    assert code == 6 and out["error"] == "BUSY" and c.calls("coderabbit") == []
+
+
+def test_a_settled_completed_check_run_with_no_review_object_is_reviewed(c: C) -> None:
+    c.round()
+    c.gh(reviews=[[]], statuses=[[]], checks=fixture("check-runs-completed.json"))
+    c.at(_check_completed_at(), node_policy.CR_SETTLE_S - 1)
+    code, out = c.tool("coderabbit")
+    assert code == 6 and out["error"] == "BUSY" and "not reviewed yet (completed)" in out["detail"]
+    c.at(_check_completed_at(), node_policy.CR_SETTLE_S)
+    code, out = c.tool("coderabbit")  # the same key replays and settles
+    assert code == 0 and out["result"] == {
+        "status": "reviewed",
+        "review_ids": [],
+        "ids": [],
+        "dropped": 0,
+        "body_comments": False,
+    }
+    assert c.findings() == []
+
+
+@pytest.mark.parametrize("checks", ["check-runs-in-progress.json", "check-runs-skipped.json"])
+def test_an_unfinished_or_skipped_check_run_with_no_review_object_is_busy(c: C, checks: str) -> None:
+    c.round()
+    c.gh(reviews=[[]], statuses=fixture("statuses-completed.json"), checks=fixture(checks))
+    c.at(_check_completed_at(), 3600)
+    code, out = c.tool("coderabbit")
+    assert code == 6 and out["error"] == "BUSY" and "not reviewed yet" in out["detail"]
 
 
 # --------------------------------------------------------------------------- tool coderabbit: not reviewed yet
@@ -360,6 +596,7 @@ def test_the_pr430_review_is_ingested_before_review_completed(c: C) -> None:
     assert (rows[1]["line_start"], rows[1]["line_end"]) == (27, 27)
     assert "**🎯 Functional Correctness**" in first["body"]
     assert c.runner.matching(*statuses_argv(H430)) == []  # a review object needs no status read
+    assert c.runner.matching(*checks_argv(H430)) == []
 
 
 def test_the_handmade_mapping(c: C) -> None:
@@ -412,6 +649,17 @@ def test_the_new_header_form_of_pr432(c: C) -> None:
     assert (row["severity"], row["category"]) == ("nice_to_have", "edge-case")
     assert row["title"] == "Pass the remaining stop budget to `Claude.stop`."  # the first bold line outside <details>
     assert (row["line_start"], row["line_end"]) == (624, 650)
+
+
+def test_a_review_with_no_integer_id_is_skipped(c: C) -> None:
+    """S5: a bot review of the head with no (or an odd) ``id`` is skipped, never a crash."""
+    c.round()
+    reviews = fixture("handmade-reviews.json")
+    for bad in ({}, {"id": "9002"}):
+        reviews[0].append({**bad, "user": {"login": "coderabbitai[bot]"}, "commit_id": H, "body": ""})
+    c.gh(reviews=reviews, comments=fixture("handmade-comments.json"))
+    code, out = c.tool("coderabbit")
+    assert code == 0 and out["result"]["review_ids"] == [9001], out
 
 
 def test_two_pages_are_flattened_and_several_reviews_merged(c: C) -> None:
