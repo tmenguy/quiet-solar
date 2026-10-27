@@ -1,0 +1,16 @@
+[
+ [
+  {
+   "context": "CodeRabbit",
+   "state": "success",
+   "description": "Review rate limited",
+   "created_at": "2026-10-16T20:00:19Z"
+  },
+  {
+   "context": "CodeRabbit",
+   "state": "success",
+   "description": "Review skipped: manual review required for this OSS repository",
+   "created_at": "2026-10-16T19:58:02Z"
+  }
+ ]
+]

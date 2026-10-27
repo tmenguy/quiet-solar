@@ -77,6 +77,7 @@ MODULES = (
     "watchdog",
     "restore",
     "node_policy",  # #425: the node's constants (a leaf)
+    "coderabbit",  # #425: the CodeRabbit tools
     "cli",
 )
 for _name in MODULES:
@@ -88,6 +89,7 @@ from control_plane import (  # noqa: E402
     ciwatch,
     cli,
     clock,
+    coderabbit,
     codever,
     daemon,
     db,
@@ -468,6 +470,7 @@ def _cp_isolation(
         tools.reset()
         items.register_item_tools()
         reviews.register_review_tool()  # #407: `tool review`, whole again for the next test
+        coderabbit.register_coderabbit_tools()  # #425: likewise
         export.LEDGER_SECTIONS.clear()
         ledger.register_export()  # #375: the sections cli registers at import, whole again for the next test
 

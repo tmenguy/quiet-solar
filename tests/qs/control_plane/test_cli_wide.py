@@ -47,6 +47,8 @@ TOOL_ARGS: dict[str, dict[str, Any]] = {
     "integrate-finish": {},
     "integrate-drop": {},
     "review": {"kind": "global", "run": "R1"},  # #407: task-less (no --task)
+    "coderabbit": {"head": "a" * 40},  # #425
+    "coderabbit-trigger": {"head": "a" * 40},
 }
 
 
@@ -148,6 +150,8 @@ NODE_OK = {
     "tool gate",
     "tool push",
     "tool pr-create",
+    "tool coderabbit",  # #425
+    "tool coderabbit-trigger",
     "tool integrate-start",
     "tool integrate-finish",
     "tool integrate-drop",

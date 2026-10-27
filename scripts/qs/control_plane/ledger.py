@@ -413,91 +413,111 @@ def open_findings(
     batch = validate_items(items, source)
     if round_ is not None and round_ < 1:
         raise errors.CpError("USAGE", "--round must be >= 1 (round 0 is only the default before any round)")
-    ids: list[int] = []
     with db.write(conn):
         w = writer(conn, token, task_id, kinds={"run", "node", tokens.REVIEW})
-        if w.principal.kind == tokens.REVIEW:  # #407: its own source; every item carries its id as reviewer
-            own = schema_reviews.SOURCES[str(w.principal.review_kind)]
-            if source != own:
-                raise errors.CpError("CONFLICT", f"review {w.principal.review_id} writes only --source {own}")
-            batch = [{**item, "reviewer": w.actor} for item in batch]
-        if round_ is None:
-            number = latest_round(conn, task_id, phase)
-        elif conn.execute(
-            "SELECT 1 FROM rounds WHERE task_id = ? AND phase = ? AND round = ?", (task_id, phase, round_)
-        ).fetchone():
-            number = round_
-        else:
-            raise errors.CpError("NOT_FOUND", f"task {task_id} has no {phase} round {round_}")
-        task = tasks.get(conn, task_id)
-        now = db.now(clock)
-        for item in batch:
-            fp = fingerprint(file=item["file"], symbol=item["symbol"], category=item["category"], title=item["title"])
-            title_norm = norm(item["title"])
-            key = _sha(
-                (
-                    task_id,
-                    phase,
-                    None if source in MECHANICAL else number,
-                    source,
-                    item["reviewer"],
-                    fp,
-                    title_norm,
-                    item["line_start"],
-                    item["line_end"],
-                    item["sha"],
-                    item["integration_id"],
-                )
+        return open_findings_locked(
+            conn, clock, w, task_id=task_id, phase=phase, source=source, round_=round_, batch=batch
+        )
+
+
+def open_findings_locked(
+    conn: sqlite3.Connection,
+    clock: clock_mod.Clock,
+    w: Writer,
+    *,
+    task_id: str,
+    phase: str,
+    source: str,
+    round_: int | None,
+    batch: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Inside the caller's ``db.write``: open an already-validated ``batch`` (``validate_items``'s output) as ``w``.
+
+    The body of ``open_findings`` (#425 D7: ``tool coderabbit`` opens its findings in its own step's transaction).
+    """
+    ids: list[int] = []
+    if w.principal.kind == tokens.REVIEW:  # #407: its own source; every item carries its id as reviewer
+        own = schema_reviews.SOURCES[str(w.principal.review_kind)]
+        if source != own:
+            raise errors.CpError("CONFLICT", f"review {w.principal.review_id} writes only --source {own}")
+        batch = [{**item, "reviewer": w.actor} for item in batch]
+    if round_ is None:
+        number = latest_round(conn, task_id, phase)
+    elif conn.execute(
+        "SELECT 1 FROM rounds WHERE task_id = ? AND phase = ? AND round = ?", (task_id, phase, round_)
+    ).fetchone():
+        number = round_
+    else:
+        raise errors.CpError("NOT_FOUND", f"task {task_id} has no {phase} round {round_}")
+    task = tasks.get(conn, task_id)
+    now = db.now(clock)
+    for item in batch:
+        fp = fingerprint(file=item["file"], symbol=item["symbol"], category=item["category"], title=item["title"])
+        title_norm = norm(item["title"])
+        key = _sha(
+            (
+                task_id,
+                phase,
+                None if source in MECHANICAL else number,
+                source,
+                item["reviewer"],
+                fp,
+                title_norm,
+                item["line_start"],
+                item["line_end"],
+                item["sha"],
+                item["integration_id"],
             )
-            replay = conn.execute("SELECT id FROM findings WHERE replay_key = ?", (key,)).fetchone()
-            if replay is not None:
-                ids.append(int(replay["id"]))
-                continue
-            if source == "ci":
-                _check_ci(task, item["sha"])
-            if source == "gate":
-                _check_gate(conn, task_id, item["integration_id"])
-            flags, matched_id, state, reason = _born(conn, w, task_id, source, item, fp, title_norm)
-            conn.execute(
-                "INSERT INTO findings (run_id, task_id, phase, round, source, reviewer, severity, classification,"
-                " category, title, body, file, symbol, line_start, line_end, fingerprint, title_norm, replay_key,"
-                " matched_id, flags, unchanged_lines, state, decided_seq, reason, ci_sha, integration_id, actor,"
-                " created_at, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                " ON CONFLICT(replay_key) DO NOTHING",
-                (
-                    w.run_id,
-                    task_id,
-                    phase,
-                    number,
-                    source,
-                    item["reviewer"],
-                    item["severity"],
-                    "must_fix" if source in MECHANICAL else None,
-                    item["category"],
-                    item["title"],
-                    item["body"],
-                    item["file"],
-                    item["symbol"],
-                    item["line_start"],
-                    item["line_end"],
-                    fp,
-                    title_norm,
-                    key,
-                    matched_id,
-                    json.dumps(flags, sort_keys=True),
-                    item["unchanged_lines"],
-                    state,
-                    db.next_seq(conn, SEQ_KIND),
-                    reason,
-                    item["sha"],
-                    item["integration_id"],
-                    w.actor,
-                    now,
-                    now,
-                ),
-            )
-            ids.append(int(conn.execute("SELECT id FROM findings WHERE replay_key = ?", (key,)).fetchone()["id"]))
+        )
+        replay = conn.execute("SELECT id FROM findings WHERE replay_key = ?", (key,)).fetchone()
+        if replay is not None:
+            ids.append(int(replay["id"]))
+            continue
+        if source == "ci":
+            _check_ci(task, item["sha"])
+        if source == "gate":
+            _check_gate(conn, task_id, item["integration_id"])
+        flags, matched_id, state, reason = _born(conn, w, task_id, source, item, fp, title_norm)
+        conn.execute(
+            "INSERT INTO findings (run_id, task_id, phase, round, source, reviewer, severity, classification,"
+            " category, title, body, file, symbol, line_start, line_end, fingerprint, title_norm, replay_key,"
+            " matched_id, flags, unchanged_lines, state, decided_seq, reason, ci_sha, integration_id, actor,"
+            " created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(replay_key) DO NOTHING",
+            (
+                w.run_id,
+                task_id,
+                phase,
+                number,
+                source,
+                item["reviewer"],
+                item["severity"],
+                "must_fix" if source in MECHANICAL else None,
+                item["category"],
+                item["title"],
+                item["body"],
+                item["file"],
+                item["symbol"],
+                item["line_start"],
+                item["line_end"],
+                fp,
+                title_norm,
+                key,
+                matched_id,
+                json.dumps(flags, sort_keys=True),
+                item["unchanged_lines"],
+                state,
+                db.next_seq(conn, SEQ_KIND),
+                reason,
+                item["sha"],
+                item["integration_id"],
+                w.actor,
+                now,
+                now,
+            ),
+        )
+        ids.append(int(conn.execute("SELECT id FROM findings WHERE replay_key = ?", (key,)).fetchone()["id"]))
     return {"ids": ids}
 
 
