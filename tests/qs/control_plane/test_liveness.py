@@ -147,12 +147,48 @@ class TestBgFailure:
             "claude --bg exited 1; " + liveness.trust_hint(self.D)
         )
 
+    def test_a_long_multi_word_stderr_starts_on_a_word(self) -> None:
+        """#423 item 3: the tail no longer starts mid-word."""
+        words = " ".join(f"word{n:03d}" for n in range(200))
+        text = liveness.bg_failure(self._res(err=words), self.D, 100)
+        tail = text[len("claude --bg exited 1: ") :]
+        assert len(text) <= 100 and tail.startswith("word") and words.endswith(tail)
+        assert tail.split()[0] in words.split()
+
     @pytest.mark.parametrize("limit", [40, 15])
     def test_never_over_a_tiny_limit(self, limit: int) -> None:
         """Under the prefix and the hint's fixed text (unreachable at ``ERROR_MAX``): the head, cut at ``limit``."""
         refused = liveness.bg_failure(self._res(err=self.REFUSAL + "tail"), self.D, limit)
         assert refused == ("claude --bg exited 1; the folder is not trusted")[:limit]
         assert liveness.bg_failure(self._res(err="boom"), self.D, 15) == "claude --bg exi"  # the prefix alone
+
+
+@pytest.mark.parametrize(
+    ("text", "limit", "expected"),
+    [
+        ("hello world", 0, ""),  # limit <= 0
+        ("hello world", -3, ""),
+        ("hello world", 11, "hello world"),  # short text unchanged
+        ("hello world", 50, "hello world"),
+        ("alpha beta gamma", 8, "gamma"),  # a mid-word cut drops the partial word
+        ("alpha beta gamma", 10, "beta gamma"),  # a cut on a boundary keeps the whole first word
+        ("alpha   beta", 6, "beta"),  # a cut on a boundary inside a whitespace run is left-stripped
+        ("ab" + " " * 5, 3, "   "),  # a cut on a boundary that is all whitespace: the raw cut
+        ("word" + " " * 10 + "end", 13, "end"),  # a cut inside a long whitespace run: left-stripped
+        ("ab cd", 3, "cd"),  # a cut just before a whitespace run: the empty partial word and the run dropped
+        ("abcdefgh", 3, "fgh"),  # no whitespace: the raw cut
+        ("alpha beta\n", 4, "eta\n"),  # a partial token followed only by trailing whitespace: the raw cut
+        ("failed: " + "/a" * 40 + " x", 50, ("/a" * 40 + " x")[-50:]),  # a long partial token is kept: the raw cut
+        ("X" + "abcd efghi", 10, "efghi"),  # the partial word and its gap end at exactly `limit // 2`: dropped
+        ("X" + "abcde fghi", 10, "abcde fghi"),  # they end at `limit // 2 + 1`: the raw cut
+    ],
+)
+def test_word_tail(text: str, limit: int, expected: str) -> None:
+    """#423 item 3: a tail that starts on a word boundary, never over ``limit``."""
+    out = liveness.word_tail(text, limit)
+    assert out == expected
+    assert len(out) <= max(limit, 0)
+    assert out or not text or limit <= 0
 
 
 class TestClaudeCli:
@@ -198,6 +234,17 @@ class TestClaudeCli:
         for call in fake.calls:
             assert call.detach and call.env_remove == ("QS_CP_TOKEN",) and call.cwd == str(tmp_path)
         assert isinstance(liveness.ClaudeCli().runner, runner.Runner)
+
+    def test_stop_takes_a_timeout(self) -> None:
+        """#423: the review pilot's stop runs under the tick-hook bound; the default (``_stop_superseded``) stays 30."""
+        fake = FakeRunner()
+        cli = liveness.ClaudeCli(fake)
+        cli.stop("a1")
+        cli.stop("a2", timeout=20)
+        assert [(c.argv, c.timeout) for c in fake.calls] == [
+            (["claude", "stop", "a1"], 30),
+            (["claude", "stop", "a2"], 20),
+        ]
 
     def test_started_after(self) -> None:
         agent = liveness.Agent("s", None, None, None, None, None, None, None, 1_790_938_096_856)

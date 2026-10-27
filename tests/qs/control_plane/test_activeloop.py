@@ -185,7 +185,15 @@ def test_guard_with_an_open_run_and_work_for_every_hook(
         " VALUES (?, 'orchestrator', 'k', 'node:T1', '{}', 'queued', ?, ?)",
         [run_id, old, old],
     )
-    fake_claude.listing = [agent(ORCH, "r1", status="idle")]
+    recent = clock_mod.stamp(fake_clock, plus=-60)
+    sql(  # #423: a finished review whose session is still listed: the review pilot stops it
+        migrated,
+        "INSERT INTO reviews (id, kind, coalesce_key, state, agent, name, requested_by, session_id, created_at,"
+        " launch_at, finished_at, updated_at) VALUES ('V9', 'cross_run', 'k', 'finished', 'a', 'qs-review-x-V9', 'x',"
+        " 'S-9', ?, ?, ?, ?)",
+        [recent, recent, recent, recent],
+    )
+    fake_claude.listing = [agent(ORCH, "r1", status="idle"), agent("S-9", id="short-9")]
     fake_github.prs_by_number[7] = ciwatch.PrCi("OPEN", "h", "FAILURE", ("tests",), False)
 
     def refuse(*a: Any, **k: Any) -> Any:
@@ -204,3 +212,5 @@ def test_guard_with_an_open_run_and_work_for_every_hook(
     kinds = {r[0] for r in sql(migrated, "SELECT DISTINCT kind FROM alerts")}
     assert {"ci_red", "selfcheck_failed"} <= kinds
     assert fake_runner.matching("claude", "--bg") and fake_github.calls
+    [stopped] = fake_runner.matching("claude", "stop", "short-9")
+    assert stopped.timeout == ticks.HOOK_SUBPROCESS_S

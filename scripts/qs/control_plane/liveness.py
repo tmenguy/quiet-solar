@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -38,6 +39,28 @@ def trust_hint(trust_dir: Path | str) -> str:
     )
 
 
+def word_tail(text: str, limit: int) -> str:
+    """The last ``limit`` characters of ``text``, starting on a word boundary when one is in reach (#423).
+
+    ``limit <= 0`` → ``""``; a text that fits is returned whole. A cut that falls on a boundary or inside a
+    whitespace run keeps the whole first word (left-stripped, unless that leaves nothing); a cut inside a word drops
+    that partial word and the whitespace run after it only when together they take at most ``limit // 2``
+    characters — otherwise (a long partial token, a folder path) the raw cut is kept. Never over ``limit``; never
+    empty for a non-empty ``text`` and a positive ``limit``.
+    """
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    cut = text[-limit:]
+    if text[-limit - 1].isspace() or cut[:1].isspace():
+        return cut.lstrip() or cut
+    gap = re.search(r"\s+", cut)  # the partial word and the whitespace run after it end at `gap.end()`
+    if gap is None or gap.end() > limit // 2:
+        return cut  # no boundary, or dropping would lose too much of the tail
+    return cut[gap.end() :]  # never empty: a run ending the cut ends past `limit // 2`
+
+
 def bg_failure(res: runner.RunResult, trust_dir: Path, limit: int) -> str:
     """``claude --bg exited N: <tail>`` (+ ``; <trust hint>`` when refused for trust), at most ``limit`` characters.
 
@@ -53,7 +76,7 @@ def bg_failure(res: runner.RunResult, trust_dir: Path, limit: int) -> str:
     if hint and excess > 0:  # keep the head and the hint's text whole: `close_locked` keeps only the last `limit`
         hint = "; " + trust_hint("…" + str(trust_dir)[excess + 1 :])
     budget = limit - len(head) - len(": ") - len(hint)
-    tail = output[-budget:] if budget > 0 else ""  # the guard matters: `output[-0:]` is the whole output
+    tail = word_tail(output, budget)  # `budget <= 0` → no tail (never `output[-0:]`, the whole output)
     return (head + (f": {tail}" if tail else "") + hint)[:limit]  # the head comes first: a last-resort cut keeps it
 
 
@@ -225,9 +248,13 @@ class ClaudeCli:
             timeout=120,
         )
 
-    def stop(self, agent_id: str) -> runner.RunResult:
-        """``claude stop <id>`` — stops a background session (its conversation is kept)."""
-        return self.runner.run([self.exe, "stop", agent_id], timeout=30)
+    def stop(self, agent_id: str, timeout: float = 30) -> runner.RunResult:
+        """``claude stop <id>`` — stops a background session (its conversation is kept).
+
+        A timeout is exit 124 and an exec failure 127 (the runner's mapping); an input the runner does not map (a NUL
+        in ``agent_id``) still raises.
+        """
+        return self.runner.run([self.exe, "stop", agent_id], timeout=timeout)
 
 
 def find(listing: Sequence[Agent], *, session_id: str | None = None, name: str | None = None) -> Agent | None:

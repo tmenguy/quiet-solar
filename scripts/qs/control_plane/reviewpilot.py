@@ -16,6 +16,20 @@ Every ``PILOT_EVERY_S`` (a ``ticks.Throttle``), after ``detectors`` and before `
    ``reviews.request_locked`` (the same scope, coalescing and deferral as ``tool review``) and, on a new
    review, starts a **detached** ``cp.py tool review`` process with the review's launch grant. An event whose
    latest launch ``failed`` gets one more attempt (``PILOT_ATTEMPTS``); an ``abandoned`` review is not retried.
+4. **Stop closed review sessions** (#423, last, after the launches): a review session is single-turn, so its
+   ``claude --bg`` process is usually idle and listed ``done`` once its review is ``finished``; a ``failed`` or
+   ``abandoned`` review's session may still be busy (a launch that timed out, a ``REVIEW_TTL_S`` expiry), and the
+   stop interrupts it on purpose, since its token is void. Every closed review whose ``claude --bg`` ran
+   (``launch_at`` set) and whose ``finished_at`` is within ``STOP_WINDOW_S`` is a candidate until it is confirmed
+   gone: one listing, a beat, then ``claude stop`` (``HOOK_SUBPROCESS_S``, a beat after each) for every listed agent
+   with the review's ``session_id`` or ``name``, fewest attempts first (a review's own matches, one per target,
+   sorted by target and rotated by its attempts), within a ``HOOK_SUBPROCESS_S`` budget. A review that got stops
+   is retried in pilot ticks: the next tick, then after 2, 4 … ticks, at most ``STOP_BACKOFF_MAX_S /
+   PILOT_EVERY_S`` (120) ticks, 1 h; while it backs off it is skipped (no stop, and no listing for it alone).
+   Best-effort: a failed stop is logged once per review and exit code, a target whose stop exited 0 but that is
+   still listed once per review; an unknown listing changes nothing. A candidate no known listing shows is done —
+   one without a ``session_id`` only past ``REQUEST_TTL_S`` from its launch (its session may still appear late;
+   until then it costs one listing per tick).
 
 The daemon holds no token: the grant (``review:V<n>.0.<nonce>``) is the launcher's only authority.
 """
@@ -34,7 +48,8 @@ from typing import TYPE_CHECKING, Any
 
 from . import activeloop, alerts, daemon, db, errors, liveness, nodes, paths, reviews, ticks, tokens
 from . import clock as clock_mod
-from .schema_reviews import CURSOR_KEY, PILOT_PREFIX, REQUEST_TTL_S, REVIEW_TTL_S
+from .runner import RunResult
+from .schema_reviews import CLOSED, CURSOR_KEY, PILOT_PREFIX, REQUEST_TTL_S, REVIEW_TTL_S
 
 if TYPE_CHECKING:
     from .activeloop import Seams
@@ -46,6 +61,9 @@ PILOT_ATTEMPTS = 2  # a failed launch is retried once (Q7)
 PILOT_KINDS = frozenset({alerts.OVERLAP_CROSS_RUN, alerts.DUPLICATE_TASK_CROSS_RUN})  # not the cycle kind
 LIVENESS_CONFIRM = 2
 MERGES_PER_TICK = 100
+STOP_WINDOW_S = 7 * 24 * 3600  # a closed review stays a stop candidate this long after its `finished_at` (#423)
+STOP_BACKOFF_MAX_S = 3600  # the longest delay between two ticks that stop the same review (#423)
+STOP_TAIL = 200  # a failed stop's logged output tail keeps at most this many characters
 ACTOR = "cp:review_pilot"
 
 _THROTTLE = ticks.Throttle(PILOT_EVERY_S)
@@ -64,6 +82,13 @@ class _State:
     children: list[Any] = field(default_factory=list)  # the launcher processes not reaped yet
     # running review → listings in a row without it live (absent or `done`)
     unlisted: dict[str, int] = field(default_factory=dict)
+    # step 4 (#423), each pruned to the closed reviews still in `STOP_WINDOW_S`
+    stopped: set[str] = field(default_factory=set)  # closed reviews confirmed gone
+    attempts: dict[str, int] = field(default_factory=dict)  # ticks that sent the review a stop (fewest first)
+    retry_tick: dict[str, int] = field(default_factory=dict)  # a review backing off: skipped until that tick
+    stopped_ok: dict[str, set[str]] = field(default_factory=dict)  # review → the ids, session ids whose stop exited 0
+    stop_logged: set[tuple[str, int]] = field(default_factory=set)  # (review, exit code) already logged
+    tick: int = 0  # step 4's runs (one per due tick): the backoff's clock, never pruned
 
 
 _state = _State()
@@ -81,6 +106,7 @@ def review_pilot_hook(conn: sqlite3.Connection, clock: clock_mod.Clock) -> None:
     discover(conn, clock)
     retry_failed(conn, clock)
     drain(conn, clock, seams)
+    stop_closed(conn, clock, seams)
 
 
 # --------------------------------------------------------------------------- 1. reap
@@ -505,6 +531,122 @@ def start_launcher(
         return False
     _state.children.append(proc)
     return True
+
+
+# --------------------------------------------------------------------------- 4. stop closed review sessions (#423)
+
+
+def _closed_reviews(conn: sqlite3.Connection, clock: clock_mod.Clock) -> list[sqlite3.Row]:
+    """Closed reviews whose ``claude --bg`` ran, closed within ``STOP_WINDOW_S`` (oldest first)."""
+    marks = ", ".join("?" for _ in CLOSED)
+    return conn.execute(
+        f"SELECT id, name, session_id, launch_at FROM reviews WHERE state IN ({marks}) AND launch_at IS NOT NULL"
+        " AND finished_at >= ? ORDER BY finished_at, id",
+        (*CLOSED, clock_mod.stamp(clock, plus=-STOP_WINDOW_S)),
+    ).fetchall()
+
+
+def _matches(row: sqlite3.Row, listing: Sequence[liveness.Agent]) -> list[liveness.Agent]:
+    """Every listed agent of the review (its ``session_id``, or its unique ``name``: a duplicate fork too), one per
+    target (``id``, else ``session_id``), sorted by target: the rotation does not depend on the listing's order."""
+    by_target: dict[str, liveness.Agent] = {}
+    for a in listing:
+        target = a.id or a.session_id
+        if target and ((row["session_id"] is not None and a.session_id == row["session_id"]) or a.name == row["name"]):
+            by_target.setdefault(target, a)
+    return [by_target[t] for t in sorted(by_target)]
+
+
+def _stop(seams: Seams, target: str) -> RunResult:
+    try:
+        return seams.claude.stop(target, timeout=ticks.HOOK_SUBPROCESS_S)
+    except Exception as exc:  # noqa: BLE001 — best-effort: any failure (a NUL in the target) is a failed stop
+        return RunResult(127, "", str(exc))
+
+
+def _log_stop_failure(review_id: str, res: RunResult) -> None:
+    """One stderr line per ``(review, exit code)``: the line carries the output's tail (stderr's, else stdout's; no
+    ``: <tail>`` when both are empty), so ``_log_once`` cannot dedupe it."""
+    if (review_id, res.returncode) in _state.stop_logged:
+        return
+    _state.stop_logged.add((review_id, res.returncode))
+    tail = liveness.word_tail(res.stderr.strip() or res.stdout.strip(), STOP_TAIL)  # stderr's, else stdout's
+    detail = f": {tail}" if tail else ""
+    sys.stderr.write(f"[cp-review-pilot] review {review_id}: claude stop exited {res.returncode}{detail}\n")
+    sys.stderr.flush()
+
+
+def _log_still_listed(review_id: str) -> None:
+    """One stderr line per review with a target still listed after its stop exited 0."""
+    if (review_id, 0) in _state.stop_logged:
+        return
+    _state.stop_logged.add((review_id, 0))
+    sys.stderr.write(f"[cp-review-pilot] review {review_id}: claude stop exited 0 but the session is still listed\n")
+    sys.stderr.flush()
+
+
+def _backoff(review_id: str) -> int:
+    """The ticks before the review's next stop: 1, doubled per attempt, at most ``STOP_BACKOFF_MAX_S / PILOT_EVERY_S``
+    (int arithmetic, the exponent clamped: no overflow)."""
+    cap = max(1, int(STOP_BACKOFF_MAX_S // PILOT_EVERY_S))  # a pilot period above the max still backs off a tick
+    return min(2 ** min(_state.attempts[review_id] - 1, 16), cap)
+
+
+def _rotated(agents: list[liveness.Agent], attempts: int) -> list[liveness.Agent]:
+    """A review's matches rotated by its attempts: a target whose stop hangs cannot starve the others."""
+    k = attempts % len(agents) if agents else 0
+    return agents[k:] + agents[:k]
+
+
+def stop_closed(conn: sqlite3.Connection, clock: clock_mod.Clock, seams: Seams) -> list[str]:
+    """Read, list, beat, stop, beat: the closed reviews' sessions → the review ids a stop was sent to.
+
+    Changes no row (its only writes are the beats). Matches are computed for every candidate before any stop; the
+    ``HOOK_SUBPROCESS_S`` budget bounds only the stops. A review backing off (``retry_tick``) is no candidate.
+    """
+    rows = _closed_reviews(conn, clock)
+    window = {r["id"] for r in rows}
+    _state.stopped = _state.stopped & window
+    _state.attempts = {k: v for k, v in _state.attempts.items() if k in window}
+    _state.retry_tick = {k: v for k, v in _state.retry_tick.items() if k in window}
+    _state.stopped_ok = {k: v for k, v in _state.stopped_ok.items() if k in window}
+    _state.stop_logged = {p for p in _state.stop_logged if p[0] in window}
+    _state.tick += 1
+    candidates = [r for r in rows if r["id"] not in _state.stopped and _state.tick >= _state.retry_tick.get(r["id"], 0)]
+    if not candidates:
+        return []
+    listing = seams.claude.try_agents(timeout=ticks.HOOK_SUBPROCESS_S)
+    daemon.beat(conn, clock)
+    if listing is None:
+        return []  # unknown: nothing stopped, nothing marked; the next tick retries
+    matches = {r["id"]: _matches(r, listing) for r in candidates}
+    settled = clock_mod.stamp(clock, plus=-REQUEST_TTL_S)
+    for row in candidates:  # gone (L3/L9); one never identified only once its session can no longer appear late
+        if not matches[row["id"]] and (row["session_id"] is not None or row["launch_at"] <= settled):
+            _state.stopped.add(row["id"])
+        elif any({a.id, a.session_id} & _state.stopped_ok.get(row["id"], set()) for a in matches[row["id"]]):
+            _log_still_listed(row["id"])
+    started = clock.now()
+    sent: list[str] = []
+    ordered = sorted(candidates, key=lambda r: _state.attempts.get(r["id"], 0))  # stable: oldest first on a tie
+    for row, target_agent in [
+        (r, a) for r in ordered for a in _rotated(matches[r["id"]], _state.attempts.get(r["id"], 0))
+    ]:
+        elapsed = (clock.now() - started).total_seconds()
+        if elapsed < 0 or elapsed >= ticks.HOOK_SUBPROCESS_S:  # a clock stepped back (NTP) spends the budget too
+            break  # the rest next tick
+        rid, target = row["id"], target_agent.id or target_agent.session_id
+        res = _stop(seams, target)
+        daemon.beat(conn, clock)
+        if rid not in sent:  # one attempt per tick: a same-named fork does not double it
+            sent.append(rid)
+            _state.attempts[rid] = _state.attempts.get(rid, 0) + 1
+            _state.retry_tick[rid] = _state.tick + _backoff(rid)
+        if res.ok:
+            _state.stopped_ok.setdefault(rid, set()).update(t for t in (target_agent.id, target_agent.session_id) if t)
+        else:
+            _log_stop_failure(rid, res)
+    return sent
 
 
 def _reset_for_tests() -> None:
