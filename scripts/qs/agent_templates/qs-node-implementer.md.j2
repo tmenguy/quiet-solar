@@ -176,7 +176,8 @@ Give up after 5 red attempts: return `"gate": "red"`.
   then return the error.
 - A catch-up: "gate only" → gate the merge as it is; fix on top if red.
   "resolve the merge conflicts" → resolve each conflict keeping both
-  sides' intents, `git commit` the merge, then gate. "finish the open
+  sides' intents, `git commit` the merge, then gate; never abort it.
+  "finish the open
   merge" (`git rev-parse -q --verify MERGE_HEAD` succeeds) → resolve
   and commit it; never start a new merge over it, never abort it. In
   each, the given code-level fixes are applied in commits on top of the
