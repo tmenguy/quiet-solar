@@ -1487,10 +1487,12 @@ def test_node_round_json_records_the_catch_up(tmp_path: Path) -> None:
     assert "whether its resolution review ran" not in flat
     assert (
         '"base_merge" (`null`, or the merge commit of the last pushed catch-up: set by the catch-up push write,'
-        " the next build round's `--base`, cleared in the write right after that round's `round start` or by"
-        " step 8's first write; while it is set, the `head` waited on is a catch-up head)" in flat
+        " the next build round's `--base`, cleared only in the write right after that round's `round start`"
+        " (step 8 keeps it, so a fix sent back to triage after done still has its `--base`); while it is set,"
+        " the `head` waited on is a catch-up head)" in flat
     )
     assert "the catch-up in progress or last pushed" not in flat
+    assert "or by step 8's first write;" not in flat  # fix plan #11 R11-S1
 
 
 def test_node_catch_up_checks_its_bound_before_the_merge(tmp_path: Path) -> None:
@@ -1524,9 +1526,10 @@ def test_node_done_catch_up_fetches_first(tmp_path: Path) -> None:
     first = (
         "From `done`, `git fetch origin main` and the ancestor test come first: `origin/main` an ancestor of"
         " `HEAD` (`git merge-base --is-ancestor origin/main HEAD` succeeds) → step 6's pending-fix check, then"
-        " step 8 (its first write clears `catchup` and `base_merge`; no other write, no count); otherwise item 1."
+        " step 8 (its first write clears `catchup`; no other write, no count); otherwise item 1."
     )
     assert first in flat
+    assert "(its first write clears `catchup` and `base_merge`;" not in flat  # fix plan #11 R11-S1
     assert "succeeds) → step 8 directly (its first write" not in flat  # fix plan #10 companion
     assert flat.index(first) < flat.index("1. `catchups` already 3")
 
@@ -1626,12 +1629,14 @@ def test_node_build_base_follows_the_catch_up_merge(tmp_path: Path) -> None:
 
 
 def test_node_done_resets_the_catch_up(tmp_path: Path) -> None:
-    """Fix plan #07 / #08: step 8's first write resets `catchups`, `catchup` and `base_merge`."""
+    """Fix plan #07 / #08 / #11 R11-S1: step 8's first write resets `catchups` and `catchup`; `base_merge` is
+    kept, so a fix sent back to triage after done still has its `--base`."""
     flat = _flat(_node_text(tmp_path))
     assert (
-        "**Done** (`step: done`, with `catchups` = 0, `catchup` = `null` and `base_merge` = `null` in the same"
-        " write):" in flat
+        "**Done** (`step: done`, with `catchups` = 0 and `catchup` = `null` in the same write; `base_merge` is"
+        " kept):" in flat
     )
+    assert "`base_merge` = `null` in the same write" not in flat
 
 
 def test_node_clearing_a_catchups_block_resumes_through_rule_5(tmp_path: Path) -> None:
@@ -1735,14 +1740,35 @@ def test_node_done_resume_checks_pending_fixes(tmp_path: Path) -> None:
     flat = _flat(_node_text(tmp_path))
     resume = (
         "On a resume at `step: done`: a `converged` report visible in `reports` → only the state move is left,"
-        " and a fix in `pending.json` is handled as \"a `fix` after done\" (an objection); no `converged` report"
-        " visible and `pending.json` holds a fix whose finding is open → one write back to `step: triage`, then"
+        " and a fix in `pending.json` whose finding is still open is handled as \"a `fix` after done\" (an"
+        " objection); entries whose finding is no longer open are dropped; no `converged` report visible and `pending.json` holds a fix whose finding is open → one write back to `step: triage`, then"
         " step 6's routing."
     )
     assert resume in flat
     assert "On a resume, a `converged` report visible in `reports` means only the state move is left." not in flat
     assert flat.index("**Done** (`step: done`") < flat.index(resume)
     assert resume + " The merge is not yours." in flat
+    assert "and a fix in `pending.json` is handled as" not in flat  # fix plan #11 R11-S2
+
+
+def test_node_fix_after_done_drops_its_pending_entry(tmp_path: Path) -> None:
+    """Fix plan #11 R11-S2: "a `fix` after done" drops its `pending.json` entry, so a later resume posts
+    nothing more."""
+    flat = _flat(_node_text(tmp_path))
+    assert "leave the finding open, drop its `pending.json` entry and end the turn." in flat
+
+
+@pytest.mark.parametrize("hdir", [".claude", ".opencode"])
+def test_node_implementer_detached_gate_stops_on_stop_errors(tmp_path: Path, hdir: str) -> None:
+    """Fix plan #11 R11-S3: a detached gate's exit code is lost — a finished `STOPPED` / `STALE_TOKEN` JSON
+    stops the implementer before the "Anything else" retry."""
+    flat = _flat(_node_text(tmp_path, "qs-node-implementer", hdir))
+    bullet = (
+        "- Finished with `error` `STOPPED` or `STALE_TOKEN` → make no other call and return `{\"stopped\": true}`"
+        " (a detached call's exit code is lost; its JSON `error` is the signal)."
+    )
+    assert bullet in flat
+    assert flat.index(bullet) < flat.index("- Anything else (`INTERNAL`, `CONFLICT`")
 
 
 def test_node_wait_loop_conflict_report_is_posted_once(tmp_path: Path) -> None:

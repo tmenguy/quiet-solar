@@ -195,9 +195,10 @@ of the worktree is yours to edit.
   that catch-up ends — its push write, a stale `conflict`, or step 8),
   "base_merge"
   (`null`, or the merge commit of the last pushed catch-up: set by the
-  catch-up push write, the next build round's `--base`, cleared in the
-  write right after that round's `round start` or by step 8's first
-  write; while it is set, the `head` waited on is a catch-up head), "inv",
+  catch-up push write, the next build round's `--base`, cleared only in
+  the write right after that round's `round start` (step 8 keeps it, so a
+  fix sent back to triage after done still has its `--base`); while it
+  is set, the `head` waited on is a catch-up head), "inv",
   "attempts", "not_fixed" (the
   ids the implementer returned `not_fixed` last round), "blocked_on"
   (`null` or `{"cause": "question"|"ci_wait"|"catchups"|"objection"|"classifier"|"error",
@@ -402,7 +403,7 @@ report of the same round supersedes an earlier one). Each round:
    `git fetch origin main` and the ancestor test come first:
    `origin/main` an ancestor of `HEAD` (`git merge-base --is-ancestor
    origin/main HEAD` succeeds) → step 6's pending-fix check, then step 8
-   (its first write clears `catchup` and `base_merge`; no other write, no
+   (its first write clears `catchup`; no other write, no
    count); otherwise item 1. From `conflict`, item 1 first: a stale exit is
    counted too, which bounds a stale `mergeable` spin.
    1. `catchups` already 3 → one write, `step: catchup` and `catchup` =
@@ -481,14 +482,15 @@ report of the same round supersedes an earlier one). Each round:
       step 8; findings left blocking → the round's
       `continuing` report (unless already posted), then the next build
       round (`--base` = `base_merge`).
-8. **Done** (`step: done`, with `catchups` = 0, `catchup` = `null` and
-   `base_merge` = `null` in the same write): `digest put` (what was done, decisions, deferred),
+8. **Done** (`step: done`, with `catchups` = 0 and `catchup` = `null` in
+   the same write; `base_merge` is kept): `digest put` (what was done, decisions, deferred),
    the round's `converged` report (phase `build`, fields `{"blocking":
    []}`), then `task state --to ready_to_merge`, and end the turn. On a
    resume at `step: done`: a `converged` report visible in `reports` →
-   only the state move is left, and a fix in `pending.json` is handled
-   as "a `fix` after done" (an objection); no `converged` report visible
-   and `pending.json` holds a fix whose finding is open → one write back
+   only the state move is left, and a fix in `pending.json` whose finding
+   is still open is handled as "a `fix` after done" (an objection);
+   entries whose finding is no longer open are dropped; no `converged`
+   report visible and `pending.json` holds a fix whose finding is open → one write back
    to `step: triage`, then step 6's routing. The merge is not yours.
 
 ### The wait loop
@@ -803,8 +805,8 @@ plan-level fix on `--phase plan --round <the latest plan round>`), then
 - **A `fix` after done** (the task `ready_to_merge`): do not reopen the
   work. Ack it, `msg post --to orchestrator --kind objection` with
   `{"finding_id", "reason": "task is ready_to_merge: the orchestrator
-  decides — merge, or a follow-up task"}`, leave the finding open and
-  end the turn.
+  decides — merge, or a follow-up task"}`, leave the finding open, drop
+  its `pending.json` entry and end the turn.
 - **Objection**: when a fix contradicts its tests, the plan or a settled
   decision, `msg post --run <R> --to orchestrator --kind objection
   --payload-file …` (`{"finding_id", "reason"}`) and go on with the rest

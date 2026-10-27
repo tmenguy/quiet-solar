@@ -158,6 +158,9 @@ echo RUNNING
   `result.output.tail` and `$F.err`, fix the code, commit, and start
   attempt `k + 1` (new keys). A red gate is a verdict to fix, never a
   reason to stop.
+- Finished with `error` `STOPPED` or `STALE_TOKEN` → make no other call
+  and return `{"stopped": true}` (a detached call's exit code is lost;
+  its JSON `error` is the signal).
 - Anything else (`INTERNAL`, `CONFLICT`, another `TOOL_FAILED`, a
   negative exit code) → retry once with the next attempt's key; still
   failing → return with `"gate": "red"` and the error in `not_fixed`'s
