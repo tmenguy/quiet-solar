@@ -24,9 +24,14 @@ These tests catch bugs where:
   the notification unreachable.
 - A wait is expressed as "the mirror is not ``on``" instead of positively confirming the
   target, so an ``unknown``/``unavailable`` mirror silently satisfies a turn-off.
-- A cloud-side exception aborts the script before the diagnostic can fire. ``pyatmo`` raises
-  plain ``Exception`` subclasses, which ``continue_on_error`` does **not** swallow, so the cloud
-  write lives in its own ``parallel:`` branch.
+- A cloud-side exception aborts the script before the diagnostic can fire. The cloud write lives
+  in its own ``parallel:`` branch, for two reasons. (i) Latency, on every HA version: a slow,
+  retrying (429 Retry-After) or hung cloud call must not delay the 10 s confirmation wait and
+  its diagnostic, which run in the sibling branch, so the diagnostic's timing stays independent
+  of cloud latency. (ii) Exception isolation: needed on HA <= 2026.8, and defense-in-depth since
+  HA 2026.10 (``helpers/script.py`` ``_async_step_call_service``), where ``continue_on_error``
+  also swallows pyatmo's plain ``Exception`` subclasses by wrapping them in
+  ``HomeAssistantError``. The exception path is exercised by the mutation case.
 - A predicate, or ``enabled: false``, can prevent either actuation write from executing.
 
 **Permanent gate note.** ``config/configuration.jinja`` is a non-Python file, so testmon cannot
@@ -80,9 +85,11 @@ class _CloudApiError(Exception):
 
     Verified: ``ApiError``, ``ApiThrottlingError`` and ``ApiTooManyRequestError`` are plain
     ``Exception`` subclasses (``custom_components/netatmo/pyatmo/exceptions.py``), **not**
-    ``HomeAssistantError``, so ``continue_on_error`` does not swallow them
-    (``helpers/script.py`` -- "Only Home Assistant errors can be ignored", then ``raise``).
-    Declared locally to keep this test hermetic.
+    ``HomeAssistantError``. Up to HA 2026.8 ``continue_on_error`` did not swallow them; since
+    HA 2026.10 (``helpers/script.py`` ``_async_step_call_service``) a ``continue_on_error``
+    step wraps them in ``HomeAssistantError`` and swallows them, logging the failure at ERROR.
+    Without ``continue_on_error`` they still propagate raw. Declared locally to keep this test
+    hermetic.
     """
 
 
@@ -671,31 +678,33 @@ def test_both_channels_driven_unconditionally(
         assert wait_step["continue_on_timeout"] is True, f"{slug}/{direction}"
 
 
-@pytest.mark.parametrize("direction", DIRECTIONS)
-async def test_notification_fires_when_cloud_write_raises(
-    hass: HomeAssistant, blocks: dict[str, dict[str, Any]], direction: str
-) -> None:
-    """B1: a non-``HomeAssistantError`` from the cloud step must not suppress the diagnostic.
+def _run_with_failing_cloud(
+    hass: HomeAssistant,
+    blocks: dict[str, dict[str, Any]],
+    direction: str,
+    *,
+    strip_continue_on_error: bool,
+) -> tuple[str, Script, list[Any], list[Any]]:
+    """Wire a facade whose cloud write raises, and build its real rendered ``Script``.
 
-    ``continue_on_error`` only swallows ``HomeAssistantError`` subclasses, but pyatmo raises
-    plain ``Exception`` subclasses on a 429/throttle or a dropped connection -- a documented
-    operating condition for this fork. Before the ``parallel:`` split that aborted the script
-    at the cloud step, so the single failure the diagnostic exists to report was the one that
-    silenced it.
-
-    Runs the real rendered sequence through HA's ``Script`` helper.
+    Returns ``(slug, script, cloud_calls, created_notifications)``; the caller runs the script.
+    The mirror is parked at the value that does NOT confirm ``direction``, so the wait fails and
+    the diagnostic must fire.
     """
-    slug, blk = next(iter(blocks.items()))
+    # `cloud_entity` is optional: a HomeKit-only facade first in the inventory would make the
+    # test vacuous, so select a block that actually drives a cloud channel.
+    slug, blk = next((s, b) for s, b in blocks.items() if has_cloud(b))
     mirror = f"input_boolean.{slug}_state"
-
-    # Mirror parked at the value that does NOT confirm this direction, so the wait must fail.
     hass.states.async_set(mirror, "on" if direction == "turn_off" else "off")
 
     async_mock_service(hass, "input_boolean", direction)
     created = async_mock_service(hass, "persistent_notification", "create")
     async_mock_service(hass, "persistent_notification", "dismiss")
 
+    cloud_calls: list[Any] = []
+
     async def _raise(call: Any) -> None:
+        cloud_calls.append(call)
         raise _CloudApiError("429 throttled")
 
     hass.services.async_register("switch", direction, _raise)
@@ -703,14 +712,76 @@ async def test_notification_fires_when_cloud_write_raises(
     sequence = copy.deepcopy(blk[direction])
     # Shorten the wait so the test is fast; the 10 s value is asserted structurally above.
     diagnostic_of({direction: sequence}, direction)[0]["timeout"] = {"seconds": 0.05}
+    if strip_continue_on_error:
+        # Same step `cloud_step_of` returns; indexed directly because the helper needs both
+        # directions in its dict and this sequence holds only one.
+        cloud_step = sequence[1]["parallel"][0]["sequence"][0]
+        assert cloud_step["action"] == f"switch.{direction}", "mutation hit the wrong step"
+        del cloud_step["continue_on_error"]
 
     script = Script(hass, cv.SCRIPT_SCHEMA(sequence), f"{slug} {direction}", "template")
+    return slug, script, cloud_calls, created
+
+
+def _assert_diagnostic_fired(slug: str, direction: str, created: list[Any]) -> None:
+    """Assert the direction's "unconfirmed" diagnostic notification fired exactly once."""
+    assert len(created) == 1, "the cloud exception suppressed the diagnostic notification"
+    assert created[0].data["notification_id"] == f"{slug}_facade_{TARGET_OF[direction]}_unconfirmed"
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+async def test_notification_fires_when_cloud_write_raises(
+    hass: HomeAssistant,
+    blocks: dict[str, dict[str, Any]],
+    direction: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """B1, as rendered: a non-HA cloud exception must not suppress the diagnostic.
+
+    pyatmo raises plain ``Exception`` subclasses on a 429/throttle or a dropped connection -- a
+    documented operating condition for this fork. Since HA 2026.10 the rendered cloud step's
+    ``continue_on_error`` wraps that exception in ``HomeAssistantError`` and swallows it, so the
+    script completes and the failure surfaces only as a script ERROR log line. The diagnostic
+    must still fire.
+
+    Runs the real rendered sequence through HA's ``Script`` helper.
+    """
+    slug, script, cloud_calls, created = _run_with_failing_cloud(
+        hass, blocks, direction, strip_continue_on_error=False
+    )
+
+    with caplog.at_level(logging.ERROR):
+        await script.async_run(context=Context())
+        await hass.async_block_till_done()
+
+    assert len(cloud_calls) == 1, "the cloud write was not attempted exactly once"
+    _assert_diagnostic_fired(slug, direction, created)
+    # Positively pins the wrap-and-swallow path: the failure is logged, not silently dropped.
+    assert "429 throttled" in caplog.text
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+async def test_notification_fires_when_cloud_exception_propagates(
+    hass: HomeAssistant, blocks: dict[str, dict[str, Any]], direction: str
+) -> None:
+    """B1, mutation: a cloud exception that propagates must still not suppress the diagnostic.
+
+    This case exists so that flattening the cloud write out of its ``parallel:`` branch is caught
+    behaviourally, independently of HA's ``continue_on_error`` wrapping. ``continue_on_error`` is
+    deleted from the cloud step, so the raw exception propagates (as it did on every HA up to
+    2026.8). Before the ``parallel:`` split that aborted the script at the cloud step, so the
+    single failure the diagnostic exists to report was the one that silenced it.
+    """
+    slug, script, cloud_calls, created = _run_with_failing_cloud(
+        hass, blocks, direction, strip_continue_on_error=True
+    )
+
     with pytest.raises(_CloudApiError):
         await script.async_run(context=Context())
     await hass.async_block_till_done()
 
-    assert len(created) == 1, "the cloud exception suppressed the diagnostic notification"
-    assert created[0].data["notification_id"] == f"{slug}_facade_{TARGET_OF[direction]}_unconfirmed"
+    assert len(cloud_calls) == 1, "the cloud write was not attempted exactly once"
+    _assert_diagnostic_fired(slug, direction, created)
 
 
 # ============================================================================
