@@ -466,50 +466,9 @@ async def test_legacy_untagged_filler_replaced_on_change():
 
 
 # --------------------------------------------------------------------------- #
-# Review fix #01 — the freeze ends at every unplug / reset the user can make, the
-# filler survives an identical-shape rebuild, the rounded compare has hysteresis
+# Review fix #01 — the charger-card reset unfreezes the car, the filler survives
+# an identical-shape rebuild, the rounded compare has hysteresis
 # --------------------------------------------------------------------------- #
-@pytest.mark.asyncio
-async def test_unplug_during_downtime_unfreezes_car():
-    """S1: a frozen car unplugged while HA was down is unfrozen by the boot guard (the
-    QS-416 proven unplug), and gets its person constraint at the next plug."""
-    charger, car, now, thomas, _ = _fixture()
-    car.set_qs_bump_solar_charge_priority(True)  # genuine user action: freeze + pin
-    assert car.get_user_originated("user_frozen") is True
-    assert charger.get_user_originated("car_name") == car.name
-    car._system_person_hold_name = "Thomas Menguy"
-    car._system_person_hold_until = now + timedelta(hours=1)
-
-    # HA restart: the car is not attached at boot; the persisted pin arms the guard
-    saved_at = now - timedelta(minutes=30)
-    charger.detach_car()
-    car._user_action_since_boot = False  # in-memory, not persisted: a fresh process
-    charger._boot_user_pin = (car.name, saved_at, "on")
-    # the car's plug sensor saw the unplug during the downtime
-    car.car_plugged = "binary_sensor.zoe_plugged"
-    car.attach_ha_state_to_probe(car.car_plugged, is_numerical=False)
-    car._entity_probed_state[car.car_plugged] = []
-    car._add_state_history(car.car_plugged, "off", saved_at + timedelta(minutes=15), None, {})
-
-    charger.is_not_plugged = MagicMock(return_value=True)
-    charger.is_plugged = MagicMock(return_value=False)
-    t = now
-    await charger.check_load_activity_and_constraints(t)
-    assert charger._boot_user_pin is None  # precondition: the guard fired
-    assert charger.get_user_originated("car_name") is None
-    assert car.get_user_originated("user_frozen") is None
-    assert car._system_person_hold_name is None
-
-    # that evening: the car is plugged again, with a person need
-    charger.is_not_plugged = MagicMock(return_value=False)
-    charger.is_plugged = MagicMock(return_value=True)
-    t += STEP
-    plug_car(charger, car, t)
-    _set_need(car, t + timedelta(hours=6), PERSON_TARGET, thomas)
-    await _cycle(charger, t)
-    assert len(_person_cts(charger)) == 1
-
-
 @pytest.mark.asyncio
 async def test_charger_card_reset_unfreezes_car():
     """S2: "charge now" from the charger card freezes the car; the charger-card reset
@@ -594,89 +553,9 @@ async def test_person_target_rounding_jitter_does_not_rewrite():
 
 
 # --------------------------------------------------------------------------- #
-# Review fix #02 — the boot guard wipes only PRE-restart user state, after a
-# debounced unplug; the charger-card reset mirrors the car-card reset; an upward
+# Review fix #02 — the charger-card reset mirrors the car-card reset; an upward
 # person move always rewrites
 # --------------------------------------------------------------------------- #
-def _restart_with_plug_history(charger, car, now, plug_history):
-    """HA restart with a persisted pin of ``car`` on ``charger`` (guard armed), the car
-    not attached, the charger unplugged; ``plug_history``: (offset from the save, state)
-    readings of the car's plug sensor during the downtime. Returns the save time."""
-    saved_at = now - timedelta(minutes=30)
-    charger.detach_car()
-    car._user_action_since_boot = False  # in-memory, not persisted: a fresh process
-    charger._boot_user_pin = (car.name, saved_at, "on")
-    car.car_plugged = "binary_sensor.zoe_plugged"
-    car.attach_ha_state_to_probe(car.car_plugged, is_numerical=False)
-    car._entity_probed_state[car.car_plugged] = []
-    for offset, state in plug_history:
-        car._add_state_history(car.car_plugged, state, saved_at + offset, None, {})
-    charger.is_not_plugged = MagicMock(return_value=True)
-    charger.is_plugged = MagicMock(return_value=False)
-    return saved_at
-
-
-@pytest.mark.asyncio
-async def test_boot_guard_keeps_a_user_action_made_after_the_restart():
-    """R2-S1: a user action on the car after the restart postdates the downtime unplug:
-    the late proof lifts the persisted pin (QS-416) but must not wipe the fresh state."""
-    charger, car, now, thomas, _ = _fixture()
-    car.set_qs_bump_solar_charge_priority(True)  # pre-restart user action: freeze + pin
-    _restart_with_plug_history(charger, car, now, [(timedelta(minutes=15), "off")])
-
-    await car.user_set_next_charge_target(80)  # post-restart user action (no charger yet)
-    assert car.get_user_originated("user_frozen") is True
-
-    await charger.check_load_activity_and_constraints(now)
-    assert charger._boot_user_pin is None  # precondition: the guard fired
-    assert charger.get_user_originated("car_name") is None  # QS-416 pin lift unchanged
-    assert car.get_user_originated("user_frozen") is True
-    assert car.get_user_originated("charge_target_percent") == 80
-
-
-@pytest.mark.asyncio
-async def test_boot_guard_plug_flap_keeps_car_user_state():
-    """R2-S2: a one-off on -> off -> on flap of the car plug sensor (shorter than the live
-    path's debounce window) lifts the pin as before, but is no unplug for the car state."""
-    charger, car, now, thomas, _ = _fixture()
-    car.set_qs_bump_solar_charge_priority(True)  # freeze + pin
-    car._system_person_hold_name = "Thomas Menguy"
-    car._system_person_hold_until = now + timedelta(hours=1)
-    _restart_with_plug_history(
-        charger,
-        car,
-        now,
-        [(timedelta(minutes=15), "off"), (timedelta(minutes=15, seconds=5), "on")],
-    )
-
-    await charger.check_load_activity_and_constraints(now)
-    assert charger._boot_user_pin is None  # precondition: the guard fired
-    assert charger.get_user_originated("car_name") is None  # QS-416 pin lift unchanged
-    assert car.get_user_originated("user_frozen") is True
-    assert car._system_person_hold_name == "Thomas Menguy"
-
-
-@pytest.mark.asyncio
-async def test_boot_guard_flap_then_sustained_unplug_unfreezes_car():
-    """R2-S2 guard: a flap does not hide a later sustained unplug of the same downtime."""
-    charger, car, now, thomas, _ = _fixture()
-    car.set_qs_bump_solar_charge_priority(True)  # freeze + pin
-    _restart_with_plug_history(
-        charger,
-        car,
-        now,
-        [
-            (timedelta(minutes=5), "off"),
-            (timedelta(minutes=5, seconds=5), "on"),
-            (timedelta(minutes=15), "off"),
-        ],
-    )
-
-    await charger.check_load_activity_and_constraints(now)
-    assert charger._boot_user_pin is None
-    assert car.get_user_originated("user_frozen") is None
-
-
 @pytest.mark.asyncio
 async def test_charger_card_reset_mirrors_car_card_reset():
     """R2-N1: the charger-card reset also drops the car's forecasted person, system hold
@@ -716,7 +595,8 @@ async def test_car_card_reset_runs_the_allocation_once():
 @pytest.mark.asyncio
 async def test_person_target_upward_move_rewrites():
     """R2-N2: a need that rises past a rounded % rewrites the person target at once (no
-    lag below the need), even when it moves by less than half a percent."""
+    rounded-target lag below the rounded need), even when it moves by less than half a
+    percent."""
     charger, car, now, thomas, _ = _fixture()
     deadline = now + timedelta(hours=6)
 
@@ -734,132 +614,39 @@ async def test_person_target_upward_move_rewrites():
 
 
 # --------------------------------------------------------------------------- #
-# Review fix #03 — the debounced boot wipe is re-checked at the following
-# decisions. Realistic timing: the recorder is down while HA is down, so the
-# first "off" of the downtime unplug is stamped by the boot poll, seconds before
-# the guard's first proof; later polls re-stamp the reading every cycle.
+# Review fix #04 — no boot-time car-store wipe (user decision, documented
+# limitation): the boot guard only lifts the QS-416 pins; the freeze survives a
+# restart, whatever the car's cloud plug sensor reports at boot
 # --------------------------------------------------------------------------- #
-BOOT_POLL_AGE = timedelta(seconds=3)
+@pytest.mark.asyncio
+async def test_boot_guard_stale_off_keeps_frozen_car_store():
+    """R4-M1: a plain restart, the car never left its (plugged) charger, and the car's
+    cloud plug sensor reports a stale "off" around the boot: the freeze and the user's
+    target marker survive (no car-store wipe at boot — an unplug while HA is down
+    does not end the freeze, the next live unplug or a reset does)."""
+    charger, car, now, thomas, _ = _fixture()
+    saved_at = now - timedelta(minutes=30)
 
+    # HA restart: the persisted stores are restored (no user action in this process),
+    # the car is not attached at boot, the persisted charger pin arms the guard
+    charger.detach_car()
+    car._user_originated = {"charge_target_percent": 80, "user_frozen": True}
+    charger._user_originated["car_name"] = car.name
+    charger._boot_user_pin = (car.name, saved_at, "on")
+    car.car_plugged = "binary_sensor.zoe_plugged"
+    car.attach_ha_state_to_probe(car.car_plugged, is_numerical=False)
+    car._entity_probed_state[car.car_plugged] = []
+    car._add_state_history(car.car_plugged, "off", now - timedelta(seconds=3), None, {})  # stale boot poll
+    del charger.get_best_car  # the real car selection (the charger stays plugged)
+    charger.home._chargers = [charger]
 
-def _restart_with_boot_polled_off(charger, car, now):
-    """Restart (guard armed) whose only downtime trace is the boot poll's "off",
-    stamped ``BOOT_POLL_AGE`` before ``now``."""
-    _restart_with_plug_history(charger, car, now, [(timedelta(minutes=30) - BOOT_POLL_AGE, "off")])
-
-
-async def _polled_cycles(charger, car, t, readings):
-    """One charger decision per reading, a STEP apart, each after the poll that
-    re-stamps the car's plug sensor with that reading. Returns the last decision time."""
-    for state in readings:
+    t = now
+    await charger.check_load_activity_and_constraints(t)
+    for state in ["off", "off", "on", "on"]:  # stale "off" re-polled >= 15 s, then fresh "on"
         t += STEP
         car._add_state_history(car.car_plugged, state, t, None, {})
         await charger.check_load_activity_and_constraints(t)
-    return t
 
-
-@pytest.mark.asyncio
-async def test_boot_guard_boot_polled_unplug_unfreezes_car():
-    """R3-M1: an unplug during the downtime whose "off" is first stamped by the boot
-    poll is too fresh to be debounced at the guard's first proof: the pin is lifted
-    at once (QS-416), and the car store is wiped once the off has lasted the window."""
-    charger, car, now, thomas, _ = _fixture()
-    car.set_qs_bump_solar_charge_priority(True)  # freeze + pin
-    car._system_person_hold_name = "Thomas Menguy"
-    car._system_person_hold_until = now + timedelta(hours=1)
-    _restart_with_boot_polled_off(charger, car, now)
-
-    await charger.check_load_activity_and_constraints(now)
-    assert charger._boot_user_pin is None  # precondition: the guard fired
-    assert charger.get_user_originated("car_name") is None  # QS-416 pin lift unchanged
-    assert car.get_user_originated("user_frozen") is True  # off 3 s old: not debounced yet
-
-    t = await _polled_cycles(charger, car, now, ["off", "off"])  # off lasted 17 s
-    assert car.get_user_originated("user_frozen") is None
-    assert car._system_person_hold_name is None
-
-    # the car is plugged again, with a person need
-    charger.is_not_plugged = MagicMock(return_value=False)
-    charger.is_plugged = MagicMock(return_value=True)
-    t += STEP
-    plug_car(charger, car, t)
-    _set_need(car, t + timedelta(hours=6), PERSON_TARGET, thomas)
-    await _cycle(charger, t)
-    assert len(_person_cts(charger)) == 1
-
-
-@pytest.mark.asyncio
-async def test_boot_guard_post_boot_flap_then_sustained_unplug_unfreezes_car():
-    """R3-M1: a post-boot flap seen by no decision does not hide the sustained off
-    that follows it."""
-    charger, car, now, thomas, _ = _fixture()
-    car.set_qs_bump_solar_charge_priority(True)  # freeze + pin
-    _restart_with_boot_polled_off(charger, car, now)
-
-    await charger.check_load_activity_and_constraints(now)
-    assert car.get_user_originated("user_frozen") is True  # not debounced yet
-    car._add_state_history(car.car_plugged, "on", now + timedelta(seconds=1), None, {})
-    car._add_state_history(car.car_plugged, "off", now + timedelta(seconds=5), None, {})
-
-    await _polled_cycles(charger, car, now, ["off", "off", "off"])  # 2 s, 9 s, 16 s off
-    assert car.get_user_originated("user_frozen") is None
-
-
-@pytest.mark.asyncio
-async def test_boot_guard_post_boot_replug_keeps_car_user_state():
-    """R3-M1 guard: an "on" reading ending the off span before it lasted the window
-    drops the pending wipe — a later unplug is a later session, not the downtime's."""
-    charger, car, now, thomas, _ = _fixture()
-    car.set_qs_bump_solar_charge_priority(True)  # freeze + pin
-    car._system_person_hold_name = "Thomas Menguy"
-    car._system_person_hold_until = now + timedelta(hours=1)
-    _restart_with_boot_polled_off(charger, car, now)
-
-    await charger.check_load_activity_and_constraints(now)
-    assert charger.get_user_originated("car_name") is None  # QS-416 pin lift unchanged
-    t = await _polled_cycles(charger, car, now, ["on", "on"])
-    await _polled_cycles(charger, car, t, ["off", "off", "off", "off"])
-    assert car.get_user_originated("user_frozen") is True
-    assert car._system_person_hold_name == "Thomas Menguy"
-
-
-@pytest.mark.asyncio
-async def test_boot_guard_pending_wipe_keeps_a_post_boot_user_action():
-    """R3-M1 guard: a user action on the car while the wipe is pending is kept."""
-    charger, car, now, thomas, _ = _fixture()
-    car.set_qs_bump_solar_charge_priority(True)  # freeze + pin
-    _restart_with_boot_polled_off(charger, car, now)
-
-    await charger.check_load_activity_and_constraints(now)
-    await car.user_set_next_charge_target(80)  # post-restart user action
-    await _polled_cycles(charger, car, now, ["off", "off", "off"])
+    assert charger._boot_user_pin is None  # the QS-416 guard fired: pin lift, unchanged
     assert car.get_user_originated("user_frozen") is True
     assert car.get_user_originated("charge_target_percent") == 80
-
-
-@pytest.mark.asyncio
-async def test_boot_guard_pending_wipe_is_bounded():
-    """R3-M1 guard: the pending wipe lives a bounded time after the proof — a decision
-    coming only after that horizon keeps the car store."""
-    charger, car, now, thomas, _ = _fixture()
-    car.set_qs_bump_solar_charge_priority(True)  # freeze + pin
-    _restart_with_boot_polled_off(charger, car, now)
-
-    await charger.check_load_activity_and_constraints(now)
-    later = now + timedelta(minutes=5)
-    car._add_state_history(car.car_plugged, "off", later, None, {})
-    await charger.check_load_activity_and_constraints(later)
-    assert car.get_user_originated("user_frozen") is True
-
-
-@pytest.mark.asyncio
-async def test_boot_guard_pending_wipe_dropped_when_car_removed():
-    """R3-M1 guard: a car removed from the home while its wipe is pending ends the check."""
-    charger, car, now, thomas, _ = _fixture()
-    car.set_qs_bump_solar_charge_priority(True)  # freeze + pin
-    _restart_with_boot_polled_off(charger, car, now)
-
-    await charger.check_load_activity_and_constraints(now)
-    charger.home._cars.remove(car)
-    await _polled_cycles(charger, car, now, ["off", "off", "off"])
-    assert car.get_user_originated("user_frozen") is True

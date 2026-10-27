@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/person.py
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-10-26
+last_verified: 2026-10-27
 ---
 
 # Person, Car, and trip prediction
@@ -209,15 +209,17 @@ Person re-allocated away / covered / need met → person constraint removed
   and the "trip not covered" notifications. Explicit consequence:
   **pinning a person on a car disables that car's person-trip charging
   until unplug / reset** (or the pin is taken by another car). The
-  freeze survives restarts; an unplug while HA was down (proven by the
-  QS-416 boot guard, debounced — re-checked at the following decisions
-  while the `off` is too fresh — and only when no user action reached the
-  car since the boot) ends it, and so does the reset button of the car
-  card or of the charger card (both also drop the forecasted person, the
+  freeze survives restarts. It ends at an unplug HA sees live, and at
+  the reset button of the car card or of the charger card (both also drop the forecasted person, the
   system hold and the charge targets, and re-run the allocation). An HA restart replay, the QS-353 system
   hold and the charger-card car pick do **not** freeze. A person
   constraint already ASAP at freeze time runs to completion, retargeted
-  to the user's target marker if any.
+  to the user's target marker if any. **Documented limitation:** an
+  unplug made while HA is down is not detected for the freeze (the
+  QS-416 boot guard lifts only the car↔charger pins), so the car stays
+  frozen until the next live unplug or a reset — accepted by the user,
+  not to be fixed ("yes 1. : I don't care it will never really happen ,
+  document it , it is very hard to properly fix, so don't fix it").
 
 ## See also
 

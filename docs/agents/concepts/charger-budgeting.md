@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-10-26
+last_verified: 2026-10-27
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -604,8 +604,10 @@ ASAP escape now retargets a person ASAP only when the car is frozen **and** has 
 target marker; a boot-replayed marker no longer lowers it (met → silent drop →
 re-push loop). The person block updates a live person constraint's target only
 when the **rounded** % changes, with an asymmetric hysteresis: a rise always
-rewrites (the target never lags below the need — no met → ack → re-push round
-trip), a fall needs the need to have moved by at least 0.5 % too. Sub-percent
+rewrites (the rounded target is never below the rounded need — no met → ack →
+re-push round trip; the raw target may sit up to just under 1 % on either side
+within one rounded bucket), a fall needs the need to have moved by at least
+0.5 % too. Sub-percent
 drift does not change the notified state, and a need jittering around a .5
 boundary flips it at most once per crossing.
 

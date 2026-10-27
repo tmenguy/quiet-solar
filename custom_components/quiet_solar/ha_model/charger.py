@@ -2485,10 +2485,6 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         self._saved_user_pin_saved_at: datetime | None = None
         self._saved_user_pin_plug_state: str | None = None
         self._boot_user_pin: tuple[str, datetime, str | None] | None = None
-        # QS-431 review fix #03 R3-M1: the car-store wipe still pending after the boot
-        # guard lifted the pin on a not-yet-debounced unplug — (car name, saved_at,
-        # plug reading at the save, time of the lift), see `_check_pending_boot_car_wipe`.
-        self._pending_boot_car_wipe: tuple[str, datetime, str | None, datetime] | None = None
         # QS-416 review fix #03 R3-2: the charger was seen plugged (a plugged cycle ran
         # or a car got attached) since its last unplug. The unplug branch clears the
         # user car choice only on that plugged -> unplugged EDGE, so a choice made on
@@ -3670,7 +3666,6 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         only after a while); no proof (a stale re-polled "off", on, holes, no sensor,
         no saved time) keeps the pin, as before.
         """
-        self._check_pending_boot_car_wipe(time)
         if self._boot_user_pin is None:
             return
         pinned_car_name, saved_at, plug_at_save = self._boot_user_pin
@@ -3694,64 +3689,13 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             car.clear_user_originated(USER_ORIGINATED_CHARGER_NAME)
         if self._boot_car is not None and self._boot_car.name == car.name:
             self._boot_car = None
-        # QS-431: the car-store decision outlives this one (R3-M1): the first "off"
-        # of a downtime unplug is stamped by the boot poll (the recorder is down while
-        # HA is), so it is rarely debounced yet at this first proof.
-        self._pending_boot_car_wipe = (car.name, saved_at, plug_at_save, time)
-        car_state = self._check_pending_boot_car_wipe(time)
         _LOGGER.info(
-            "boot_user_pin: %s on %s: persisted user pin lifted, car unplugged at %s (pin saved at %s),"
-            " car user state %s",
+            "boot_user_pin: %s on %s: persisted user pin lifted, car unplugged at %s (pin saved at %s)",
             car.name,
             self.name,
             unplugged_at,
             saved_at,
-            car_state,
         )
-
-    def _check_pending_boot_car_wipe(self, time: datetime) -> str | None:
-        """QS-431: settle the car-store wipe left pending by the boot pin lift.
-
-        A proven unplug that lasted the live path's debounce window is a physical
-        unplug for the car's user state too, as in the live unplug branch: wipe its
-        user store (the freeze flag, the person pin, the user markers) and its system
-        person hold, or the car would stay frozen — no person constraint — at the
-        next plug. Re-checked at every decision (both plug branches reach the boot
-        pin guard), so an off still too fresh at the pin lift is wiped once it has
-        lasted the window. The check is dropped, keeping the store, when a user action
-        on the car since boot postdates the unplug, when the car's latest plug reading
-        is "on" (a flap, or a later session), when the car left the home (or lost its
-        plug sensor), or
-        `CHARGER_BOOT_TIME_DATA_EXPIRATION_S` after the pin lift. Only a charger choice
-        naming ANOTHER charger survives the wipe (QS-416 R2-2). Direct dict write:
-        `set_user_originated` would run the car's snapshot hook and re-freeze it.
-        Returns "cleared" / "kept" / "pending", or None when nothing was pending.
-        """
-        if self._pending_boot_car_wipe is None:
-            return None
-        car_name, saved_at, plug_at_save, lifted_at = self._pending_boot_car_wipe
-        car = self.home.get_car_by_name(car_name)
-        if (
-            car is None
-            or car.car_plugged is None
-            or car.has_user_action_since_boot()
-            or (time - lifted_at).total_seconds() > CHARGER_BOOT_TIME_DATA_EXPIRATION_S
-        ):
-            outcome = "kept"
-        elif self._car_unplugged_since(car, saved_at, time, plug_at_save, CHARGER_CHECK_STATE_WINDOW_S) is not None:
-            charger_choice = car.get_user_originated(USER_ORIGINATED_CHARGER_NAME)
-            car.clear_all_user_originated()
-            if charger_choice is not None and charger_choice != self.name:
-                car._user_originated[USER_ORIGINATED_CHARGER_NAME] = charger_choice
-            car.clear_system_person_hold()
-            outcome = "cleared"
-        elif (latest := car.get_state_history_data(car.car_plugged, 0, to_ts=time)) and latest[-1][1] == STATE_ON:
-            outcome = "kept"  # the off span ended before it lasted the window
-        else:
-            return "pending"
-        self._pending_boot_car_wipe = None
-        _LOGGER.info("boot_user_pin: %s on %s: pending car user state check settled: %s", car_name, self.name, outcome)
-        return outcome
 
     def get_best_car(self, time: datetime) -> QSCar | None:
         """Pick this charger's car, announcing the outcome through ONE throttled key.
@@ -4996,9 +4940,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                                         need_ct_update = True
                                     # QS-431: compare at display precision — a sub-percent drift
                                     # of the person need must not change the notified state. A
-                                    # rise of the rounded % always rewrites (the target never lags
-                                    # below the need); a fall needs a half-percent move too, so a
-                                    # need jittering around a .5 boundary flips at most once
+                                    # rise of the rounded % always rewrites (the rounded target is
+                                    # never below the rounded need; the raw target may sit up to
+                                    # just under 1 % on either side within one rounded bucket); a
+                                    # fall needs a half-percent move too, so a need jittering
+                                    # around a .5 boundary flips at most once
                                     rounded_target = int(round(car_charge_person.target_value))
                                     rounded_need = int(round(target_charge))
                                     if rounded_need > rounded_target or (
@@ -5378,9 +5324,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         )
 
     @staticmethod
-    def _car_unplugged_since(
-        car: QSCar, since: datetime, time: datetime, plug_at_save: str | None, min_off_s: float = 0.0
-    ) -> datetime | None:
+    def _car_unplugged_since(car: QSCar, since: datetime, time: datetime, plug_at_save: str | None) -> datetime | None:
         """QS-416: time of an unplug of the car proven in [since, time], else None.
 
         The proof is a TRANSITION (review fix #03 R3-1): a valid "off" sample at or
@@ -5397,10 +5341,6 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         still seen once the history loads. Holes (`unavailable` / `unknown`) are
         skipped, never a proof; no sensor proves nothing. `since > time` (clock
         behind the save) is an empty window: nothing can be seen.
-
-        QS-431: `min_off_s` > 0 debounces the proof like the live unplug path: only a
-        transition whose "off" lasted at least `min_off_s` before the next "on"
-        reading (or `time`) counts; a shorter flap is skipped.
         """
         if car.car_plugged is None or since > time:
             return None
@@ -5411,15 +5351,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         ]
         before = [state for state_time, state in samples if state_time < since]
         previous = plug_at_save if plug_at_save is not None else (before[-1] if before else None)
-        for index, (state_time, state) in enumerate(samples):
+        for state_time, state in samples:
             if state_time < since:
                 continue
             if state == STATE_OFF and previous == STATE_ON:
-                if min_off_s <= 0:
-                    return state_time
-                back_on_at = next((t for t, s in samples[index + 1 :] if s == STATE_ON), time)
-                if (back_on_at - state_time).total_seconds() >= min_off_s:
-                    return state_time
+                return state_time
             previous = state
         return None
 
