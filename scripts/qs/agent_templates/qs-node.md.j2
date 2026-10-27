@@ -220,7 +220,12 @@ of the worktree is yours to edit.
    steps are those it cannot show: `writer` done and reviewers not
    spawned, `implement` committed and not pushed, `catchup` (if `git
    rev-parse -q --verify MERGE_HEAD` succeeds, the implementer finishes
-   the open merge; never start a new merge over it).
+   the open merge; never start a new merge over it). `catchup` with no
+   `MERGE_HEAD` and `git rev-parse HEAD` ≠ `round.json`'s `head` (a
+   catch-up merge committed, maybe pushed) → finish that catch-up: the
+   gate if not yet green, `tool push` (its key replays), then the
+   catch-up push write; never re-decide whether to merge, never go to
+   done from here.
 6. With no `round.json`, start the plan loop.
 
 ## Messages
@@ -373,8 +378,9 @@ report of the same round supersedes an earlier one). Each round:
      then triage.
    Nothing is pushed until the gate is green; then `tool push`, and
    `round.json` gets, in one write, `head` = the new sha, `pushed_at` =
-   `wait_from` = now, and a `cr: trigger` becomes `cr: skipped` ("head
-   moved"). **No CodeRabbit request is made for a catch-up head** ("catch-up
+   `wait_from` = now, `step: wait` (a resume re-enters this wait and its
+   triage, never step 8 directly), and a `cr: trigger` becomes
+   `cr: skipped` ("head moved"). **No CodeRabbit request is made for a catch-up head** ("catch-up
    head" in the summary: it has no build round, and its resolutions are
    reviewed above); a review still `pending` for `cr_head` (the round's
    own head, e.g. after a `conflict` exit) keeps being polled until it

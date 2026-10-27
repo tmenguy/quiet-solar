@@ -1412,7 +1412,8 @@ def test_node_catch_up_push_skips_an_owed_trigger(tmp_path: Path) -> None:
     points at it, and the wait loop never re-calls the trigger once `head` is not `cr_head`."""
     flat = _flat(_node_text(tmp_path))
     assert (
-        "`round.json` gets, in one write, `head` = the new sha, `pushed_at` = `wait_from` = now, and a `cr: trigger`"
+        "`round.json` gets, in one write, `head` = the new sha, `pushed_at` = `wait_from` = now, `step: wait`"
+        " (a resume re-enters this wait and its triage, never step 8 directly), and a `cr: trigger`"
         ' becomes `cr: skipped` ("head moved").' in flat
     )
     assert "`round.json` gets `head` = the new sha, `pushed_at` = `wait_from` = now." not in flat
@@ -1422,6 +1423,22 @@ def test_node_catch_up_push_skips_an_owed_trigger(tmp_path: Path) -> None:
         " re-call `tool coderabbit-trigger` (build step 2)" in flat
     )
     assert "- `cr: trigger` → re-call" not in flat
+
+
+def test_node_catch_up_push_resumes_at_the_wait(tmp_path: Path) -> None:
+    """Fix plan #06 R6-S1: the catch-up push write also sets `step: wait`, so a resume re-enters the wait and its
+    triage (CI green on the current head) — never step 8 directly; start-up finishes a committed catch-up merge."""
+    flat = _flat(_node_text(tmp_path))
+    assert (
+        '`step: wait` (a resume re-enters this wait and its triage, never step 8 directly), and a `cr: trigger`'
+        ' becomes `cr: skipped` ("head moved").' in flat
+    )
+    assert (
+        "`catchup` with no `MERGE_HEAD` and `git rev-parse HEAD` ≠ `round.json`'s `head` (a catch-up merge"
+        " committed, maybe pushed) → finish that catch-up: the gate if not yet green, `tool push` (its key"
+        " replays), then the catch-up push write; never re-decide whether to merge, never go to done from here."
+        in flat
+    )
 
 
 def test_node_writes_the_coderabbit_state_with_the_push(tmp_path: Path) -> None:
