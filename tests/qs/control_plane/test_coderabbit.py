@@ -684,13 +684,15 @@ def test_only_integer_comment_ids_are_de_duplicated(c: C) -> None:
 
 def test_odd_comment_ids_are_type_checked_before_membership(c: C) -> None:
     """R3 polish: an unhashable ``id`` or ``pull_request_review_id`` is never a ``TypeError``, and a ``bool``
-    ``pull_request_review_id`` never matches review id 1 (``True == 1``)."""
+    ``pull_request_review_id`` never matches review id 1 (``True == 1``). A non-object entry on the page is
+    skipped (R4-M1)."""
     c.round()
     reviews = fixture("handmade-reviews.json")
     reviews[0].append({"id": 1, "user": {"login": "coderabbitai[bot]"}, "commit_id": H, "body": ""})
     base = fixture("handmade-comments.json")[0][1]  # b.py, a Major of review 9001
     comments = [
         [
+            "not a comment",  # skipped: not an object (R4-M1)
             {**base, "id": [1], "path": "list-id.py"},  # kept: an unhashable id just never de-duplicates
             {**base, "id": 81, "pull_request_review_id": {}, "path": "dict-review.py"},
             {**base, "id": 82, "pull_request_review_id": True, "path": "bool-review.py"},

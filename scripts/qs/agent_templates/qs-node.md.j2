@@ -184,8 +184,8 @@ of the worktree is yours to edit.
   `already`), because a requested review needs its own full window;
   [[ crwait ]] s from it bound `trigger` and `pending` alike, and
   each window is checked between loop calls, so a round waits about
-  2×[[ crwait ]] s for CodeRabbit (plus at most one loop cap per
-  window)), "catchups", "inv", "attempts", "not_fixed" (the
+  2×[[ crwait ]] s for CodeRabbit, plus the time until the next
+  re-call), "catchups", "inv", "attempts", "not_fixed" (the
   ids the implementer returned `not_fixed` last round), "blocked_on"
   (`null` or `{"cause": "question"|"ci_wait"|"catchups"|"objection"|"classifier"|"error",
   "question_id", "finding_id"}`)}`. `step` is one of `writer`,
@@ -301,24 +301,27 @@ report of the same round supersedes an earlier one). Each round:
    counts here).
 2. **Push** (`step: pushed`). `tool push`; the first time also `tool
    pr-create` (`summary_file` `.qs-node/pr-summary.md`, written from the
-   digest). `round.json` gets `head`, `pushed_at` and `wait_from` = now.
-   Then `round start --task <T> --phase build --head <sha>` (round 1
+   digest). `round.json` gets, in one write, `head`, `pushed_at` and
+   `wait_from` = now, `cr_head` = the head, `cr: trigger`, `cr_from` =
+   now (one write: a crash between two writes would leave round N-1's
+   `cr: reviewed` / `skipped` behind and end this round's wait without
+   asking CodeRabbit). Then `round start --task <T> --phase build --head <sha>` (round 1
    with `--base "$(git merge-base origin/main HEAD)"`; later rounds
    default to the previous head; after a catch-up, `--base <merge
    commit>`); `rounds_since_start` + 1. Each `fixed` finding → `finding
    state <id> --to resolved --commit <commit>`. Then **ask CodeRabbit
-   for this head** (in this repo it reviews only on request): `cr_head`
-   = the head, `cr: trigger`, `cr_from` = now, then `tool
-   coderabbit-trigger`:
+   for this head** (in this repo it reviews only on request; `round.json`
+   already says `cr: trigger` for it): `tool coderabbit-trigger`:
    - `triggered` or `already` → `cr: pending`, `cr_from` = now (the
      review's own window: each window is checked between loop calls, so
-     a round waits about 2×[[ crwait ]] s for CodeRabbit (plus at most
-     one loop cap per window));
+     a round waits about 2×[[ crwait ]] s for CodeRabbit, plus the time
+     until the next re-call);
    - `ceiling` → `cr: ceiling` (the task's request ceiling is reached);
    - `BUSY` → stays `cr: trigger`, re-called with the same key between
      wait-loop calls (also after a resume or a rotation: `round.json`
      says so) until it is answered, or a re-call past [[ crwait ]] s
-     since `cr_from` still answers `BUSY` ("Between loop calls");
+     since `cr_from` still answers `BUSY` → `cr: skipped` ("CodeRabbit
+     trigger failed"; "Between loop calls");
    - any other error → `cr: skipped` at once ("CodeRabbit trigger
      failed" in the summary; never a blocker).
    Once `head` is no longer `cr_head` (a catch-up push), a `cr: trigger`
@@ -376,7 +379,8 @@ report of the same round supersedes an earlier one). Each round:
    settles, or a re-call past [[ crwait ]] s since `cr_from` still
    answers `BUSY` ("Between loop calls"), its findings landing on that
    head's round. The wait loop runs on `ci`
-   and `msg` (and `cr` while `cr_head`'s review is pending); a red
+   and `msg` (and `cr` while it is `trigger` or `pending` for
+   `cr_head`; `CAP` 180 then); a red
    catch-up head opens its `ci` finding on the latest build round. When
    the wait ends, triage runs again over the build phase (a late
    CodeRabbit review, the catch-up `ci` row). Then: green with nothing
@@ -563,8 +567,8 @@ A red head's item is `probe.py ci-finding --pr "$PR" --head "$HEAD"
   skips CodeRabbit, and neither does CI being terminal. A still-`BUSY`
   answer turns `cr` into `skipped` only past [[ crwait ]] s since
   `cr_from`; each window is checked between loop calls, so a round
-  waits about 2×[[ crwait ]] s for CodeRabbit (plus at most one loop
-  cap per window):
+  waits about 2×[[ crwait ]] s for CodeRabbit, plus the time until the
+  next re-call:
   - `cr: trigger` → re-call `tool coderabbit-trigger` (build step 2) and
     act on its answer there; still `BUSY` past [[ crwait ]] s since
     `cr_from` → `cr: skipped` ("CodeRabbit trigger failed");

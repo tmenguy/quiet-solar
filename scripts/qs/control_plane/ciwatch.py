@@ -128,7 +128,7 @@ def _run_of(suite: dict[str, Any]) -> tuple[Any, tuple[int, int]] | None:
     one). A re-run attempt reuses its run's suite (R3: checked live), so the suite id only breaks a theoretical
     tie between two suites of one run; a suite with no id ranks lowest in it."""
     run = suite.get("workflowRun")
-    if not isinstance(run, dict) or not isinstance(run.get("databaseId"), int):
+    if not isinstance(run, dict) or type(run.get("databaseId")) is not int:  # a `bool` is no run id (R4)
         return None
     workflow = run.get("workflow")
     if not isinstance(workflow, dict) or workflow.get("databaseId") is None:
@@ -138,7 +138,8 @@ def _run_of(suite: dict[str, Any]) -> tuple[Any, tuple[int, int]] | None:
 
 
 def _latest_per_workflow(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Only the latest suite of each workflow (a re-run on the same head leaves the old suite, S2)."""
+    """Only the latest suite of each workflow (a new run on the same head, e.g. a close/reopen, leaves the old
+    suite, S2)."""
     kept: list[dict[str, Any]] = []
     latest: dict[Any, tuple[tuple[int, int], dict[str, Any]]] = {}
     for suite in actions:

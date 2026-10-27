@@ -556,6 +556,17 @@ _OTHER_RUN_FAILED = {"__typename": "CheckRun", "name": "cursor", "conclusion": "
             _node(
                 "FAILURE",
                 suites=[
+                    {**_suite("COMPLETED", "FAILURE"), "workflowRun": {"databaseId": True, "workflow": {"databaseId": 10}}},
+                    _suite(run=9, workflow=10),
+                ],
+            ),
+            "red",
+            id="a-bool-run-id-is-no-run-id",  # R4 polish: `True` never ranks as run 1
+        ),
+        pytest.param(
+            _node(
+                "FAILURE",
+                suites=[
                     _suite("COMPLETED", "FAILURE", run=6, workflow=10, suite_id=100),
                     _suite(run=6, workflow=10, suite_id=101),
                 ],

@@ -1383,11 +1383,12 @@ def test_node_says_the_coderabbit_wait_is_at_most_two_windows(tmp_path: Path) ->
     reset = "`cr_from` is set on entering `cr: trigger` and reset when the request is answered (`triggered` / `already`)"
     assert reset in flat
     bound = (
-        f"each window is checked between loop calls, so a round waits about 2×{wait} s for CodeRabbit"
-        " (plus at most one loop cap per window)"
+        f"each window is checked between loop calls, so a round waits about 2×{wait} s for CodeRabbit,"
+        " plus the time until the next re-call"
     )
     assert flat.count(bound) == 3  # `round.json`, build step 2, the wait loop
     assert f"a round waits at most 2×{wait} s" not in flat
+    assert "loop cap per window" not in flat  # R4 polish: the bound names the re-call, not the cap
     assert "then of the trigger's `triggered` / `already` answer" not in flat
 
 
@@ -1399,6 +1400,32 @@ def test_node_catch_up_polls_a_pending_review_by_the_same_rule(tmp_path: Path) -
     wait = str(node_policy.CR_WAIT_S)
     assert f"keeps being polled until it settles, or a re-call past {wait} s since `cr_from` still answers `BUSY`" in flat
     assert f"settles or {wait} s of CodeRabbit wait from `cr_from` pass" not in flat
+    # R4 polish: `cr` is not a `WAIT_ON` key — it only shortens the cap while a request is owed or pending
+    assert "and `msg` (and `cr` while it is `trigger` or `pending` for `cr_head`; `CAP` 180 then)" in flat
+    assert "(and `cr` while `cr_head`'s review is pending)" not in flat
+
+
+def test_node_writes_the_coderabbit_state_with_the_push(tmp_path: Path) -> None:
+    """Fix plan #04 polish: `cr_head`, `cr: trigger` and `cr_from` land in the same `round.json` write as the
+    push's `head` / `pushed_at` / `wait_from`, so a crash never leaves round N-1's `cr` behind."""
+    flat = _flat(_node_text(tmp_path))
+    assert (
+        "`round.json` gets, in one write, `head`, `pushed_at` and `wait_from` = now, `cr_head` = the head,"
+        " `cr: trigger`, `cr_from` = now" in flat
+    )
+    assert "`round.json` gets `head`, `pushed_at` and `wait_from` = now." not in flat
+
+
+def test_node_states_the_busy_trigger_outcome_inline(tmp_path: Path) -> None:
+    """Fix plan #04 polish: build step 2's `BUSY` bullet names its outcome, as the wait loop does."""
+    from control_plane import node_policy  # type: ignore[import-not-found]
+
+    flat = _flat(_node_text(tmp_path))
+    wait = str(node_policy.CR_WAIT_S)
+    assert (
+        f"a re-call past {wait} s since `cr_from` still answers `BUSY` → `cr: skipped`"
+        ' ("CodeRabbit trigger failed"; "Between loop calls")' in flat
+    )
 
 
 def test_plan_concrete_expects_the_files_a_plan_creates_to_be_missing(tmp_path: Path) -> None:
@@ -1411,17 +1438,19 @@ def test_plan_concrete_expects_the_files_a_plan_creates_to_be_missing(tmp_path: 
 
 def test_plan_concrete_file_specificity_agrees_with_create_targets(tmp_path: Path) -> None:
     """Fix plan #02 polish: existence is asked of the paths a plan modifies or reads; a bad create-target has
-    an explicit severity, and so does one that already exists at the task's base — never a file this task's own
-    commits created, which a re-plan during build would otherwise flag (#03 R3-S2)."""
+    an explicit severity. #04 R4-S2: a create-target that already exists is not a finding by itself (an earlier
+    build round may have created it) — the reviewer cannot run git, so no task-base check is asked of it."""
     flat = _flat(_node_text(tmp_path, "qs-node-plan-concrete"))
     assert "Do the paths it modifies or reads exist?" in flat
     assert "Are exact paths given? Do they exist?" not in flat
     assert "is wrong (a directory that does not exist and the plan does not create, the wrong package): `should_fix`" in flat
     assert (
-        "A create-target that already exists at the task's base (`git merge-base origin/main HEAD`) — not one this"
-        " task's own commits created —: `should_fix` (the plan must say \"modify\")" in flat
+        "A create-target that already exists in the worktree is not a finding by itself (an earlier build round"
+        " of this task may have created it)." in flat
     )
     assert "A create-target that already exists: `should_fix`" not in flat  # a re-plan during build (R3-S2)
+    assert "git merge-base" not in flat  # R4-S2: the reviewer cannot run it
+    assert "at the task's base" not in flat
 
 
 def test_node_constants_follow_node_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
