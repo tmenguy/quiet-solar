@@ -330,7 +330,8 @@ See [overview.md](overview.md) section "Orchestrators are interactive
 sessions; sub-agents are parallel fan-out" for the rationale.
 
 Each command delegates to a static agent under `.claude/agents/` (or
-`.opencode/agents/`). Agents discover task context at runtime from
+`.opencode/agents/`) — except `/release`, which runs the `qs-release`
+protocol inline (QS-434). Agents discover task context at runtime from
 `git branch --show-current` — there is no per-task agent rendering.
 
 ### Lanes & axes (QS-332)
