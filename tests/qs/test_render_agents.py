@@ -1341,6 +1341,26 @@ def test_node_constants_are_bound_to_their_meaning(tmp_path: Path) -> None:
     assert _near(text, str(node_policy.CI_WAIT_MAX_S), "CI")
 
 
+def test_node_bounds_an_unanswered_trigger_by_the_coderabbit_wait(tmp_path: Path) -> None:
+    """Fix plan #01 S3: `cr_from` starts with `cr: trigger`, so `CR_WAIT_S` bounds `trigger` and `pending`."""
+    from control_plane import node_policy  # type: ignore[import-not-found]
+
+    flat = _flat(_node_text(tmp_path))
+    assert "`cr: trigger`, `cr_from` = now" in flat
+    wait = str(node_policy.CR_WAIT_S)
+    assert f"re-call `tool coderabbit-trigger` (build step 2); past {wait} s since `cr_from` → `cr: skipped`" in flat
+    assert "The wait ends when CI is terminal and `cr` is no longer `pending`" in flat
+    assert "neither `pending` nor `trigger`" not in flat
+
+
+def test_plan_concrete_expects_the_files_a_plan_creates_to_be_missing(tmp_path: Path) -> None:
+    """Fix plan #01 S4: only a file the plan modifies or reads is a missing-file `must_fix`."""
+    flat = _flat(_node_text(tmp_path, "qs-node-plan-concrete"))
+    assert "A file the plan says it **modifies or reads** and you cannot find: `must_fix`" in flat
+    assert "A file the plan says it **creates** is expected to be missing" in flat
+    assert "A file the plan references and you cannot find" not in flat
+
+
 def test_node_constants_follow_node_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The env globals are the module's constants: a changed value reaches the node."""
     from control_plane import node_policy  # type: ignore[import-not-found]
