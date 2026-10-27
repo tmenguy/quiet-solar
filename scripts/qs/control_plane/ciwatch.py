@@ -1,4 +1,4 @@
-"""The CI watcher (QS-406 §8): every open PR's rollup, within GitHub's API budget.
+"""The CI watcher (QS-406 §8): every open PR's CI verdict, within GitHub's API budget.
 
 - ``GitHub`` (on ``seams.runner``): ``repo()`` parses ``git remote get-url origin`` once;
   ``prs(numbers)`` makes one ``gh api graphql`` call per ``CI_BATCH`` PRs. GraphQL may return
@@ -8,8 +8,17 @@
 - Watched PRs: deliverables with a ``pr_number``, not terminal, in an open run (work items skipped).
 - A poll is all-or-nothing for transport failures: ``tasks.ci_state`` / ``ci_sha`` are written, on a
   change only, when every batch returned data. ``MERGED`` / ``CLOSED`` → ``NULL`` (clears ``ci_red``).
+- The verdict (#425 D10) is computed from the head commit's check suites of the ``CI_APP`` app (GitHub
+  Actions) only — never from ``statusCheckRollup.state``, which also counts commit statuses (CodeRabbit's
+  ``CodeRabbit`` status held it ``pending`` for an hour, or made it green before any workflow ran) and
+  misses a ``needs:`` job whose check run does not exist yet. No Actions suite → ``PENDING``; a completed
+  suite whose conclusion is not in ``PASSING_SUITE_CONCLUSIONS`` → ``FAILURE`` (so red waits for the suite
+  to finish); every suite completed and passing → ``SUCCESS`` (``PENDING`` when the suite list is
+  truncated: CI is assumed to be GitHub Actions with at most 20 suites per head). The rollup's ``failing``
+  checks and ``truncated`` flag still feed the ``ci_red`` alert's payload; a status named there no longer
+  makes the verdict red.
 - ``ci_red`` is derived from the stored rows on every tick (``must-fix``), whether or not a poll ran.
-- The schedule: ``CI_FAST_S`` after a poll that saw a pending rollup or a moved head, else
+- The schedule: ``CI_FAST_S`` after a poll that saw a pending verdict or a moved head, else
   ``CI_SLOW_S``; failures back off from ``CI_BACKOFF_MIN_S`` to ``CI_BACKOFF_MAX_S``; below
   ``CI_RATE_FLOOR`` remaining calls, no poll before GitHub's ``resetAt`` (at most ``CI_RESET_CAP_S``
   away). A new daemon polls at once.
@@ -42,8 +51,9 @@ CI_RATE_FLOOR = 200
 CI_RESET_CAP_S = 3600.0  # GitHub's rate window is one hour: a later `resetAt` is not believed
 
 FAILING_CONCLUSIONS = frozenset({"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"})
-FAILING_STATUSES = frozenset({"FAILURE", "ERROR"})
-PENDING_ROLLUPS = frozenset({"PENDING", "EXPECTED"})
+FAILING_STATUSES = frozenset({"FAILURE", "ERROR"})  # the statuses named in `failing` (never the verdict)
+CI_APP = "github-actions"  # #425 D10: the only app whose check suites make the verdict
+PASSING_SUITE_CONCLUSIONS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
 CLOSED_STATES = frozenset({"MERGED", "CLOSED"})
 
 _REMOTES = (
@@ -55,7 +65,8 @@ _REMOTES = (
 _PR_FIELDS = (
     "state headRefOid commits(last:1){ nodes{ commit{ statusCheckRollup{ state"
     " contexts(first:100){ pageInfo{hasNextPage} nodes{ __typename"
-    " ... on CheckRun{ name conclusion detailsUrl } ... on StatusContext{ context state targetUrl } } } } } } }"
+    " ... on CheckRun{ name conclusion detailsUrl } ... on StatusContext{ context state targetUrl } } } }"
+    " checkSuites(first:20){ pageInfo{hasNextPage} nodes{ status conclusion app{ slug } } } } } }"
 )
 
 
@@ -76,7 +87,7 @@ class CiFailure(Exception):
 class PrCi:
     state: str
     head: str | None
-    rollup: str | None
+    verdict: str | None  # SUCCESS / FAILURE / PENDING from the Actions suites; None only with no commit (#425 D10)
     failing: tuple[str, ...]
     truncated: bool
 
@@ -103,11 +114,31 @@ def query(owner: str, name: str, numbers: Sequence[int]) -> str:
     )
 
 
+def _verdict(suites: dict[str, Any]) -> str:
+    """The CI verdict of a head from its check suites (#425 D10): the ``CI_APP`` suites only."""
+    actions = [
+        s
+        for s in suites["nodes"]
+        if isinstance(s, dict) and isinstance(s.get("app"), dict) and s["app"].get("slug") == CI_APP
+    ]
+    if not actions:
+        return "PENDING"
+    if any(s.get("status") == "COMPLETED" and s.get("conclusion") not in PASSING_SUITE_CONCLUSIONS for s in actions):
+        return "FAILURE"
+    if all(s.get("status") == "COMPLETED" for s in actions) and not suites["pageInfo"]["hasNextPage"]:
+        return "SUCCESS"
+    return "PENDING"
+
+
 def _pr(node: dict[str, Any]) -> PrCi:
     commits = node["commits"]["nodes"]
-    rollup = commits[0]["commit"]["statusCheckRollup"] if commits else None
-    if rollup is None:
+    if not commits:
         return PrCi(node["state"], node["headRefOid"], None, (), False)
+    commit = commits[0]["commit"]
+    verdict = _verdict(commit["checkSuites"])
+    rollup = commit["statusCheckRollup"]
+    if rollup is None:
+        return PrCi(node["state"], node["headRefOid"], verdict, (), False)
     failing = []
     for ctx in rollup["contexts"]["nodes"]:
         if not isinstance(ctx, dict):
@@ -117,7 +148,7 @@ def _pr(node: dict[str, Any]) -> PrCi:
         elif ctx.get("__typename") == "StatusContext" and ctx.get("state") in FAILING_STATUSES:
             failing.append(str(ctx.get("context")))
     truncated = bool(rollup["contexts"]["pageInfo"]["hasNextPage"])
-    return PrCi(node["state"], node["headRefOid"], rollup["state"], tuple(failing), truncated)
+    return PrCi(node["state"], node["headRefOid"], verdict, tuple(failing), truncated)
 
 
 class GitHub:
@@ -190,9 +221,9 @@ def ci_state(pr: PrCi) -> tuple[str | None, str | None]:
     """The ``(ci_state, ci_sha)`` to store for ``pr``."""
     if pr.state in CLOSED_STATES:
         return None, None
-    if pr.rollup == "SUCCESS":
+    if pr.verdict == "SUCCESS":
         return "green", pr.head
-    if pr.rollup in ("FAILURE", "ERROR"):
+    if pr.verdict == "FAILURE":
         return "red", pr.head
     return "pending", pr.head
 
@@ -242,7 +273,7 @@ class CiWatcher:
                 if pr is None:
                     continue  # unknown this poll (a NOT_FOUND alias): no write
                 state, sha = ci_state(pr)
-                if state is not None and (pr.rollup in PENDING_ROLLUPS or sha != row["ci_sha"]):
+                if state is not None and (pr.verdict == "PENDING" or sha != row["ci_sha"]):
                     fast = True
                 self.failing[row["id"]] = (sha, pr.failing, pr.truncated)
                 if (state, sha) != (row["ci_state"], row["ci_sha"]):

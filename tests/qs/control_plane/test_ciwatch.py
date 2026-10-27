@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from pathlib import Path
@@ -15,9 +16,9 @@ from .conftest import Call, FakeRunner, insert_task, open_run, run_cli, sql
 
 
 def _pr(
-    state: str = "OPEN", head: str = "h1", rollup: str | None = "SUCCESS", failing: tuple[str, ...] = ()
+    state: str = "OPEN", head: str = "h1", verdict: str | None = "SUCCESS", failing: tuple[str, ...] = ()
 ) -> ciwatch.PrCi:
-    return ciwatch.PrCi(state, head, rollup, failing, False)
+    return ciwatch.PrCi(state, head, verdict, failing, False)
 
 
 def _tick(conn: Any, fake_clock: clock.FakeClock) -> None:
@@ -68,15 +69,34 @@ def _graphql(
     return respond
 
 
+def _suite(status: str = "COMPLETED", conclusion: str | None = "SUCCESS", slug: str | None = "github-actions") -> Any:
+    """One check suite of the head commit (#425 D10); ``slug=None`` is a suite with a null ``app``."""
+    return {"status": status, "conclusion": conclusion, "app": None if slug is None else {"slug": slug}}
+
+
 def _node(
-    rollup: str | None, head: str = "h1", contexts: list[dict[str, Any]] | None = None, more: bool = False
+    rollup: str | None,
+    head: str = "h1",
+    contexts: list[dict[str, Any]] | None = None,
+    more: bool = False,
+    suites: list[Any] | None = None,
+    more_suites: bool = False,
 ) -> dict[str, Any]:
-    commit = (
+    """A PR answer; ``suites=None`` is a head with no check suite yet (the verdict is then ``PENDING``)."""
+    rollup_node = (
         None
         if rollup is None
         else {"state": rollup, "contexts": {"pageInfo": {"hasNextPage": more}, "nodes": contexts or []}}
     )
-    return {"state": "OPEN", "headRefOid": head, "commits": {"nodes": [{"commit": {"statusCheckRollup": commit}}]}}
+    commit = {
+        "statusCheckRollup": rollup_node,
+        "checkSuites": {"pageInfo": {"hasNextPage": more_suites}, "nodes": suites or []},
+    }
+    return {"state": "OPEN", "headRefOid": head, "commits": {"nodes": [{"commit": commit}]}}
+
+
+GREEN = [_suite()]
+RED = [_suite(conclusion="FAILURE")]
 
 
 @pytest.fixture
@@ -100,7 +120,7 @@ class TestRealGitHub:
         r1, _ = open_run()
         for n in range(1, 31):
             insert_task(migrated, f"T{n}", r1, is_deliverable=1, pr_number=n)
-        fake_runner.on(("gh", "api", "graphql"), _graphql({n: _node("SUCCESS") for n in range(1, 31)}))
+        fake_runner.on(("gh", "api", "graphql"), _graphql({n: _node("SUCCESS", suites=GREEN) for n in range(1, 31)}))
         _tick(conn, fake_clock)
         calls = fake_runner.matching("gh", "api", "graphql")
         assert len(calls) == 2 and all(c.timeout == 20 for c in calls)
@@ -113,7 +133,9 @@ class TestRealGitHub:
         r1, _ = open_run()
         insert_task(migrated, "T1", r1, is_deliverable=1, pr_number=6)
         insert_task(migrated, "T2", r1, is_deliverable=1, pr_number=7)
-        fake_runner.on(("gh", "api", "graphql"), _graphql({6: _node("FAILURE")}))  # p7 is null + NOT_FOUND, exit 1
+        fake_runner.on(
+            ("gh", "api", "graphql"), _graphql({6: _node("FAILURE", suites=RED)})
+        )  # p7 is null + NOT_FOUND, exit 1
         _tick(conn, fake_clock)
         assert _ci(migrated, "T1") == ("red", "h1") and _ci(migrated, "T2") == (None, None)
 
@@ -163,7 +185,9 @@ class TestRealGitHub:
             {"__typename": "StatusContext", "context": "ci/legacy", "state": "ERROR"},
             {"__typename": "StatusContext", "context": "ok", "state": "SUCCESS"},
         ]
-        fake_runner.on(("gh", "api", "graphql"), _graphql({7: _node("FAILURE", contexts=contexts, more=True)}))
+        fake_runner.on(
+            ("gh", "api", "graphql"), _graphql({7: _node("FAILURE", contexts=contexts, more=True, suites=RED)})
+        )
         _tick(conn, fake_clock)
         payload = json.loads(sql(migrated, "SELECT payload FROM alerts WHERE kind = 'ci_red'")[0][0])
         assert payload == {
@@ -225,11 +249,13 @@ class TestSchedule:
     def _wait(self, fake_clock: clock.FakeClock) -> float:
         return (ciwatch._watcher.next_at - fake_clock.now()).total_seconds()
 
-    @pytest.mark.parametrize(("rollup", "expected"), [("PENDING", 30), ("EXPECTED", 30), ("SUCCESS", 300), (None, 300)])
+    @pytest.mark.parametrize(
+        ("verdict", "expected"), [("PENDING", 30), ("FAILURE", 300), ("SUCCESS", 300), (None, 300)]
+    )
     def test_fast_while_pending_slow_when_settled(
-        self, conn, migrated, watched, fake_github, fake_clock, rollup, expected
+        self, conn, migrated, watched, fake_github, fake_clock, verdict, expected
     ) -> None:
-        fake_github.prs_by_number[7] = _pr(rollup=rollup)
+        fake_github.prs_by_number[7] = _pr(verdict=verdict)
         _tick(conn, fake_clock)  # the first poll sees a moved head (no ci_sha yet): fast
         assert self._wait(fake_clock) == 30
         fake_clock.advance(30)
@@ -248,7 +274,7 @@ class TestSchedule:
         assert fake_github.calls == [] and self._wait(fake_clock) == 300
 
     def test_a_low_rate_waits_for_the_reset(self, conn, migrated, watched, fake_github, fake_clock) -> None:
-        fake_github.prs_by_number[7] = _pr(rollup="PENDING")
+        fake_github.prs_by_number[7] = _pr(verdict="PENDING")
         fake_github.rate = ciwatch.Rate(
             150, clock.iso(fake_clock.now() + __import__("datetime").timedelta(seconds=1200))
         )
@@ -270,13 +296,13 @@ class TestSchedule:
         assert writes == [{"ci_state": "green", "ci_sha": "h1"}]
 
     def test_red_once_per_sha_then_again(self, conn, migrated, watched, fake_github, fake_clock) -> None:
-        fake_github.prs_by_number[7] = _pr(rollup="FAILURE", head="s1", failing=("tests",))
+        fake_github.prs_by_number[7] = _pr(verdict="FAILURE", head="s1", failing=("tests",))
         _tick(conn, fake_clock)
         fake_clock.advance(300)
         _tick(conn, fake_clock)
         assert _red(migrated) == [("T1@s1", None)]
         assert sql(migrated, "SELECT count(*) FROM messages WHERE kind = 'ci_red'")[0][0] == 1
-        fake_github.prs_by_number[7] = _pr(rollup="FAILURE", head="s2")
+        fake_github.prs_by_number[7] = _pr(verdict="FAILURE", head="s2")
         fake_clock.advance(300)
         _tick(conn, fake_clock)
         assert [s for s, cleared in _red(migrated) if cleared is None] == ["T1@s2"]
@@ -296,15 +322,15 @@ class TestSchedule:
     def test_a_closed_pr_clears_then_a_reopened_red_one_is_picked_up(
         self, conn, migrated, watched, fake_github, fake_clock
     ) -> None:
-        fake_github.prs_by_number[7] = _pr(rollup="FAILURE", head="s1")
+        fake_github.prs_by_number[7] = _pr(verdict="FAILURE", head="s1")
         _tick(conn, fake_clock)
         assert _red(migrated)[0][1] is None
-        fake_github.prs_by_number[7] = _pr(state="CLOSED", head="s1", rollup="FAILURE")
+        fake_github.prs_by_number[7] = _pr(state="CLOSED", head="s1", verdict="FAILURE")
         fake_clock.advance(300)
         _tick(conn, fake_clock)
         assert _ci(migrated, "T1") == (None, None) and _red(migrated)[0][1] is not None
         assert self._wait(fake_clock) == 300  # settled: the PR stays in the batch
-        fake_github.prs_by_number[7] = _pr(rollup="FAILURE", head="s1")
+        fake_github.prs_by_number[7] = _pr(verdict="FAILURE", head="s1")
         fake_clock.advance(300)
         _tick(conn, fake_clock)
         assert _ci(migrated, "T1") == ("red", "s1") and [c for _, c in _red(migrated)].count(None) == 1
@@ -323,9 +349,11 @@ class TestSchedule:
 
 
 def test_the_ci_state_mapping() -> None:
-    assert ciwatch.ci_state(_pr(rollup="ERROR")) == ("red", "h1")
+    assert ciwatch.ci_state(_pr(verdict="FAILURE")) == ("red", "h1")
+    assert ciwatch.ci_state(_pr(verdict="SUCCESS")) == ("green", "h1")
+    assert ciwatch.ci_state(_pr(verdict=None)) == ("pending", "h1")
     assert ciwatch.ci_state(_pr(state="MERGED")) == (None, None)
-    assert ciwatch.ci_state(_pr(rollup="PENDING")) == ("pending", "h1")
+    assert ciwatch.ci_state(_pr(verdict="PENDING")) == ("pending", "h1")
 
 
 def test_kinds() -> None:
@@ -342,9 +370,13 @@ def test_a_null_context_and_a_malformed_pr_never_fail_the_batch(
     insert_task(migrated, "T1", r1, is_deliverable=1, pr_number=6)
     insert_task(migrated, "T2", r1, is_deliverable=1, pr_number=7)
     insert_task(migrated, "T3", r1, is_deliverable=1, pr_number=8)
-    nulls = _node("FAILURE", contexts=[None, {"__typename": "CheckRun", "name": "ci", "conclusion": "FAILURE"}])  # type: ignore[list-item]
+    nulls = _node(
+        "FAILURE",
+        contexts=[None, {"__typename": "CheckRun", "name": "ci", "conclusion": "FAILURE"}],  # type: ignore[list-item]
+        suites=RED,
+    )
     malformed = {"state": "OPEN", "headRefOid": "h1"}  # no `commits`
-    fake_runner.on(("gh", "api", "graphql"), _graphql({6: nulls, 7: malformed, 8: _node("SUCCESS")}))
+    fake_runner.on(("gh", "api", "graphql"), _graphql({6: nulls, 7: malformed, 8: _node("SUCCESS", suites=GREEN)}))
     _tick(conn, fake_clock)
     assert _ci(migrated, "T1") == ("red", "h1") and _ci(migrated, "T3") == ("green", "h1")
     assert _ci(migrated, "T2") == (None, None)  # unknown this poll: no write
@@ -364,7 +396,7 @@ def test_a_far_future_reset_is_capped(conn, migrated, watched, fake_github, fake
 
 
 def test_the_failing_map_keeps_only_watched_tasks(conn, migrated, watched, fake_github, fake_clock) -> None:
-    fake_github.prs_by_number[7] = _pr(rollup="FAILURE", failing=("ci",))
+    fake_github.prs_by_number[7] = _pr(verdict="FAILURE", failing=("ci",))
     _tick(conn, fake_clock)
     assert set(ciwatch._watcher.failing) == {"T1"}
     insert_task(migrated, "T2", watched, is_deliverable=1, pr_number=8)
@@ -390,7 +422,7 @@ def test_a_pr_that_parses_again_is_logged_again_when_it_breaks(
     r1, _ = open_run()
     insert_task(migrated, "T2", r1, is_deliverable=1, pr_number=7)
     malformed = {"state": "OPEN", "headRefOid": "h1"}  # no `commits`
-    for node in (malformed, _node("SUCCESS"), malformed):
+    for node in (malformed, _node("SUCCESS", suites=GREEN), malformed):
         fake_runner.on(("gh", "api", "graphql"), _graphql({7: node}))
         _tick(conn, fake_clock)
         fake_clock.advance(ciwatch.CI_SLOW_S)
@@ -408,7 +440,96 @@ def test_a_reset_stamp_without_an_offset_is_utc_and_a_non_string_is_ignored(
 
     if reset_at == "naive":
         reset_at = (fake_clock.now() + timedelta(seconds=1200)).replace(tzinfo=None).isoformat()
-    fake_github.prs_by_number[7] = _pr(rollup="PENDING")
+    fake_github.prs_by_number[7] = _pr(verdict="PENDING")
     fake_github.rate = ciwatch.Rate(150, reset_at)
     _tick(conn, fake_clock)
     assert ciwatch._watcher.next_at == fake_clock.now() + timedelta(seconds=wait_s)
+
+
+# --------------------------------------------------------------------------- #425 D10: the verdict from the Actions suites
+
+_CR_PENDING = {"__typename": "StatusContext", "context": "CodeRabbit", "state": "PENDING"}
+_CR_SKIPPED = {"__typename": "StatusContext", "context": "CodeRabbit", "state": "SUCCESS"}
+_CR_FAILED = {"__typename": "StatusContext", "context": "CodeRabbit", "state": "FAILURE"}
+_OTHER_RUN_FAILED = {"__typename": "CheckRun", "name": "cursor", "conclusion": "FAILURE"}
+
+
+@pytest.mark.parametrize(
+    ("node", "expected"),
+    [
+        pytest.param(
+            _node("PENDING", contexts=[_CR_PENDING], suites=GREEN), "green", id="pending-coderabbit-green-suite"
+        ),
+        pytest.param(_node("SUCCESS", contexts=[_CR_SKIPPED]), "pending", id="review-skipped-no-suite-yet"),
+        pytest.param(_node("SUCCESS", suites=[_suite("IN_PROGRESS", None)]), "pending", id="coverage-job-not-created"),
+        pytest.param(_node("FAILURE", suites=[_suite("IN_PROGRESS", None)]), "pending", id="failed-run-suite-running"),
+        pytest.param(
+            _node("PENDING", suites=[*GREEN, _suite("QUEUED", None, "cursor"), _suite("QUEUED", None, "coderabbitai")]),
+            "green",
+            id="other-apps-queued-forever",
+        ),
+        pytest.param(_node("SUCCESS", suites=[_suite("COMPLETED", "FAILURE", None), *GREEN]), "green", id="null-app"),
+        pytest.param(
+            _node("FAILURE", contexts=[_OTHER_RUN_FAILED], suites=[*GREEN, _suite("COMPLETED", "FAILURE", "cursor")]),
+            "green",
+            id="failing-non-actions-run",
+        ),
+        pytest.param(_node("SUCCESS", suites=GREEN, more_suites=True), "pending", id="truncated-suites"),
+        pytest.param(_node("FAILURE", contexts=[_CR_FAILED], suites=GREEN), "green", id="failing-status-alone"),
+        pytest.param(_node(None, suites=[_suite("QUEUED", None)]), "pending", id="null-rollup-queued"),
+        pytest.param(_node(None, suites=[_suite("COMPLETED", "STARTUP_FAILURE")]), "red", id="null-rollup-startup"),
+        pytest.param(
+            _node("SUCCESS", suites=[_suite("COMPLETED", "NEUTRAL"), _suite("COMPLETED", "SKIPPED"), *GREEN]),
+            "green",
+            id="neutral-and-skipped-pass",
+        ),
+        pytest.param(
+            _node("FAILURE", suites=[_suite("COMPLETED", "CANCELLED"), _suite("IN_PROGRESS", None)]),
+            "red",
+            id="a-completed-failure-is-red-at-once",
+        ),
+        pytest.param(_node("SUCCESS", suites=[None, *GREEN]), "green", id="a-null-suite-item"),
+    ],
+)
+def test_the_verdict_comes_from_the_actions_suites(real_github, fake_runner, node: Any, expected: str) -> None:
+    fake_runner.on(("gh", "api", "graphql"), _graphql({7: node}))
+    prs, _ = real_github.prs([7])
+    pr = prs[7]
+    assert pr is not None and ciwatch.ci_state(pr) == (expected, "h1")
+
+
+def test_the_query_asks_for_the_check_suites(real_github, fake_runner) -> None:
+    fake_runner.on(("gh", "api", "graphql"), _graphql({7: _node("SUCCESS", suites=GREEN)}))
+    real_github.prs([7])
+    q = fake_runner.matching("gh", "api", "graphql")[0].argv[-1]
+    assert "checkSuites(first:20){ pageInfo{hasNextPage} nodes{ status conclusion app{ slug } } }" in q
+
+
+def test_a_failed_run_is_red_only_when_its_suite_completes(
+    conn, migrated, watched, real_github, fake_runner, fake_clock
+) -> None:
+    fake_runner.on(("gh", "api", "graphql"), _graphql({7: _node("FAILURE", suites=[_suite("IN_PROGRESS", None)])}))
+    _tick(conn, fake_clock)
+    assert _ci(migrated, "T1") == ("pending", "h1")
+    fake_runner.on(("gh", "api", "graphql"), _graphql({7: _node("FAILURE", suites=RED)}))
+    fake_clock.advance(ciwatch.CI_FAST_S)
+    _tick(conn, fake_clock)
+    assert _ci(migrated, "T1") == ("red", "h1")
+
+
+def test_a_null_rollup_with_a_queued_suite_is_pending_and_fast(
+    conn, migrated, watched, real_github, fake_runner, fake_clock
+) -> None:
+    fake_runner.on(("gh", "api", "graphql"), _graphql({7: _node(None, suites=[_suite("QUEUED", None)])}))
+    for _ in range(2):  # the first poll also sees a moved head; the second is fast because the verdict is pending
+        _tick(conn, fake_clock)
+        assert (ciwatch._watcher.next_at - fake_clock.now()).total_seconds() == ciwatch.CI_FAST_S
+        fake_clock.advance(ciwatch.CI_FAST_S)
+    assert _ci(migrated, "T1") == ("pending", "h1")
+
+
+def test_the_verdict_constants() -> None:
+    assert ciwatch.CI_APP == "github-actions"
+    assert frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"}) == ciwatch.PASSING_SUITE_CONCLUSIONS
+    assert not hasattr(ciwatch, "PENDING_ROLLUPS")
+    assert [f.name for f in dataclasses.fields(ciwatch.PrCi)] == ["state", "head", "verdict", "failing", "truncated"]
