@@ -50,6 +50,17 @@ _FLAT_TABLE = [
     ("qs-global-review", "frontier"),
     ("qs-cross-run-review", "deep"),
     ("qs-final-review", "frontier"),
+    # #425 D1 — the node's sub-agents (flat: they render with no task facts).
+    ("qs-node-plan-writer", "frontier"),
+    ("qs-node-plan-critic", "deep"),
+    ("qs-node-plan-concrete", "deep"),
+    ("qs-node-plan-devproxy", "build"),
+    ("qs-node-plan-scope", "frontier"),
+    ("qs-node-plan-delta", "light"),
+    ("qs-node-implementer", "build"),
+    ("qs-node-blind-hunter", "deep"),
+    ("qs-node-edge-case", "deep"),
+    ("qs-node-acceptance", "frontier"),
 ]
 
 # QS-405 D4 — the stems a Control Plane tool launches: the only stems,
@@ -89,7 +100,7 @@ def test_classes_exact() -> None:
 def test_stems_match_registry_and_templates() -> None:
     frozen = render_agents.ORCHESTRATORS | render_agents.SUBAGENTS
     assert len(frozen) == 22
-    assert len(render_agents.SECOND_PIPELINE) == 5
+    assert len(render_agents.SECOND_PIPELINE) == 15  # #425: the node's ten sub-agents
     assert frozen | render_agents.SECOND_PIPELINE == models.STEMS
     # A stem may have its row before its template exists (QS-405 D1).
     assert frozen <= set(render_agents._discover_stems(TEMPLATES_DIR)) <= models.STEMS

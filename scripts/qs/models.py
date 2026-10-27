@@ -131,6 +131,17 @@ _FLAT: dict[str, str] = {
     "qs-global-review": "frontier",  # coherence judgment over one run
     "qs-cross-run-review": "deep",  # code-grounded overlap; mixed with the global review on purpose
     "qs-final-review": "frontier",  # the run's readable verdict
+    # #425 D1 — the node's sub-agents (flat: they render with no task facts, #405's rule).
+    "qs-node-plan-writer": "frontier",  # writes the plan the reviewers attack
+    "qs-node-plan-critic": "deep",
+    "qs-node-plan-concrete": "deep",
+    "qs-node-plan-devproxy": "build",
+    "qs-node-plan-scope": "frontier",
+    "qs-node-plan-delta": "light",
+    "qs-node-implementer": "build",
+    "qs-node-blind-hunter": "deep",
+    "qs-node-edge-case": "deep",
+    "qs-node-acceptance": "frontier",
 }
 
 STEMS: frozenset[str] = frozenset(_FLAT) | _BY_LANE

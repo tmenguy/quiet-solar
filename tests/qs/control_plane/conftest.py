@@ -76,6 +76,7 @@ MODULES = (
     "ciwatch",
     "watchdog",
     "restore",
+    "node_policy",  # #425: the node's constants (a leaf)
     "cli",
 )
 for _name in MODULES:
