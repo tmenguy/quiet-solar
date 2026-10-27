@@ -18,7 +18,9 @@ of `main` and a `v*` tag; consent relayed to a subagent is blocked
 Follow the `qs-release` phase protocol. After its clean-main pull step
 (`git checkout main`, `git pull`, `git status`), always run
 `python scripts/qs/render_agents.py` (the pull may have brought a newer
-template), then read the rendered `.claude/agents/qs-release.md`.
+template), then read the rendered `.claude/agents/qs-release.md`. If the
+render fails but the rendered file exists, say it may be stale and use
+it; if the file does not exist, STOP and report.
 
 Use only its `## Phase protocol` and `## Hard rules` sections. Ignore
 everything else in that file: the frontmatter, the generated header, the
@@ -58,12 +60,13 @@ fails, STOP. Do not work around it. Run the real release as exactly
 6. Right before the real run, re-check, each command on its own:
    - `git status --porcelain` must print nothing. If the tree is not
      clean, STOP and report; do not loop back to the dry run.
-   - Run `python scripts/qs/release.py --dry-run` again (it pulls). Its
-     tag must equal the approved tag, `git rev-parse HEAD` must equal
-     the SHA noted at the approved dry run, and
-     `git log --oneline origin/main..main` must still print nothing.
-     If the tag or the SHA differs, show the new dry run and ask again
-     (step 4). If unpushed commits appear, STOP and report.
+   - Run `python scripts/qs/release.py --dry-run` again (it pulls) and
+     apply step 2 of this list to it first. Then its tag must equal the
+     approved tag, `git rev-parse HEAD` must equal the SHA noted at the
+     approved dry run, and `git log --oneline origin/main..main` must
+     still print nothing. Unpushed commits mean STOP, whatever else
+     differs. If only the tag or the SHA differs, show the new dry run
+     and go back to step 4 of this list.
 
 ### If the real run fails
 
@@ -73,9 +76,11 @@ or prints JSON without `"status": "released"`. Then:
 - Do not re-run `python scripts/qs/release.py`. Do not push or tag by
   hand.
 - Report the script's output and exit code.
-- Show the state, each command on its own: `git status`,
-  `git log --oneline origin/main..main`, `git tag --list <dry-run tag>`,
-  and `git ls-remote origin refs/tags/<dry-run tag>`. These show a
+- Take `<tag>` from the real run's JSON if it printed one, otherwise
+  from the dry run. Show the state, each command on its own:
+  `git status`, `git log --oneline origin/main..main`,
+  `git tag --list <tag>`, and `git ls-remote origin refs/tags/<tag>`.
+  These show a
   partial release, such as main pushed but the tag not. Non-zero or
   unexpected results are the evidence; do not treat them as a new
   failure to fix.
@@ -83,7 +88,9 @@ or prints JSON without `"status": "released"`. Then:
 
 ### Check afterwards
 
-Take `<tag>` from the real run's JSON `tag` key. If it differs from the
+Run these checks before the agent's final report; they decide it. Do
+not print the agent's "Released" line unless check 1 passes. Take
+`<tag>` from the real run's JSON `tag` key. If it differs from the
 dry-run tag, say so in the report. Run each command on its own:
 
 1. `git ls-remote --exit-code origin refs/tags/<tag>` must exit 0, and
@@ -96,8 +103,8 @@ dry-run tag, say so in the report. Run each command on its own:
    push sets the run's `headBranch` to the tag). Report the first label
    that matches:
    - unavailable: `gh` errors. This is not a release failure.
-   - pending: nothing is listed yet, or the listed run is queued or in
-     progress (point to the repository's Actions tab);
+   - pending: nothing is listed yet, or the listed run is not completed
+     yet (point to the repository's Actions tab);
    - passed: the listed run completed with success;
    - failed: the listed run completed with any other conclusion
      (including cancelled).

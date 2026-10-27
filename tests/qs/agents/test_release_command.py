@@ -45,6 +45,7 @@ def test_release_runs_agent_protocol_inline() -> None:
     assert "use the qs-release subagent" not in body.replace("*", "")
     assert "do not call the `agent` tool" in body
     assert ".claude/agents/qs-release.md" in body
+    assert "always run `python scripts/qs/render_agents.py`" in body
 
 
 def test_release_stops_after_dry_run() -> None:
@@ -67,13 +68,20 @@ def test_release_verifies_after_run() -> None:
 
 
 def test_release_guards_real_run() -> None:
-    """Review fix #01: no dirty-tree loop, no drift, no silent partial push."""
+    """Review fixes #01/#02: no dirty-tree loop, no drift, no unpushed commits."""
     body = _body()
     assert "if the tree is not clean, stop" in body
     assert "git log --oneline origin/main..main` must print nothing" in body
-    assert "git tag --list <dry-run tag>" in body
+    assert "apply step 2 of this list to it first" in body
+    assert "unpushed commits mean stop, whatever else differs" in body
+
+
+def test_release_reports_partial_push_and_run_status() -> None:
+    """Review fixes #01/#02: partial-push evidence and a total run-status mapping."""
+    body = _body()
+    assert "git tag --list <tag>" in body
+    assert "the listed run is not completed yet" in body
     assert "completed with any other conclusion" in body
-    assert "always run `python scripts/qs/render_agents.py`" in body
 
 
 def test_release_has_no_degraded_fallback_preamble() -> None:
