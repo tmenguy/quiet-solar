@@ -206,6 +206,9 @@ USER_ORIGINATED_CAR_NAME = "car_name"
 USER_ORIGINATED_CHARGE_TARGET_PERCENT = "charge_target_percent"
 USER_ORIGINATED_FORCE_CHARGE = "force_charge"
 USER_ORIGINATED_CHARGE_TIME = "charge_time"
+# QS-431: set on a car by any genuine user action (never by an entity restore replay);
+# a frozen car gets no automatic person constraint until the store is cleared
+USER_ORIGINATED_USER_FROZEN = "user_frozen"
 
 CONF_CAR_TRACKER = "car_tracker"
 CONF_CAR_PLUGGED = "car_plugged"
@@ -256,6 +259,9 @@ CONSTRAINT_ORIGINATOR_USER_OVERRIDE = "user_override"
 CONSTRAINT_ORIGINATOR_MANUAL = "manual"
 CONSTRAINT_ORIGINATOR_AGENDA = "agenda"
 CONSTRAINT_ORIGINATOR_PERSON = "person"
+# QS-431: the charger's artificial best-effort chain (filler / solar priority after the
+# real constraints): dropped and rebuilt whenever another constraint of the car changes
+CONSTRAINT_ORIGINATOR_FILLER = "filler"
 # load_info key carrying the forecasted-person name on a person constraint.
 # Wire value stays "person" for back-compat with persisted/restored constraints.
 CONSTRAINT_FORECASTED_PERSON_KEY = "person"

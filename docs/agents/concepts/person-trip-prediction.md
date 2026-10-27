@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/person.py
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-09-16
+last_verified: 2026-10-27
 ---
 
 # Person, Car, and trip prediction
@@ -196,6 +196,40 @@ Person re-allocated away / covered / need met → person constraint removed
 - Confusing person-car allocation with car-charger assignment. They
   are independent: a person can own multiple cars; a car can be
   plugged into any charger.
+- Pushing a person constraint on a **user-frozen car** (QS-431). Any
+  genuine user action on a car (target %, solar bump, charge now, timed
+  charge, clean constraints, picking the person or the charger on the
+  car card) sets `user_frozen` in its user-originated store
+  (`QSCar.is_user_frozen()`). A frozen car gets **no** automatic person
+  constraint: `_person_constraint_ends_this_cycle` returns True, so a
+  live non-ASAP person constraint is removed (the filler chained behind
+  it is rebuilt from the real SOC — see charger-budgeting) and none is
+  pushed.
+  The person need is still **computed** — it keeps driving allocation
+  and the "trip not covered" notifications. Explicit consequence:
+  **pinning a person on a car disables that car's person-trip charging
+  until unplug / reset** (or the pin is taken by another car). The
+  freeze survives restarts. It ends at an unplug HA sees live, and at
+  the reset button of the car card or of the charger card (both also drop the forecasted person, the
+  system hold and the charge targets, and re-run the allocation). An HA restart replay, the QS-353 system
+  hold and the charger-card car pick do **not** freeze. A person
+  constraint already ASAP at freeze time runs to completion, retargeted
+  to the user's target marker if any. **Documented limitation:** an
+  unplug made while HA is down is not detected for the freeze (the
+  QS-416 boot guard lifts only the car↔charger pins), so the car stays
+  frozen until the next live unplug or a reset — accepted by the user,
+  not to be fixed ("yes 1. : I don't care it will never really happen ,
+  document it , it is very hard to properly fix, so don't fix it").
+  **Documented limitations (review fix #05):** the live unplug ends the
+  freeze only for the **attached** car — a frozen car detached from its
+  charger first (charger-card "no car" pick, `CHANGE CONNECTED CAR`
+  detach) stays frozen, with no automatic person constraint on its next
+  session, until a car-card or charger-card reset (or the departure
+  auto-reset, for a car with a tracker); and selecting the person already
+  shown does not count as a user action (no change), so re-picking the
+  forecasted person after a restart does not freeze — any other user
+  action does. Accepted by the user, not to be fixed ("don't fix",
+  2026-10-27).
 
 ## See also
 
