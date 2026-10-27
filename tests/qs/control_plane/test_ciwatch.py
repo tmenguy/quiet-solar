@@ -508,6 +508,9 @@ _OTHER_RUN_FAILED = {"__typename": "CheckRun", "name": "cursor", "conclusion": "
             id="failing-non-actions-run",
         ),
         pytest.param(_node("SUCCESS", suites=GREEN, more_suites=True), "pending", id="truncated-suites"),
+        pytest.param(  # R5-S2: the failed suite's newer run may sit on the next page
+            _node("FAILURE", suites=RED, more_suites=True), "pending", id="truncated-suites-with-a-visible-failure"
+        ),
         pytest.param(_node("FAILURE", contexts=[_CR_FAILED], suites=GREEN), "green", id="failing-status-alone"),
         pytest.param(_node(None, suites=[_suite("QUEUED", None)]), "pending", id="null-rollup-queued"),
         pytest.param(_node(None, suites=[_suite("COMPLETED", "STARTUP_FAILURE")]), "red", id="null-rollup-startup"),
@@ -556,12 +559,29 @@ _OTHER_RUN_FAILED = {"__typename": "CheckRun", "name": "cursor", "conclusion": "
             _node(
                 "FAILURE",
                 suites=[
-                    {**_suite("COMPLETED", "FAILURE"), "workflowRun": {"databaseId": True, "workflow": {"databaseId": 10}}},
+                    {
+                        **_suite("COMPLETED", "FAILURE"),
+                        "workflowRun": {"databaseId": True, "workflow": {"databaseId": 10}},
+                    },
                     _suite(run=9, workflow=10),
                 ],
             ),
             "red",
             id="a-bool-run-id-is-no-run-id",  # R4 polish: `True` never ranks as run 1
+        ),
+        pytest.param(
+            _node(
+                "FAILURE",
+                suites=[
+                    {
+                        **_suite("COMPLETED", "FAILURE"),
+                        "workflowRun": {"databaseId": 3, "workflow": {"databaseId": True}},
+                    },
+                    _suite(run=9, workflow=1),
+                ],
+            ),
+            "red",
+            id="a-bool-workflow-id-is-no-run",  # R5 polish: `True` never shares workflow 1's key
         ),
         pytest.param(
             _node(
@@ -665,6 +685,24 @@ def test_a_null_check_suites_is_pending_with_no_suite(real_github, fake_runner, 
     pr = prs[7]
     assert pr is not None and (pr.verdict, pr.suites) == ("PENDING", 0)
     assert ciwatch.ci_state(pr) == ("pending", "h1")
+
+
+@pytest.mark.parametrize(
+    ("page_info", "expected"),
+    [
+        pytest.param(None, "green", id="a-null-page-info"),
+        pytest.param({}, "green", id="a-page-info-with-no-flag"),
+        pytest.param({"hasNextPage": True}, "pending", id="a-truncated-page"),
+    ],
+)
+def test_the_suite_page_flag_is_read_defensively(real_github, fake_runner, page_info: Any, expected: str) -> None:
+    """R5-S2: a truncated page reads `pending` before any failure is looked at; a missing flag is no truncation."""
+    node = _node("SUCCESS", suites=GREEN)
+    node["commits"]["nodes"][0]["commit"]["checkSuites"]["pageInfo"] = page_info
+    fake_runner.on(("gh", "api", "graphql"), _graphql({7: node}))
+    prs, _ = real_github.prs([7])
+    pr = prs[7]
+    assert pr is not None and ciwatch.ci_state(pr) == (expected, "h1")
 
 
 def test_a_failed_run_is_red_only_when_its_suite_completes(

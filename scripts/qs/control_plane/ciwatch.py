@@ -13,9 +13,10 @@
   ``CodeRabbit`` status held it ``pending`` for an hour, or made it green before any workflow ran) and
   misses a ``needs:`` job whose check run does not exist yet. No Actions suite → ``PENDING``; a completed
   suite whose conclusion is not in ``PASSING_SUITE_CONCLUSIONS`` → ``FAILURE`` (so red waits for the suite
-  to finish); every suite completed and passing → ``SUCCESS`` (``PENDING`` when the suite list is
-  truncated: the query asks only for ``CI_APP_ID``'s suites, at most 20 Actions suites per head, and the
-  slug filter stays a backstop; a ``null`` suite list or ``nodes`` list is no suite). GitHub creates one suite
+  to finish); every suite completed and passing → ``SUCCESS``. A truncated list always reads ``PENDING``,
+  before any failure is looked at (R5-S2: a failed suite's newer run may be on the next page): the query
+  asks only for ``CI_APP_ID``'s suites, at most 20 Actions suites per head, and the slug filter stays a
+  backstop; a ``null`` suite list or ``nodes`` list is no suite. GitHub creates one suite
   per workflow run, so a new run on the same head (a close/reopen without a push) leaves the old suite next to
   the new one: only the latest suite of each workflow (the highest ``(workflowRun.databaseId, suite
   databaseId)``) counts; a suite with no workflow run yet always counts. A re-run attempt ("re-run jobs")
@@ -131,7 +132,7 @@ def _run_of(suite: dict[str, Any]) -> tuple[Any, tuple[int, int]] | None:
     if not isinstance(run, dict) or type(run.get("databaseId")) is not int:  # a `bool` is no run id (R4)
         return None
     workflow = run.get("workflow")
-    if not isinstance(workflow, dict) or workflow.get("databaseId") is None:
+    if not isinstance(workflow, dict) or type(workflow.get("databaseId")) is not int:  # nor a workflow id (R5)
         return None
     suite_id = suite.get("databaseId")
     return workflow["databaseId"], (run["databaseId"], suite_id if type(suite_id) is int else -1)
@@ -165,9 +166,11 @@ def _verdict(suites: dict[str, Any] | None) -> tuple[str, int]:
     if not actions:
         return "PENDING", 0
     latest = _latest_per_workflow(actions)
+    if (suites.get("pageInfo") or {}).get("hasNextPage"):
+        return "PENDING", len(actions)  # truncated: a failed suite's newer run may be on the next page (R5-S2)
     if any(s.get("status") == "COMPLETED" and s.get("conclusion") not in PASSING_SUITE_CONCLUSIONS for s in latest):
         return "FAILURE", len(actions)
-    if all(s.get("status") == "COMPLETED" for s in latest) and not suites["pageInfo"]["hasNextPage"]:
+    if all(s.get("status") == "COMPLETED" for s in latest):
         return "SUCCESS", len(actions)
     return "PENDING", len(actions)
 

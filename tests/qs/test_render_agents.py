@@ -1400,9 +1400,28 @@ def test_node_catch_up_polls_a_pending_review_by_the_same_rule(tmp_path: Path) -
     wait = str(node_policy.CR_WAIT_S)
     assert f"keeps being polled until it settles, or a re-call past {wait} s since `cr_from` still answers `BUSY`" in flat
     assert f"settles or {wait} s of CodeRabbit wait from `cr_from` pass" not in flat
-    # R4 polish: `cr` is not a `WAIT_ON` key — it only shortens the cap while a request is owed or pending
-    assert "and `msg` (and `cr` while it is `trigger` or `pending` for `cr_head`; `CAP` 180 then)" in flat
+    # R4 polish: `cr` is not a `WAIT_ON` key — it only shortens the cap while a review is pending
+    # R5-S1: after a catch-up push only a `pending` review of `cr_head` holds the wait, never a `trigger`
+    assert "and `msg` (and `cr` while it is `pending` for `cr_head`; `CAP` 180 then)" in flat
+    assert "`trigger` or `pending` for" not in flat
     assert "(and `cr` while `cr_head`'s review is pending)" not in flat
+
+
+def test_node_catch_up_push_skips_an_owed_trigger(tmp_path: Path) -> None:
+    """Fix plan #05 R5-S1: the catch-up push turns a `cr: trigger` into `skipped` in the same write, build step 2
+    points at it, and the wait loop never re-calls the trigger once `head` is not `cr_head`."""
+    flat = _flat(_node_text(tmp_path))
+    assert (
+        "`round.json` gets, in one write, `head` = the new sha, `pushed_at` = `wait_from` = now, and a `cr: trigger`"
+        ' becomes `cr: skipped` ("head moved").' in flat
+    )
+    assert "`round.json` gets `head` = the new sha, `pushed_at` = `wait_from` = now." not in flat
+    assert 'a `cr: trigger` becomes `cr: skipped` ("head moved") (the catch-up push writes it, step 7).' in flat
+    assert (
+        '- `cr: trigger` (only while `head` is `cr_head`; otherwise `cr: skipped`, "head moved", no re-call) →'
+        " re-call `tool coderabbit-trigger` (build step 2)" in flat
+    )
+    assert "- `cr: trigger` → re-call" not in flat
 
 
 def test_node_writes_the_coderabbit_state_with_the_push(tmp_path: Path) -> None:

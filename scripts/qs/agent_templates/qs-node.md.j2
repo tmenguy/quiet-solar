@@ -325,7 +325,8 @@ report of the same round supersedes an earlier one). Each round:
    - any other error → `cr: skipped` at once ("CodeRabbit trigger
      failed" in the summary; never a blocker).
    Once `head` is no longer `cr_head` (a catch-up push), a `cr: trigger`
-   becomes `cr: skipped` ("head moved").
+   becomes `cr: skipped` ("head moved") (the catch-up push writes it,
+   step 7).
 3. **Review** (`step: review`). The three code reviewers in **one**
    message — `qs-node-blind-hunter`, `qs-node-edge-case`,
    `qs-node-acceptance` (with the criteria) — on `git diff
@@ -371,16 +372,17 @@ report of the same round supersedes an earlier one). Each round:
      (no `round start`: the conflict-resolution delta is not a round),
      then triage.
    Nothing is pushed until the gate is green; then `tool push`, and
-   `round.json` gets `head` = the new sha, `pushed_at` = `wait_from` =
-   now. **No CodeRabbit request is made for a catch-up head** ("catch-up
+   `round.json` gets, in one write, `head` = the new sha, `pushed_at` =
+   `wait_from` = now, and a `cr: trigger` becomes `cr: skipped` ("head
+   moved"). **No CodeRabbit request is made for a catch-up head** ("catch-up
    head" in the summary: it has no build round, and its resolutions are
    reviewed above); a review still `pending` for `cr_head` (the round's
    own head, e.g. after a `conflict` exit) keeps being polled until it
    settles, or a re-call past [[ crwait ]] s since `cr_from` still
    answers `BUSY` ("Between loop calls"), its findings landing on that
    head's round. The wait loop runs on `ci`
-   and `msg` (and `cr` while it is `trigger` or `pending` for
-   `cr_head`; `CAP` 180 then); a red
+   and `msg` (and `cr` while it is `pending` for `cr_head`; `CAP` 180
+   then); a red
    catch-up head opens its `ci` finding on the latest build round. When
    the wait ends, triage runs again over the build phase (a late
    CodeRabbit review, the catch-up `ci` row). Then: green with nothing
@@ -569,7 +571,9 @@ A red head's item is `probe.py ci-finding --pr "$PR" --head "$HEAD"
   `cr_from`; each window is checked between loop calls, so a round
   waits about 2×[[ crwait ]] s for CodeRabbit, plus the time until the
   next re-call:
-  - `cr: trigger` → re-call `tool coderabbit-trigger` (build step 2) and
+  - `cr: trigger` (only while `head` is `cr_head`; otherwise `cr:
+    skipped`, "head moved", no re-call) → re-call `tool
+    coderabbit-trigger` (build step 2) and
     act on its answer there; still `BUSY` past [[ crwait ]] s since
     `cr_from` → `cr: skipped` ("CodeRabbit trigger failed");
   - `cr: pending` → `tool coderabbit` for `cr_head`: `reviewed` → `cr:
