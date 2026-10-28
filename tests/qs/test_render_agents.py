@@ -1484,7 +1484,14 @@ def test_node_catchup_rules(tmp_path: Path) -> None:
     # fix plan #02 T1: the error block's re-entry ends the Control Plane's catch-up before the node drops the trigger
     end = "`catchup end` first — it ends the catch-up the Control Plane may still hold"
     assert end in blocking
-    assert blocking.index(end) < blocking.index("then one write — `head` = `HEAD`, `pushed_at` = `wait_from` = now")
+    write = (
+        "then `task state --to unblock` and one `round.json` write, after `catchup end` — `blocked_on` cleared,"
+        " `head` = `HEAD`, `pushed_at` = `wait_from` = now"
+    )
+    assert blocking.index(end) < blocking.index(write)
+    # fix plan #03 W3: no replay promised after `ended: false`
+    assert "only when `catchup end` had answered `ended: true` — after `ended: false` it hits the same guard" in flat
+    assert "rule 5's call answers a `wait` at `HEAD`, acted on" not in flat
     assert "An `error` block met at `step: catchup` (a `catchup` answer, or a `catchup` or `tool push` call" in flat
     assert "An `error` block a `catchup` answer gave" not in flat
     assert "`misses`" in flat[flat.index("## Blocking") :]
@@ -1583,6 +1590,17 @@ def test_control_plane_doc_documents_the_catchup_command() -> None:
     assert "| **adopted**:" in flat
     assert "`misses`" in flat
     assert "the merge is retried once (again after an unblock)" not in flat
+    # fix plan #03 V3: the commands row names `catchup end`, the misses cause its third kind, FAULTS its count
+    assert "/ `catchup unblock` / `catchup end` | `--task T`" in flat
+    assert "all three read-only" not in flat
+    assert "its gate red or its changes left uncommitted, twice" in flat
+    from control_plane import catchup  # type: ignore[import-not-found]
+
+    assert f"| {len(catchup.FAULTS)} names (`catchup.after_*`) |" in flat
+    assert ", ".join(f"`{n.removeprefix('catchup.')}`" for n in catchup.FAULTS[1:]) in flat
+    # fix plan #03 V2 / W2: one repair per guard
+    assert '- "untracked files in the way of the merge": move or delete them, then `info`.' in flat
+    assert '- "a second merge is open" / "a merge is open outside a catch-up": finish the open merge' in flat
 
 
 def test_node_writes_the_coderabbit_state_with_the_push(tmp_path: Path) -> None:

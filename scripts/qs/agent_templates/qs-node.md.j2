@@ -713,13 +713,20 @@ null}` — the cause is already cleared — so unblock and go on). An
 maintainer's repair moved and pushed `HEAD` (the remote branch =
 `HEAD` ≠ `round.json`'s `head`), `catchup end` first — it ends the
 catch-up the Control Plane may still hold (a merge it recorded, in
-`HEAD` and pushed, becomes the next build round's base) — then one
-write — `head` = `HEAD`, `pushed_at` = `wait_from` = now, `catchup` =
-`null`, `step: wait` — so CI runs on the new head and step 6 routes
-again with a new trigger (the one exception to never rewriting the
-trigger: it is ended, not rewritten; a reap between the two: start-up
-rule 5's call answers a `wait` at `HEAD`, acted on as step 7's table
-says); otherwise start-up rule 5 re-runs the same trigger.
+`HEAD` and pushed, becomes the next build round's base) — then `task
+state --to unblock` and one `round.json` write, after `catchup end` —
+`blocked_on` cleared, `head` = `HEAD`, `pushed_at` = `wait_from` =
+now, `catchup` = `null`, `step: wait` — so CI runs on the new head and
+step 6 routes again with a new trigger (the one exception to never
+rewriting the trigger: it is ended, not rewritten; a reap between the
+two: the task is still `blocked`, the orchestrator's message already
+acked, and the remote branch still = `HEAD` ≠ `round.json`'s `head`,
+so the same re-entry — `catchup end` answers `{"ended": false}`, then
+the same unblock and write; a `catchup step` on the ended trigger
+answers the `wait` at `HEAD` (acted on as step 7's table says) only
+when `catchup end` had answered `ended: true` — after `ended: false`
+it hits the same guard again, and one more `info` clears it);
+otherwise start-up rule 5 re-runs the same trigger.
 Clearing `objection` re-reads the finding: `rejected` / `settled` /
 `deferred` (the orchestrator decided) → its entry leaves `pending.json`
 as `blocked_on` is cleared, and go on without it; still open → the

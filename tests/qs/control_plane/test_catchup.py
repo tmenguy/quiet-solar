@@ -370,6 +370,7 @@ ARMED_IN_TESTS = (
     "catchup.after_fixes_write",
     "catchup.after_done_write",
     "catchup.after_end",
+    "catchup.after_rewind",
 )
 
 
@@ -591,6 +592,7 @@ def test_a_failed_temp_file_is_tool_failed(tmp_path: Path, monkeypatch: pytest.M
         ({"inv": 1}, "--inv"),
         ({"implemented": "blue", "inv": 1}, "--implemented"),
         ({"head": "abc1234"}, "--head"),
+        ({"head": None}, "--head"),  # W5 (fix #03): `--head` is required from Python too
         ({"reviewed": "A" * 40}, "--reviewed"),
         ({"seq": 0}, "--seq"),
         ({"implemented": "red", "inv": 0}, "--inv"),
@@ -780,6 +782,7 @@ def test_a_merge_is_not_started_under_the_minimum_left(w: World, clock_s: list[f
         (("rev-parse", "-q", "--verify", "MERGE_HEAD"), 2, "TOOL_FAILED"),
         (("merge-base",), 128, "TOOL_FAILED"),
         (("fetch",), 1, "TOOL_FAILED"),
+        (("merge",), 1, "TOOL_FAILED"),  # no MERGE_HEAD, no untracked file in the way: a failure, never conflicts
     ],
 )
 def test_a_failed_git_call_is_tool_failed(w: World, pattern: tuple[str, ...], code: int, error: str) -> None:
@@ -892,13 +895,12 @@ def test_a_failed_lookup_is_tool_failed(w: World) -> None:
     assert _code(exc) == "TOOL_FAILED" and exc.value.detail.startswith("git log")
 
 
-def test_a_merge_refused_by_a_dirty_file_writes_nothing_more(w: World) -> None:
+def test_a_merge_refused_by_an_untracked_file_is_an_error(w: World) -> None:
+    """W2 (fix #03): an untracked file in the merge's way names itself; the merge runs once after the repair."""
     w.repo.move_main()  # adds m1.txt on main
     (w.repo.wt / "m1.txt").write_text("untracked, in the merge's way\n")
     w.node.start("conflict")
-    with pytest.raises(errors.CpError) as exc:
-        w.node.call()
-    assert _code(exc) == "TOOL_FAILED" and "merge" in exc.value.detail
+    _blocked_error(w.node.call(), "untracked files in the way of the merge")
     cu = w.state()["catchup"]
     assert cu["merge"] is None and cu["clean"] is None and w.state()["catchups"] == 1
     (w.repo.wt / "m1.txt").unlink()
@@ -1999,9 +2001,7 @@ def test_a_killed_merge_that_left_only_an_index_lock_is_an_error(w: World) -> No
         (lambda repo: (repo.wt / ".git" / "index.lock").write_text(""), "a stale index.lock"),
     ],
 )
-def test_guard_a_spoilt_tree_at_the_trigger_writes_nothing(
-    w: World, spoil: Callable[[Repo], Any], detail: str
-) -> None:
+def test_guard_a_spoilt_tree_at_the_trigger_writes_nothing(w: World, spoil: Callable[[Repo], Any], detail: str) -> None:
     """T4: a dirty tree or a stale `index.lock` is a start guard: no count spent, nothing written."""
     w.node.start("conflict")
     assert w.node.call()["next"] == "wait"  # a stale conflict: catchups 1
@@ -2055,10 +2055,13 @@ def test_end_after_the_remote_ahead_repair_records_the_base(w: World) -> None:
 
 
 def test_end_without_a_pushed_merge_records_no_base(w: World) -> None:
-    """T1: a recorded merge never pushed is no base; the catch-up still ends."""
-    _to_the_push(w)
+    """T1: a recorded merge never pushed is no base; the catch-up still ends (W1, fix #03: a `wait` that keeps
+    `round.json`'s head, never one at an unpushed head)."""
+    merge = _to_the_push(w)
     assert w.op("end") == {"ended": True, "base": None}
-    assert w.state()["catchup"] is None and w.state()["base_merge"] is None
+    st = w.state()
+    assert st["catchup"] is None and st["base_merge"] is None
+    assert st["last"]["answer"] == catchup.wait_answer(merge, False)
 
 
 def test_end_without_a_recorded_merge_records_no_base(w: World) -> None:
@@ -2075,6 +2078,7 @@ def test_fault_after_end(w: World) -> None:
     merge = _to_the_push(w)
     w.repo.push()
     _crash("catchup.after_end", lambda: w.op("end"))
+    _invariants(w, catchups=1, merges=1)
     assert w.node.call() == catchup.wait_answer(merge, True)
     assert w.op("end") == {"ended": False, "base": None}
     assert w.state()["catchups"] == 1
@@ -2085,3 +2089,106 @@ def test_end_refuses_a_detached_head(w: World) -> None:
     with pytest.raises(errors.CpError) as exc:
         w.op("end")
     assert exc.value.detail == "detached or not on the branch"
+
+
+def _manual_merge(w: World) -> str:
+    """The maintainer merges ``origin/main`` by hand (a conflict on ``shared.txt``) and resolves it."""
+    subprocess.run(
+        ["git", "merge", "--no-ff", "--no-edit", "origin/main"], cwd=w.repo.wt, capture_output=True, check=False
+    )
+    (w.repo.wt / "shared.txt").write_text("resolved by hand\n")  # never the implementer's merge commit again
+    w.repo.git("add", "shared.txt")
+    w.repo.git("commit", "--no-edit")
+    return w.repo.head()
+
+
+def test_end_records_a_manual_merge_the_catch_up_never_recorded(w: World) -> None:
+    """V1 (fix #03): an aborted conflict, then the maintainer's own merge of origin/main, pushed: `end` finds it."""
+    w.repo.move_main(conflict=True)
+    w.node.start("conflict")
+    assert w.node.call()["mode"] == "resolve"
+    w.repo.git("merge", "--abort")
+    merge = _manual_merge(w)
+    w.repo.push()
+    assert w.op("end") == {"ended": True, "base": merge}
+    st = w.state()
+    assert st["catchup"] is None and st["base_merge"] == {"merge": merge, "head": merge}
+    assert st["last"]["answer"] == catchup.wait_answer(merge, True)
+    assert w.op("base") == {"base": merge}
+
+
+def test_end_replaces_a_recorded_merge_reset_away_by_the_one_in_head(w: World) -> None:
+    """V1: the recorded merge left `HEAD`, the maintainer merged again by hand: the merge in `HEAD` is the base."""
+    w.repo.move_main(conflict=True)
+    w.node.start("conflict")
+    assert w.node.call()["mode"] == "resolve"
+    recorded = w.repo.resolve()
+    assert w.node.implemented()["next"] == "review"
+    assert w.state()["catchup"]["merge"] == recorded
+    w.repo.git("reset", "--hard", w.node.head)
+    merge = _manual_merge(w)
+    w.repo.commit()  # HEAD ≠ the catch-up's head: no rewind, the maintainer's repair
+    w.repo.push()
+    head = w.repo.head()
+    assert merge != recorded
+    assert w.op("end") == {"ended": True, "base": merge}
+    assert w.state()["base_merge"] == {"merge": merge, "head": head}
+
+
+def test_end_never_records_a_merge_that_is_not_the_catch_ups(w: World) -> None:
+    """V1: after an abort and a rebase, `end`'s lookup finds one of main's own merges: no base."""
+    w.repo.move_main(conflict=True)
+    w.repo.main_merge()
+    w.node.start("conflict")
+    assert w.node.call()["mode"] == "resolve"
+    w.repo.git("merge", "--abort")
+    w.repo.git("rebase", "-X", "theirs", "origin/main")
+    w.repo.git("push", "-f", "origin", f"HEAD:refs/heads/{BRANCH}")
+    assert w.op("end") == {"ended": True, "base": None}
+    assert w.state()["base_merge"] is None
+
+
+def test_the_merge_reset_to_the_catch_up_head_merges_again(w: World) -> None:
+    """V2 (fix #03): the documented repair — `HEAD` back at the catch-up's head — merges again, never loops."""
+    w.repo.move_main()
+    w.node.start("conflict")
+    assert w.node.call()["mode"] == "gate"
+    old = w.state()["catchup"]["merge"]
+    w.repo.git("reset", "--hard", w.node.head)
+    w.repo.git("reflog", "expire", "--expire=now", "--all")
+    w.repo.git("gc", "--prune=now", "-q")  # the old merge gone from the object store too
+    gone = subprocess.run(
+        ["git", "cat-file", "-e", f"{old}^{{commit}}"], cwd=w.repo.wt, capture_output=True, check=False
+    )
+    assert gone.returncode != 0
+    assert w.node.call() == {"next": "implement", "mode": "gate", "fixes": []}
+    cu = w.state()["catchup"]
+    assert cu["merge"] == w.repo.head() and cu["clean"] is True and cu["green"] is None and cu["reviewed"] is None
+    _invariants(w, catchups=1, merges=1)
+    assert w.node.drive(w.node.implemented())["next"] == "wait"
+
+
+def test_the_merge_reset_to_the_catch_up_head_over_a_dirty_tree_is_still_an_error(w: World) -> None:
+    """V2: no rewind over uncommitted changes or a stale `index.lock` — the guard stays, nothing written."""
+    w.repo.move_main()
+    w.node.start("conflict")
+    assert w.node.call()["mode"] == "gate"
+    w.repo.git("reset", "--hard", w.node.head)
+    (w.repo.wt / "a.txt").write_text("uncommitted\n")
+    before = w.raw_state()
+    _blocked_error(w.node.call(), "the catch-up merge is no longer in HEAD")
+    (w.repo.wt / "a.txt").write_text("a\n")
+    (w.repo.wt / ".git" / "index.lock").write_text("")
+    _blocked_error(w.node.call(), "the catch-up merge is no longer in HEAD")
+    assert w.raw_state() == before
+
+
+def test_fault_after_rewind(w: World) -> None:
+    w.repo.move_main()
+    w.node.start("conflict")
+    assert w.node.call()["mode"] == "gate"
+    w.repo.git("reset", "--hard", w.node.head)
+    _crash("catchup.after_rewind", w.node.call)
+    assert w.state()["catchup"]["merge"] is None
+    assert w.node.call() == {"next": "implement", "mode": "gate", "fixes": []}
+    _invariants(w, catchups=1, merges=1)

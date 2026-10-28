@@ -65,6 +65,7 @@ FAULTS = (
     "catchup.after_fixes_write",
     "catchup.after_done_write",
     "catchup.after_end",
+    "catchup.after_rewind",
 )
 VERSION = 1
 FROMS = ("conflict", "done")
@@ -81,6 +82,7 @@ MISSES = (MERGE_NOT_COMMITTED, GATE_RED, NOT_COMMITTED)
 DONE_LEFT = ("digest", "report", "state")
 _REF_LOCK = re.compile(r"cannot lock ref|Unable to create '[^'\n]*\.lock'")  # a ref lock, never a full disk
 _KILLED = (124, 127)  # the runner's timeout and failed-to-start exits
+_UNTRACKED = "untracked working tree files would be overwritten by merge"  # git merge's refusal, no MERGE_HEAD
 _NO_OBJECT = "Not a valid object name"  # ``git cat-file -e <sha>^{commit}``'s exit-128 message for a missing object
 _LAST_KINDS = ("wait", "done", "fixes")
 _BLOCK_CAUSES = ("catchups", "misses")
@@ -393,14 +395,18 @@ class _Git:
         """The last first-parent merge of ``head..HEAD`` (the catch-up's merge commit), or ``None``."""
         return self.out("log", "-1", "--first-parent", "--merges", "--format=%H", f"{head}..HEAD") or None
 
-    def merge(self) -> bool:
-        """``git merge --no-ff --no-edit origin/main`` → ``True`` clean, ``False`` conflicts (``MERGE_HEAD`` open)."""
+    def merge(self) -> bool | None:
+        """``git merge --no-ff --no-edit origin/main`` → ``True`` clean, ``False`` conflicts (``MERGE_HEAD`` open),
+        ``None`` refused by untracked files in its way (nothing merged)."""
         args = ("merge", "--no-ff", "--no-edit", "origin/main")
         res = self.call(*args, need=CATCHUP_MIN_LEFT_S)
         if res.returncode == 0:
             return True
-        if res.returncode not in _KILLED and self.merge_open():
-            return False
+        if res.returncode not in _KILLED:
+            if self.merge_open():
+                return False
+            if _UNTRACKED in res.stderr:
+                return None
         raise self.fail(args, res)  # killed or never started: a MERGE_HEAD it left is not a conflict
 
 
@@ -682,6 +688,8 @@ class _Op:
                     return answer
                 clean = self.git.merge()
                 faults.hit("catchup.after_merge")
+                if clean is None:
+                    return _error("untracked files in the way of the merge")
                 if not clean:
                     cu["clean"] = False
                     self.commit(state)
@@ -709,6 +717,11 @@ class _Op:
             return _error("a second merge is open")
         current = self.git.rev("HEAD")
         if not self.git.known(merge) or not self.git.ancestor(merge, current):
+            if current == cu["head"] and not self.git.dirty() and not self.git.index_locked():
+                cu["merge"] = cu["clean"] = cu["green"] = cu["reviewed"] = None  # the repair reset to the head
+                self.commit(state)
+                faults.hit("catchup.after_rewind")
+                return self.progress(state)  # the merge again: counted once, one merge in HEAD
             return _error("the catch-up merge is no longer in HEAD")
         if cu["green"] != current or self.git.dirty():
             return self.implement("gate")  # dirty: the gate never saw the tree that would be pushed
@@ -812,9 +825,10 @@ class _Op:
     def end(self) -> dict[str, Any]:
         """The node ends its trigger (an ``error`` block whose repair moved and pushed ``HEAD``): the catch-up too.
 
-        A recorded merge in ``HEAD`` and pushed becomes ``base_merge`` at ``HEAD``; ``last`` gets the ``wait`` at
-        ``HEAD`` under the ended trigger, so a reap before the node's own write replays it. No catch-up in
-        progress → nothing written.
+        The catch-up's merge in ``HEAD`` — the recorded one, else the lookup's (a merge the maintainer made, with
+        the same checks as the step's) — and ``HEAD`` pushed → ``base_merge`` at ``HEAD``; ``last`` gets the
+        ``wait`` at ``HEAD`` under the ended trigger (``catchup_head`` only when pushed), so a reap before the
+        node's own write replays it. No catch-up in progress → nothing written.
         """
         self.on_branch()
         state = load_state(self.node_dir)
@@ -823,17 +837,16 @@ class _Op:
             return {"ended": False, "base": None}
         current = self.git.rev("HEAD")
         merge = cu["merge"]
-        base = None
-        if (
-            merge is not None
-            and self.git.known(merge)
-            and self.git.ancestor(merge, current)
-            and self.remote_state(current) == "pushed"
-        ):
-            state["base_merge"] = {"merge": merge, "head": current}
-            base = merge
+        if merge is None or not self.git.known(merge) or not self.git.ancestor(merge, current):
+            merge = self.git.lookup(cu["head"])
+            if merge is not None and self.foreign(merge, cu["head"]) is not None:
+                merge = None
+        pushed = self.remote_state(current) == "pushed"
+        base = merge if pushed else None
+        if base is not None:
+            state["base_merge"] = {"merge": base, "head": current}
         state["catchup"] = None
-        state["last"] = {"trigger": cu["trigger"], "kind": "wait", "answer": wait_answer(current, True)}
+        state["last"] = {"trigger": cu["trigger"], "kind": "wait", "answer": wait_answer(current, pushed)}
         self.commit(state)
         faults.hit("catchup.after_end")
         return {"ended": True, "base": base}
@@ -879,7 +892,7 @@ def step(
     if implemented is not None and implemented not in GATES:
         raise errors.CpError("USAGE", f"--implemented must be one of {', '.join(GATES)}: {implemented!r}")
     for flag, value in (("head", head), ("reviewed", reviewed)):
-        if value is not None and not _sha(value):
+        if (value is not None or flag == "head") and not _sha(value):  # --head is required, from Python too
             raise errors.CpError("USAGE", f"--{flag} must be a full lowercase sha: {value!r}")
     if type(seq) is not int or seq < 1 or (inv is not None and (type(inv) is not int or inv < 1)):
         raise errors.CpError("USAGE", "--seq and --inv must be positive integers")
