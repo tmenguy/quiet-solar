@@ -1937,6 +1937,18 @@ def test_every_git_call_runs_under_the_env_contract(w: World) -> None:
             "'/r/.git/refs/remotes/origin/main.lock': No space left on device",
             "TOOL_FAILED",
         ),
+        # A2 (fix #06): git prints the path unescaped inside the quotes, an apostrophe included
+        (
+            "error: cannot lock ref 'refs/remotes/origin/main': Unable to create "
+            "'/home/o'brien/r/.git/refs/remotes/origin/main.lock': File exists.",
+            "BUSY",
+        ),
+        ("fatal: Unable to create '/home/o'brien/r/.git/refs/remotes/origin/main.lock': File exists.", "BUSY"),
+        (
+            "error: cannot lock ref 'refs/remotes/origin/main': Unable to create "
+            "'/home/o'brien/r/.git/refs/remotes/origin/main.lock': No space left on device",
+            "TOOL_FAILED",
+        ),
     ],
 )
 def test_only_a_ref_lock_on_fetch_is_busy(w: World, stderr: str, code: str) -> None:
@@ -2293,4 +2305,32 @@ def test_a_merge_over_uncommitted_changes_is_an_error(w: World) -> None:
     assert w.raw_state() == before
     w.repo.git("checkout", "--", "a.txt")  # the maintainer's repair
     assert w.node.call()["mode"] == "resolve"  # Z2 (fix #05): this call's own merge opened the conflicts
+    assert w.state()["catchup"]["misses"] == ["merge not committed"] and w.state()["catchups"] == 1
+
+
+def test_fault_after_merge_of_a_conflicting_re_merge_after_a_miss_replays_resolve(w: World) -> None:
+    """A1 (fix #06): the implementer aborted the merge; the re-merge conflicts and the node is reaped."""
+    w.repo.move_main(conflict=True)
+    w.node.start("conflict")
+    assert w.node.call()["mode"] == "resolve"
+    w.repo.git("merge", "--abort")
+    w.node.inv += 1
+    inv = w.node.inv
+    _crash("catchup.after_merge", lambda: w.node.call(implemented="red", inv=inv))
+    assert w.node.call(implemented="red", inv=inv)["mode"] == "resolve"  # the original call's answer
+    assert w.state()["catchup"]["misses"] == ["merge not committed"] and w.state()["catchups"] == 1
+
+
+def test_fault_after_merge_of_a_conflicting_re_merge_after_a_rewind_replays_resolve(w: World) -> None:
+    """A1 (fix #06): the recorded merge is reset away, the rewind's re-merge conflicts and the node is reaped."""
+    w.repo.move_main()
+    w.node.start("conflict")
+    assert w.node.call()["mode"] == "gate"
+    w.repo.git("reset", "--hard", w.node.head)
+    w.repo.move_main(conflict=True)
+    w.repo.git("fetch", "origin", "main")
+    w.node.inv += 1
+    inv = w.node.inv
+    _crash("catchup.after_merge", lambda: w.node.call(implemented="green", inv=inv))
+    assert w.node.call(implemented="green", inv=inv)["mode"] == "resolve"  # the original call's answer
     assert w.state()["catchup"]["misses"] == ["merge not committed"] and w.state()["catchups"] == 1
