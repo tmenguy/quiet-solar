@@ -1262,7 +1262,11 @@ _NODE_COMMANDS = (
     "tool gate",
     "mergeable",
     "bucket",
-    "MERGE_HEAD",
+    "catchup step",
+    "catchup base",
+    "catchup fixes",
+    "catchup done",
+    "catchup unblock",
     "--receipt",
     "--to unblock",
 )
@@ -1392,262 +1396,124 @@ def test_node_says_the_coderabbit_wait_is_at_most_two_windows(tmp_path: Path) ->
     assert "then of the trigger's `triggered` / `already` answer" not in flat
 
 
-def test_node_catch_up_polls_a_pending_review_by_the_same_rule(tmp_path: Path) -> None:
-    """Fix plan #03 R3-S1: the catch-up states the wait loop's rule — a re-call first, `BUSY` past the window."""
+def test_node_catch_up_wait_answer_polls_a_pending_review_and_skips_an_owed_trigger(tmp_path: Path) -> None:
+    """Fix plans #03 R3-S1 / #05 R5-S1, kept by #440: the `wait` answer's row turns an owed `cr: trigger` into
+    `skipped` in the node's write, keeps polling a `pending` review by the wait loop's rule, and the wait loop
+    never re-calls the trigger once `head` is not `cr_head`."""
     from control_plane import node_policy  # type: ignore[import-not-found]
 
     flat = _flat(_node_text(tmp_path))
     wait = str(node_policy.CR_WAIT_S)
-    assert f"keeps being polled until it settles, or a re-call past {wait} s since `cr_from` still answers `BUSY`" in flat
-    assert f"settles or {wait} s of CodeRabbit wait from `cr_from` pass" not in flat
-    # R4 polish: `cr` is not a `WAIT_ON` key — it only shortens the cap while a review is pending
-    # R5-S1: after a catch-up push only a `pending` review of `cr_head` holds the wait, never a `trigger`
-    assert "and `msg` (and `cr` while it is `pending` for `cr_head`; `CAP` 180 then)" in flat
-    assert "`trigger` or `pending` for" not in flat
-    assert "(and `cr` while `cr_head`'s review is pending)" not in flat
-
-
-def test_node_catch_up_push_skips_an_owed_trigger(tmp_path: Path) -> None:
-    """Fix plan #05 R5-S1: the catch-up push turns a `cr: trigger` into `skipped` in the same write, build step 2
-    points at it, and the wait loop never re-calls the trigger once `head` is not `cr_head`."""
-    flat = _flat(_node_text(tmp_path))
+    row = flat[flat.index("| `wait` |") : flat.index("| `fixes` |")]
+    assert "one `round.json` write: `catchup` = `null`, `step: wait`;" in row
     assert (
-        "`round.json` gets, in one write, `head` = the new sha, `pushed_at` = `wait_from` = now, `step: wait`"
-        " (a resume re-enters this wait and its triage, never step 8 directly), `base_merge` = `catchup.merge`,"
-        ' `catchup` = `null`, and a `cr: trigger` becomes `cr: skipped` ("head moved").' in flat
+        'with `catchup_head` true also `head` = its `head`, `pushed_at` = `wait_from` = now, and a `cr: trigger`'
+        ' becomes `cr: skipped` ("head moved");' in row
     )
-    assert "`round.json` gets `head` = the new sha, `pushed_at` = `wait_from` = now." not in flat
-    assert "`catchup` stays as it is" not in flat  # fix plan #08: the push write moves the merge to `base_merge`
-    assert 'a `cr: trigger` becomes `cr: skipped` ("head moved") (the catch-up push writes it, step 7).' in flat
+    assert "with `catchup_head` false (a stale `conflict`) `head`, `pushed_at` and `wait_from` are kept" in row
+    assert "No CodeRabbit request is made for a catch-up head" in row
+    assert f"keeps being polled until it settles, or a re-call past {wait} s since `cr_from` still answers `BUSY`" in row
+    assert "on `ci` and `msg` (and `cr` while it is `pending` for `cr_head`; `CAP` 180 then)" in row
+    assert "`trigger` or `pending` for" not in flat
+    assert 'a `cr: trigger` becomes `cr: skipped` ("head moved") (the node\'s `wait` write, step 7).' in flat
     assert (
         '- `cr: trigger` (only while `head` is `cr_head`; otherwise `cr: skipped`, "head moved", no re-call) →'
         " re-call `tool coderabbit-trigger` (build step 2)" in flat
     )
-    assert "- `cr: trigger` → re-call" not in flat
 
 
-def test_node_catch_up_push_resumes_at_the_wait(tmp_path: Path) -> None:
-    """Fix plan #06 R6-S1 / #07 / #08: the catch-up push write sets `step: wait`; start-up rule 5 resumes an
-    interrupted catch-up in four ordered cases, with a scoped closing sentence."""
+def test_node_names_the_catchup_ops(tmp_path: Path) -> None:
+    """#440 D7: the five `catchup` command lines, and build step 2's base from `catchup base` (a visible round is
+    never started again: `ledger.start_round` has no duplicate guard)."""
     flat = _flat(_node_text(tmp_path))
-    assert "and `catchup`, read with `round.json`'s `catchup`, the first case that holds:" in flat
-    case1 = (
-        "1. `git rev-parse -q --verify MERGE_HEAD` succeeds → the implementer's \"finish the open merge\""
-        " invocation (step 7 item 4; never start a new merge over it), and step 7 goes on from its return:"
-        " item 3, then item 4's red-gate rule;"
+    for line in (
+        "`<cp> catchup step --task <T> --from <conflict|done> --seq <N> --head <sha> [--implemented <green|red>"
+        " --inv <inv>] [--reviewed <sha>] --token <token>`",
+        "`<cp> catchup base --task <T> --token <token>`",
+        "`<cp> catchup fixes --task <T> --token <token>`",
+        "`<cp> catchup done --task <T> --token <token>`",
+        "`<cp> catchup unblock --task <T> --token <token>`",
+    ):
+        assert line in flat, line
+    assert "later rounds: `--base` = `catchup base` when it is not `null`" in flat
+    assert (
+        "(a resume at `step: pushed` whose round is already visible calls neither `catchup base` nor `round"
+        " start`)" in flat
     )
-    case2 = (
-        "2. `catchup.counted` is false (blocked at the bound; clearing it set `catchups` = 0) → step 7 from"
-        " `catchup.from` (from `done`: the pre-check first), then item 1;"
-    )
-    case3 = (
-        "3. `catchup.merge` is `null`: `git rev-parse HEAD` = `round.json`'s `head` → step 7 item 2 (the counter"
-        " is already written: never increment it again); `HEAD` ≠ `head` → item 3's recording (the"
-        " `--first-parent --merges` lookup, `catchup.clean` = false: unknown, so reviewed; an empty result →"
-        " item 3's rule), then case 4;"
-    )
-    case4 = (
-        "4. `catchup.merge` is set → finish the remaining sub-steps in order: the gate (a gate-only implementer"
-        " invocation with the code-level fixes in `pending.json`, a new `inv`, under item 4's red-gate rule;"
-        " re-running it is always safe); item 5, if needed; `tool push` (its key replays); the catch-up push"
-        " write."
-    )
-    closing = (
-        "Never a second merge. Cases 1 and 4 never reach step 8 before their push write; case 2 follows step 7"
-        " from its trigger; case 3 follows item 2 (or, after an empty lookup, item 3's rule)."
-    )
-    for part in (case1, case2, case3, case4, closing):
-        assert part in flat, part
-    assert flat.index(case1) < flat.index(case2) < flat.index(case3) < flat.index(case4) < flat.index(closing)
-    assert "never go to done from here" not in flat  # fix plan #08: the unscoped sentence is gone
-    assert "Never re-decide whether to merge" not in flat
-    assert "item 4's conflicts invocation" not in flat  # the open merge's invocation is named
-    assert "the gate if not yet green" not in flat  # R7 nice-to-have: re-running the gate is always safe
-    assert "`catchup` with no `MERGE_HEAD`" not in flat
-    # fix plan #09: the gate no longer resets `reviewed`; the closing sentence no longer says "items 1–2"
-    assert "with `catchup.reviewed` = false if it moved `HEAD`" not in flat
-    assert "follow step 7's items 1–2" not in flat
-    assert "→ step 7 item 1;" not in flat
-    assert "`catchup.from`: its `done` pre-check, then item 1;" not in flat  # fix plan #10 companion
 
 
-def test_node_round_json_records_the_catch_up(tmp_path: Path) -> None:
-    """Fix plan #07 / #08: `catchup` is only the catch-up in progress (with `counted`); `base_merge` is the last
-    pushed catch-up merge — the next `--base` and the catch-up-head marker."""
+@pytest.mark.parametrize("verb", ["implement", "review", "push", "wait", "fixes", "done", "blocked"])
+def test_node_step_7_answers(tmp_path: Path, verb: str) -> None:
+    """#440 D3 / D7: step 7's answer table names each of the seven verbs; a `catchup` `BUSY` has its own rule."""
     flat = _flat(_node_text(tmp_path))
+    table = flat[flat.index("| `next` | you do |") : flat.index("8. **Done**")]
+    assert f"| `{verb}` |" in table
     assert (
-        '"catchup" (`null`, or `{"from": "conflict"|"done", "counted": true|false, "merge": <sha>|null,'
-        ' "clean": true|false|null, "reviewed": <sha>|null, "retried": true|false}` — only the catch-up in'
-        " progress: why it started, whether `catchups` counted it, its merge commit, whether the merge was"
-        " clean, the `HEAD` its resolution review covered, whether an empty merge lookup sent it back to item"
-        " 2; set by step 7 item 1, `null` again when that catch-up ends — its push write, a stale `conflict`,"
-        " or step 8)" in flat
+        "A `catchup` call answering `BUSY` → the same call after 60 s; still `BUSY` after 6 replays → blocked"
+        " `error`." in flat
     )
-    assert '"reviewed": true|false' not in flat  # fix plan #09 R9-S2: a sha, not a boolean
-    assert "whether its resolution review ran" not in flat
-    assert (
-        '"base_merge" (`null`, or the merge commit of the last pushed catch-up: set by the catch-up push write,'
-        " the next build round's `--base`, cleared only in the write right after that round's `round start`"
-        " (step 8 keeps it, so a fix sent back to triage after done still has its `--base`); while it is set,"
-        " the `head` waited on is a catch-up head)" in flat
-    )
-    assert "the catch-up in progress or last pushed" not in flat
-    assert "or by step 8's first write;" not in flat  # fix plan #11 R11-S1
+    assert "- `6` `BUSY` → a `tool` call: replay the **same** key later." in flat
 
 
-def test_node_catch_up_checks_its_bound_before_the_merge(tmp_path: Path) -> None:
-    """Fix plan #07 / #08: from `conflict` the bound comes first; at the bound one write records `counted` false
-    and blocks; otherwise the counter and `catchup` share a write."""
+def test_node_catchup_rules(tmp_path: Path) -> None:
+    """#440 D2 / D7: the trigger is written before the call, `inv` before the launch; the three "never" rules."""
     flat = _flat(_node_text(tmp_path))
-    bound = (
-        "`catchups` already 3 → one write, `step: catchup` and `catchup` = `{\"from\": <the trigger>, \"counted\":"
-        ' false, "merge": null, "clean": null, "reviewed": null, "retried": false}`, then blocked (cause'
-        " `catchups`), with no merge."
+    trigger = (
+        "**The trigger write**, one `round.json` write before the first call: `step: catchup`, `triggers` + 1"
+        ' and `catchup` = `{"from": <the trigger>, "seq": <the new triggers>, "head": <round.json\'s head>}`.'
     )
-    assert bound in flat
-    enter = (
-        "Otherwise, in one `round.json` write: `step: catchup`, `catchups` + 1 and `catchup` ="
-        ' `{"from": <the trigger>, "counted": true, "merge": null, "clean": null, "reviewed": null, "retried":'
-        " false}`."
-    )
-    assert enter in flat
-    assert '"reviewed": false' not in flat  # fix plan #09 R9-S2
-    assert "From `conflict`, item 1 first: a stale exit is counted too, which bounds a stale `mergeable` spin." in flat
-    assert flat.index(bound) < flat.index(enter) < flat.index("Otherwise `git merge --no-ff origin/main`")
-    assert "`catchups` reaching 3" not in flat
-    assert "`catchups` reset to 0" not in flat
-    assert "and increment `catchups`" not in flat
+    assert trigger in flat
+    assert flat.index(trigger) < flat.index("**The call** (a long call)")
+    assert "`inv` + 1 (written before the launch)" in flat
+    assert '"inv" (the implementer invocations: + 1 written before the launch, never reset)' in flat
+    assert "re-run `catchup step` with `round.json`'s trigger and do what it answers" in flat
+    assert "at `step: done`: `catchup done`, and do what it answers" in flat
+    for rule in (
+        "Never write `.qs-node/catchup.json`",
+        "Never run `git merge` or `git fetch origin main` for a catch-up yourself",
+        "Never rewrite the trigger (`round.json`'s `catchup`) on a resume",
+    ):
+        assert rule in flat, rule
+    assert "`catchup unblock` first, then `task state --to unblock`" in flat
+    assert "`misses`" in flat[flat.index("## Blocking") :]
 
 
-def test_node_done_catch_up_fetches_first(tmp_path: Path) -> None:
-    """Fix plan #08 (R8 edge S2): from `done` the fetch and the ancestor test come before item 1 — nothing to
-    merge goes to step 8 with no write and no count, so a `catchups` already 3 never blocks a clean done."""
+def test_node_catchup_old_clauses_gone(tmp_path: Path) -> None:
+    """#440 D7: the prose state machine is gone from the template."""
     flat = _flat(_node_text(tmp_path))
-    first = (
-        "From `done`, `git fetch origin main` and the ancestor test come first: `origin/main` an ancestor of"
-        " `HEAD` (`git merge-base --is-ancestor origin/main HEAD` succeeds) → step 6's pending-fix check, then"
-        " step 8 (its first write clears `catchup`; no other write, no count); otherwise item 1."
-    )
-    assert first in flat
-    assert "(its first write clears `catchup` and `base_merge`;" not in flat  # fix plan #11 R11-S1
-    assert "succeeds) → step 8 directly (its first write" not in flat  # fix plan #10 companion
-    assert flat.index(first) < flat.index("1. `catchups` already 3")
+    for old in (
+        "catchup.retried",
+        "catchup.counted",
+        "start-up rule 5 decides",
+        "`base_merge` = `null` (consumed",
+        "the catch-up push writes it",
+        "base_merge",
+        "`catchups` already 3",
+        "git merge --no-ff",
+    ):
+        assert old not in flat, old
 
 
-def test_node_catch_up_ancestor_outcomes(tmp_path: Path) -> None:
-    """Fix plan #07 / #08: nothing to merge → step 8 from `done`; back to the wait from a stale `conflict`, with
-    `base_merge` untouched; otherwise a `--no-ff` merge, so a merge commit always exists."""
+def test_node_pending_fixes_go_through_the_catchup_tool(tmp_path: Path) -> None:
+    """Fix plans #09–#11, kept by #440: step 6's pending-fix check, step 8's resume and "a `fix` after done" go
+    through `catchup fixes` / `catchup done` and their `drop` / `objections` lists."""
     flat = _flat(_node_text(tmp_path))
+    check = "Otherwise: `catchup fixes` — its `drop` entries leave `pending.json`; `open` not empty →"
+    assert check in flat
+    assert flat.index(check) < flat.index("else step 7 (the round's report comes after it)")
+    assert "step 6's `catchup fixes`" in flat
+    assert "a code-level fix popped during a catch-up rides in the next `implement` answer's `fixes`" in flat
+    assert "a plan-level one waits for the catch-up's `wait`, `done` or `fixes` answer" in flat
+    assert "or when a `catchup` answer lists its finding in `drop`" in flat
+    assert 'each `objections` entry → "a `fix` after done"' in flat
+    assert "leave the finding open, drop its `pending.json` entry and end the turn." in flat
     assert (
-        "`git fetch origin main`, unless the `done` path just did it. `origin/main` an ancestor of `HEAD` →"
-        " nothing to merge: from `done` and `HEAD` = `round.json`'s `head`, step 6's pending-fix check, then"
-        " step 8 (otherwise go on to the merge: unpushed commits go through items 3–6); from `conflict` (a"
-        " stale `mergeable` answer), one write, `catchup` = `null` and `step: wait` (back to"
-        " the wait: CI must still go green; `base_merge` is untouched, so a pushed merge stays the next"
-        " `--base`). Otherwise `git merge --no-ff origin/main` (a merge commit always exists); never start a"
-        " new merge over an open `MERGE_HEAD`." in flat
+        "Clearing `objection` re-reads the finding: `rejected` / `settled` / `deferred` (the orchestrator"
+        " decided) → its entry leaves `pending.json` as `blocked_on` is cleared, and go on without it; still open"
+        " → the objection was overruled, apply the fix as sent." in flat
     )
-    assert "from `done`, step 8;" not in flat
-    assert "(reached only on a resume)" not in flat  # fix plan #10 companion: item 3's retry reaches it too
-    assert "`git merge origin/main`" not in flat
-    assert "or the PR reported `conflict`" not in flat
-
-
-def test_node_catch_up_records_its_merge_and_hands_over_the_fixes(tmp_path: Path) -> None:
-    """Fix plan #07 / #08: the merge commit is recorded by a scoped lookup; the catch-up implementer gets the
-    code-level fixes; a moved `HEAD` resets `reviewed`; the review runs on its condition."""
-    flat = _flat(_node_text(tmp_path))
-    assert (
-        "Once the merge commit exists, record, in one write, `catchup.merge` = it and `catchup.clean`: a clean"
-        " merge → `git rev-parse HEAD` right after it; conflicts → once item 4's implementer has committed the"
-        " resolution, `git log -1 --first-parent --merges --format=%H <round.json's head>..HEAD`." in flat
-    )
-    assert "(`git log -1 --merges --format=%H`)" not in flat  # the unscoped lookup is gone
-    assert "`git log -1 --merges" not in flat  # fix plan #09 R9-S3: only the task branch's own line
-    assert "(an empty result: no merge was made → back to item 2)" not in flat
-    assert "`qs-node-implementer` (a new `inv`), given the code-level fixes in `pending.json`:" in flat
-    assert (
-        '- an open `MERGE_HEAD` → "finish the open merge" (start-up rule 5 on a resume; item 3 after an empty'
-        " lookup)." in flat
-    )
-    assert '- an open `MERGE_HEAD` on a resume → "finish the open merge" (start-up rule 5).' not in flat
-    assert 'Applied fixes are resolved after its commit ("The `fix` protocol").' in flat
-    assert "followed by a write with `catchup.reviewed` = false" not in flat  # fix plan #09 R9-S2
-    assert "the merge left committed locally (start-up rule 5 resumes it on unblock)" in flat
-    assert (
-        "**Resolution review**, when (`catchup.clean` is false, or `HEAD` ≠ `catchup.merge`, or"
-        " `<catchup.merge>^1` ≠ `round.json`'s `head`) and `HEAD` ≠ `catchup.reviewed`: `qs-node-edge-case` on"
-        " `git show --remerge-diff <catchup.merge>`, the commits beside the merge (`git diff"
-        " <head>..<catchup.merge>^1`, when that range is not empty) and the fix diff (`git diff"
-        " <catchup.merge>..HEAD`)" in flat
-    )
-    # fix plan #10 R10-S2: commits made beside an aborted merge are reviewed too
-    assert "when (`catchup.clean` is false or `HEAD` ≠ `catchup.merge`) and" not in flat
-    assert "when `catchup.reviewed` is false" not in flat
-    assert "when `catchup.clean` is false or commits sit on top of the merge" not in flat
-    assert "then triage, then `catchup.reviewed` = `HEAD`." in flat
-    assert "then triage, then `catchup.reviewed` = true." not in flat
-
-
-def test_node_step_6_routes_a_catch_up_wait(tmp_path: Path) -> None:
-    """Fix plan #08 (R8 blind 1/2): step 8 only when `base_merge` is set and the wait did not end on `conflict`;
-    a `conflict` exit always goes to step 7; the `continuing` report is posted once."""
-    flat = _flat(_node_text(tmp_path))
-    assert (
-        "A `conflict` exit always goes to step 7, after the round's `continuing` report (unless already posted)."
-        " Otherwise: `pending.json` holds a fix whose finding is still open (an entry whose finding is no longer"
-        " open is dropped in the same pass) → the round's `continuing` report (unless already posted), then the"
-        " `fix` protocol (a plan-level fix: the plan loop on the delta; a code-level fix: the next round); a"
-        " `convergence.build.blocking` not empty, or CI not green on the current head → the round's"
-        " `continuing` report (unless already posted), next round; else step 7 (the round's report comes after"
-        " it), or step 8 when `base_merge` is set and the wait did not end on `conflict` (a catch-up's own wait:"
-        " item 7)." in flat
-    )
-    assert "or step 8 after a catch-up's own wait (`catchup.merge` set: item 7)." not in flat
-    assert (
-        "When the catch-up wait ends, triage runs again over the build phase (a late CodeRabbit review, the"
-        " catch-up `ci` row), and step 6 routes it: a `conflict` exit → step 7 again; a fix in `pending.json` →"
-        " the `fix` protocol; green with nothing blocking → step 8; findings left blocking → the round's"
-        " `continuing` report (unless already posted), then the next build round (`--base` = `base_merge`)."
-        in flat
-    )
-    assert "a `conflict` exit → step 7 again; green with nothing blocking → step 8;" not in flat
-
-
-def test_node_build_base_follows_the_catch_up_merge(tmp_path: Path) -> None:
-    """Fix plan #07 / #08: `--base` comes from `base_merge`, cleared once the round is started — also on a resume
-    whose round is already visible."""
-    flat = _flat(_node_text(tmp_path))
-    assert (
-        "later rounds default to the previous head, or `--base <base_merge>` when `base_merge` is set); then, in"
-        " one write, `rounds_since_start` + 1 and `base_merge` = `null` (consumed; a resume at `step: pushed`"
-        " whose round is already visible still clears `base_merge`)." in flat
-    )
-    assert "`--base <catchup.merge>`" not in flat
-    assert "`--base` = `catchup.merge`" not in flat
-    assert "`--base <merge commit>`" not in flat
-
-
-def test_node_done_resets_the_catch_up(tmp_path: Path) -> None:
-    """Fix plan #07 / #08 / #11 R11-S1: step 8's first write resets `catchups` and `catchup`; `base_merge` is
-    kept, so a fix sent back to triage after done still has its `--base`."""
-    flat = _flat(_node_text(tmp_path))
-    assert (
-        "**Done** (`step: done`, with `catchups` = 0 and `catchup` = `null` in the same write; `base_merge` is"
-        " kept):" in flat
-    )
-    assert "`base_merge` = `null` in the same write" not in flat
-
-
-def test_node_clearing_a_catchups_block_resumes_through_rule_5(tmp_path: Path) -> None:
-    """Fix plan #08 (R8 edge N5): clearing a `catchups` block sets `catchups` = 0; start-up rule 5 decides."""
-    flat = _flat(_node_text(tmp_path))
-    assert (
-        "clearing `catchups` sets `catchups` = 0 and, when `catchup` is not `null`, `catchup.retried` = false"
-        " (the node then resumes at `step`, and start-up rule 5 decides)." in flat
-    )
-    # fix plan #10 R10-S2: a "merge not committed" block no longer blocks again at once
-    assert "clearing `catchups` sets `catchups` = 0 (the node" not in flat
+    assert "an entry whose finding is no longer open is dropped in the same pass" not in flat
+    assert "no `converged` report visible and `pending.json` holds a fix" not in flat
 
 
 @pytest.mark.parametrize("hdir", [".claude", ".opencode"])
@@ -1674,90 +1540,6 @@ def test_node_implementer_catch_up_applies_the_code_fixes(tmp_path: Path, hdir: 
     )
 
 
-def test_node_catch_up_guards_an_empty_merge_lookup(tmp_path: Path) -> None:
-    """Fix plan #09 R9-S1: an empty lookup is a red gate under item 4's rule — an open `MERGE_HEAD` is finished
-    (the one more invocation), no merge goes back to item 2 at most once (`retried`), a second one blocks."""
-    flat = _flat(_node_text(tmp_path))
-    rule = (
-        "An empty result (no merge was made) is a red gate under item 4's rule: `MERGE_HEAD` still open → the"
-        ' "finish the open merge" invocation (item 4\'s one more invocation); no merge and no `MERGE_HEAD` → back'
-        " to item 2, at most once per catch-up (`catchup.retried` = true, in one write); a second empty result"
-        ' (whatever `MERGE_HEAD` says) → blocked (cause `catchups`, "merge not committed" and the implementer\'s'
-        " output tail in the summary)."
-    )
-    assert rule in flat
-    lookup = "`git log -1 --first-parent --merges --format=%H <round.json's head>..HEAD`."
-    assert flat.index(lookup) < flat.index(rule) < flat.index("`qs-node-implementer` (a new `inv`), given")
-
-
-def test_node_catch_up_retry_is_gate_only(tmp_path: Path) -> None:
-    """Fix plan #09 companion: the red-gate retry, and any invocation once `catchup.merge` is set, is gate only."""
-    flat = _flat(_node_text(tmp_path))
-    assert (
-        '`"gate": "red"` → one more invocation (the retry, and any invocation once `catchup.merge` is set, is'
-        ' "gate only; fix on top of the merge if red" — or item 3\'s "finish the open merge"); still red →'
-        " blocked (cause `catchups`," in flat
-    )
-    assert '`"gate": "red"` → one more invocation; still red' not in flat
-
-
-def test_node_step_6_applies_a_pending_fix_before_done(tmp_path: Path) -> None:
-    """Fix plan #09 R9-S4: a plan-level `fix` popped during a final or catch-up wait is applied before step 7/8;
-    the `fix` protocol points at the check."""
-    flat = _flat(_node_text(tmp_path))
-    check = "Otherwise: `pending.json` holds a fix whose finding is still open"
-    assert check in flat
-    assert flat.index(check) < flat.index("else step 7 (the round's report comes after it)")
-    assert (
-        "apply it **at the end of the current round** (step 6 checks `pending.json` before step 7 or 8; a"
-        " `conflict` exit's catch-up applies the code-level fixes itself):" in flat
-    )
-    assert "Otherwise: `pending.json` holds a fix → " not in flat  # fix plan #10 R10-S1
-    assert "(step 6 checks `pending.json` before step 7 or 8):" not in flat
-
-
-def test_node_a_fix_leaves_pending_once_applied_or_no_longer_open(tmp_path: Path) -> None:
-    """Fix plan #10 R10-S1: a fix whose finding the orchestrator rejected, settled or deferred leaves
-    `pending.json` (the `fix` protocol, and clearing an `objection` block), so step 6 can still reach done."""
-    flat = _flat(_node_text(tmp_path))
-    assert (
-        "A fix leaves `pending.json` once applied, or once its finding is no longer open (`rejected` / `settled`"
-        " / `deferred` by the orchestrator); after the commit (or plan revision) that applies it, `finding state"
-        " <id> --to resolved --commit …`." in flat
-    )
-    assert "An applied fix leaves `pending.json`;" not in flat
-    assert (
-        "Clearing `objection` re-reads the finding: `rejected` / `settled` / `deferred` (the orchestrator"
-        " decided) → its entry leaves `pending.json` as `blocked_on` is cleared, and go on without it; still open"
-        " → the objection was overruled, apply the fix as sent." in flat
-    )
-    assert "(the orchestrator decided) → go on without it;" not in flat
-
-
-def test_node_done_resume_checks_pending_fixes(tmp_path: Path) -> None:
-    """Fix plan #10 R10-S3: a fix popped on a resume at `step: done` is applied (back to triage) when no
-    `converged` report is visible, and answered as "a `fix` after done" when one is."""
-    flat = _flat(_node_text(tmp_path))
-    resume = (
-        "On a resume at `step: done`: a `converged` report visible in `reports` → only the state move is left,"
-        " and a fix in `pending.json` whose finding is still open is handled as \"a `fix` after done\" (an"
-        " objection); entries whose finding is no longer open are dropped; no `converged` report visible and `pending.json` holds a fix whose finding is open → one write back to `step: triage`, then"
-        " step 6's routing."
-    )
-    assert resume in flat
-    assert "On a resume, a `converged` report visible in `reports` means only the state move is left." not in flat
-    assert flat.index("**Done** (`step: done`") < flat.index(resume)
-    assert resume + " The merge is not yours." in flat
-    assert "and a fix in `pending.json` is handled as" not in flat  # fix plan #11 R11-S2
-
-
-def test_node_fix_after_done_drops_its_pending_entry(tmp_path: Path) -> None:
-    """Fix plan #11 R11-S2: "a `fix` after done" drops its `pending.json` entry, so a later resume posts
-    nothing more."""
-    flat = _flat(_node_text(tmp_path))
-    assert "leave the finding open, drop its `pending.json` entry and end the turn." in flat
-
-
 @pytest.mark.parametrize("hdir", [".claude", ".opencode"])
 def test_node_implementer_detached_gate_stops_on_stop_errors(tmp_path: Path, hdir: str) -> None:
     """Fix plan #11 R11-S3: a detached gate's exit code is lost — a finished `STOPPED` / `STALE_TOKEN` JSON
@@ -1778,26 +1560,17 @@ def test_node_wait_loop_conflict_report_is_posted_once(tmp_path: Path) -> None:
     assert "(its report is `continuing`), then" not in flat
 
 
-def test_control_plane_doc_mirrors_the_catch_up_fixes() -> None:
-    """Fix plan #09: `control-plane.md` mirrors `reviewed` / `retried`, the clearing and the scoped lookup."""
+def test_control_plane_doc_documents_the_catchup_command() -> None:
+    """#440 AC6: `control-plane.md` documents the `catchup` command group, its state file and its causes."""
     flat = _flat((REPO_ROOT / "docs" / "workflow" / "control-plane.md").read_text())
-    assert (
-        "`catchup` (only the catch-up in progress: its trigger, whether it was counted, its merge commit, whether"
-        " the merge was clean, the head its resolution review covered, whether an empty merge lookup was"
-        " retried; cleared when it ends: its push, a stale conflict, or done)" in flat
-    )
-    assert "whether its resolution was reviewed; cleared by its push)" not in flat
-    assert "`git log -1 --first-parent --merges`" in flat
-    # fix plan #10 R10-S2
-    assert (
-        "else the merge is retried once (again after an unblock), then blocked" in flat
-    )
-    assert (
-        "a resolution beyond a clean merge, a commit on top of it or a commit beside it (`<head>..<merge>^1`) is"
-        " reviewed by `qs-node-edge-case` on `git show --remerge-diff` and those commits' diffs" in flat
-    )
-    assert "else the merge is retried once, then blocked" not in flat
-    assert "a resolution beyond a clean merge, or a commit on top of it, is reviewed" not in flat
+    assert "### The catch-up (#440)" in flat
+    assert "`.qs-node/catchup.json`" in flat
+    assert "never written by the node" in flat
+    assert "`catchup` reads `pending.json` and owns `catchup.json`" in flat
+    assert "Nothing in the Control Plane reads or writes them" not in flat
+    assert "| **adopted**:" in flat
+    assert "`misses`" in flat
+    assert "the merge is retried once (again after an unblock)" not in flat
 
 
 def test_node_writes_the_coderabbit_state_with_the_push(tmp_path: Path) -> None:

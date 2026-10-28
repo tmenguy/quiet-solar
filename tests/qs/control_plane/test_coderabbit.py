@@ -157,6 +157,7 @@ def test_the_node_policy_values() -> None:
     """The ceilings the maintainer confirmed at #425's FINALIZE (2026-10-27)."""
     assert (node_policy.CR_MAX_REVIEWS, node_policy.CR_WAIT_S, node_policy.CR_MAX_FINDINGS) == (5, 900, 30)
     assert (node_policy.CR_SETTLE_S, node_policy.ROTATE_ROUNDS, node_policy.CI_WAIT_MAX_S) == (120, 4, 2700)
+    assert node_policy.MAX_CATCHUPS == 3  # #440: read by catchup.py
 
 
 # --------------------------------------------------------------------------- refusals before the claim
