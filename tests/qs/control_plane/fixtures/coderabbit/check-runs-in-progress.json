@@ -1,0 +1,25 @@
+[
+ {
+  "total_count": 1,
+  "check_runs": [
+   {
+    "id": 122285927802,
+    "name": "CodeRabbit",
+    "head_sha": "01fc582ec3466626338a79348a9f2c25397836f6",
+    "status": "in_progress",
+    "conclusion": null,
+    "started_at": "2026-10-27T15:30:42Z",
+    "completed_at": null,
+    "output": {
+     "title": "Review in progress",
+     "summary": "Result: In progress - Review in progress"
+    },
+    "app": {
+     "id": 347564,
+     "slug": "coderabbitai",
+     "name": "coderabbitai"
+    }
+   }
+  ]
+ }
+]

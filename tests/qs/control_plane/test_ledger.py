@@ -1289,3 +1289,35 @@ class TestReviewWriter:
             "review:V3",
         )
         assert ledger.blast_radius(lw.conn, "T1", "h9")["id"] == rid
+
+
+# --------------------------------------------------------------------------- #425 D7: the locked variant
+
+
+def test_open_findings_locked_opens_a_validated_batch_in_the_callers_transaction(lw: L) -> None:
+    lw.round()
+    batch = ledger.validate_items([item(title="First"), item(title="Second", symbol="g")], "coderabbit")
+    with db.write(lw.conn):
+        w = ledger.writer(lw.conn, lw.n1, "T1")
+        out = ledger.open_findings_locked(
+            lw.conn, lw.clock, w, task_id="T1", phase="build", source="coderabbit", round_=1, batch=batch
+        )
+        assert lw.conn.in_transaction  # the caller's transaction: nothing committed inside
+    assert len(out["ids"]) == 2 and [lw.row(i)["source"] for i in out["ids"]] == ["coderabbit", "coderabbit"]
+    assert lw.row(out["ids"][0])["actor"] == w.actor and lw.row(out["ids"][0])["round"] == 1
+    with db.write(lw.conn):  # the ledger's replay key: a re-run repeats the ids
+        again = ledger.open_findings_locked(
+            lw.conn, lw.clock, w, task_id="T1", phase="build", source="coderabbit", round_=1, batch=batch
+        )
+    assert again == out and lw.count() == 2
+
+
+def test_open_findings_locked_keeps_the_round_checks(lw: L) -> None:
+    batch = ledger.validate_items(item(), "coderabbit")
+    with db.write(lw.conn):
+        w = ledger.writer(lw.conn, lw.token, "T1")
+        with pytest.raises(errors.CpError) as exc:
+            ledger.open_findings_locked(
+                lw.conn, lw.clock, w, task_id="T1", phase="build", source="coderabbit", round_=3, batch=batch
+            )
+    assert exc.value.code == "NOT_FOUND" and lw.count() == 0

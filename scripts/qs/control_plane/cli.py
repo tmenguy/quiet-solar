@@ -23,6 +23,7 @@ from typing import Any, NoReturn, TextIO
 from . import (
     activeloop,
     alerts,
+    coderabbit,
     codever,
     daemon,
     db,
@@ -60,6 +61,7 @@ items.register_item_tools()  # #400's tools: the parser and the parametrized tes
 ledger.register_export()  # #375's summary sections; the export is reachable only through this module
 activeloop.register_builtin()  # QS-406: the daemon's tick hooks (idempotent; main() calls it again)
 reviews.register_review_tool()  # #407: `tool review` (idempotent; main() calls it again)
+coderabbit.register_coderabbit_tools()  # #425: `tool coderabbit` / `coderabbit-trigger` (idempotent)
 
 
 @dataclass(frozen=True)
@@ -1131,6 +1133,7 @@ def _emit(out: TextIO, payload: dict[str, Any]) -> None:
 def main(argv: Sequence[str] | None = None, *, stdin: TextIO | None = None, stdout: TextIO | None = None) -> int:
     items.register_item_tools()  # cheap, and keeps a reset registry whole before build_parser()
     reviews.register_review_tool()
+    coderabbit.register_coderabbit_tools()
     activeloop.register_builtin()  # likewise for the tick hooks
     io = Io(stdin=stdin or sys.stdin, stdout=stdout or sys.stdout, deps=make_deps())
     argv = list(sys.argv[1:] if argv is None else argv)

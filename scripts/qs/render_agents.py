@@ -44,6 +44,7 @@ import context as context_mod  # type: ignore[import-not-found]
 import jinja2
 import models  # type: ignore[import-not-found]
 import targets  # type: ignore[import-not-found]
+from control_plane.node_policy import CI_WAIT_MAX_S, CR_WAIT_S, ROTATE_ROUNDS  # type: ignore[import-not-found]
 from control_plane.schema_ledger import CATEGORIES, SEVERITIES  # type: ignore[import-not-found]
 from launchers.phases import PHASE_TO_AGENT  # type: ignore[import-not-found]
 
@@ -105,8 +106,8 @@ SUBAGENTS: frozenset[str] = frozenset(
 )
 
 # The second pipeline's agents (epic #369, QS-405 D1): disjoint from the
-# frozen sets above and absent from ``PHASE_TO_AGENT``. Child 6b adds the
-# node's sub-agents. A stem may have its policy row before its template
+# frozen sets above and absent from ``PHASE_TO_AGENT``. #425 (child 6b-2) adds
+# the node's ten sub-agents. A stem may have its policy row before its template
 # exists — ``render_all`` iterates over the discovered templates. They
 # render with NO task facts (``_TASK_AGNOSTIC_FACTS``), so the file is the
 # same at every render site (absent an explicit ``model=`` override).
@@ -117,6 +118,17 @@ SECOND_PIPELINE: frozenset[str] = frozenset(
         "qs-global-review",
         "qs-cross-run-review",
         "qs-final-review",
+        # #425 D1 — the node's sub-agents (launched by the node, not by the Control Plane).
+        "qs-node-plan-writer",
+        "qs-node-plan-critic",
+        "qs-node-plan-concrete",
+        "qs-node-plan-devproxy",
+        "qs-node-plan-scope",
+        "qs-node-plan-delta",
+        "qs-node-implementer",
+        "qs-node-blind-hunter",
+        "qs-node-edge-case",
+        "qs-node-acceptance",
     }
 )
 
@@ -310,6 +322,10 @@ def _make_env(templates_dir: Path) -> jinja2.Environment:
     # task-agnostic, so the second-pipeline agents stay byte-identical at every render site).
     env.globals["finding_severities"] = SEVERITIES
     env.globals["finding_categories"] = CATEGORIES
+    # #425 D7: the node's constants, from the leaf module `control_plane.node_policy` (never `coderabbit.py`).
+    env.globals["cr_wait_s"] = CR_WAIT_S
+    env.globals["rotate_rounds"] = ROTATE_ROUNDS
+    env.globals["ci_wait_max_s"] = CI_WAIT_MAX_S
     return env
 
 
