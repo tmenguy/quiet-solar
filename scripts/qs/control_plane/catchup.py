@@ -1,7 +1,7 @@
 """``cp.py catchup <op>`` (#440): the node's catch-up with ``main`` as a tested state machine.
 
 The node calls ``catchup step`` at each decision point of its catch-up and does what the answer says;
-the decisions and the git effects (the fetch, the merge, the lookups) are made here. Five ops, each a
+the decisions and the git effects (the fetch, the merge, the lookups) are made here. Six ops, each a
 write-kind command (a token check for every op, the read-only ones included):
 
 ==========  =============================================================  ==============================
@@ -14,6 +14,7 @@ op          arguments                                                      answe
 ``fixes``   —                                                              ``fixes``
 ``done``    —                                                              ``done`` or ``fixes``
 ``unblock`` —                                                              ``{"unblocked": <cause>|null}``
+``end``     —                                                              ``{"ended": bool, "base": <sha>|null}``
 ==========  =============================================================  ==============================
 
 **The state** lives in ``<worktree>/.qs-node/catchup.json``, owned by this module and never written by the
@@ -63,6 +64,7 @@ FAULTS = (
     "catchup.after_push_write",
     "catchup.after_fixes_write",
     "catchup.after_done_write",
+    "catchup.after_end",
 )
 VERSION = 1
 FROMS = ("conflict", "done")
@@ -77,7 +79,7 @@ GATE_RED = "gate red"
 NOT_COMMITTED = "changes not committed"  # a green gate over a dirty tree (a commit hook refused the commit)
 MISSES = (MERGE_NOT_COMMITTED, GATE_RED, NOT_COMMITTED)
 DONE_LEFT = ("digest", "report", "state")
-_REF_LOCK = ("cannot lock ref", "Unable to create")
+_REF_LOCK = re.compile(r"cannot lock ref|Unable to create '[^'\n]*\.lock'")  # a ref lock, never a full disk
 _KILLED = (124, 127)  # the runner's timeout and failed-to-start exits
 _NO_OBJECT = "Not a valid object name"  # ``git cat-file -e <sha>^{commit}``'s exit-128 message for a missing object
 _LAST_KINDS = ("wait", "done", "fixes")
@@ -292,6 +294,11 @@ def done_answer(left: list[str], objections: list[dict[str, Any]], drop: list[in
 # --------------------------------------------------------------------------- git
 
 
+def _tail(res: runner.RunResult) -> list[str]:
+    """The output tail, a lone surrogate (a non-UTF-8 byte) replaced by U+FFFD: always JSON-encodable."""
+    return [line.encode("utf-8", "surrogateescape").decode("utf-8", "replace") for line in tools.tail(res)]
+
+
 class _Git:
     """Every git call of an op: in the worktree, bounded by min(``CATCHUP_GIT_TIMEOUT_S``, the op's time left)."""
 
@@ -318,8 +325,7 @@ class _Git:
 
     @staticmethod
     def fail(args: tuple[str, ...], res: runner.RunResult) -> errors.CpError:
-        tail = [line.encode("utf-8", "surrogateescape").decode("utf-8", "replace") for line in tools.tail(res)]
-        return errors.CpError("TOOL_FAILED", f"git {' '.join(args)} exited {res.returncode}", tail=tail)
+        return errors.CpError("TOOL_FAILED", f"git {' '.join(args)} exited {res.returncode}", tail=_tail(res))
 
     def out(self, *args: str) -> str:
         res = self.call(*args)
@@ -375,8 +381,8 @@ class _Git:
         res = self.call(*args, need=CATCHUP_MIN_LEFT_S)
         if res.returncode == 0:
             return
-        if any(marker in res.stderr for marker in _REF_LOCK):
-            raise errors.CpError("BUSY", "git fetch origin main: a ref is locked", tail=tools.tail(res))
+        if _REF_LOCK.search(res.stderr):
+            raise errors.CpError("BUSY", "git fetch origin main: a ref is locked", tail=_tail(res))
         raise self.fail(args, res)
 
     def remote(self, branch: str) -> str | None:
@@ -490,6 +496,27 @@ class _Op:
             return "ahead"
         return "behind"
 
+    def push_check(self, current: str) -> dict[str, Any] | None:
+        """Step 5's push checks (read-only): the remote ahead, or ``current`` not pushed → the error answer."""
+        remote = self.remote_state(current)
+        if remote == "ahead":
+            return _error("the remote branch is ahead of HEAD")
+        if remote != "pushed":
+            return _error("HEAD is not pushed")
+        return None
+
+    def foreign(self, found: str, head: str) -> dict[str, Any] | None:
+        """A looked-up merge that is not the catch-up's → the error answer (a rebase finds one of main's own)."""
+        if not self.git.ancestor(head, found):
+            return _error("the catch-up head is no longer in HEAD")
+        if not self.git.ancestor(self.git.rev(f"{found}^2"), "origin/main"):
+            return _error("a merge that is not origin/main's")
+        return None
+
+    def on_branch(self) -> None:
+        if self.git.branch() != f"refs/heads/{self.branch}":
+            raise errors.CpError("INVALID_STATE", "detached or not on the branch")
+
     def implement(self, mode: str) -> dict[str, Any]:
         open_, _ = self.pending()
         return {"next": "implement", "mode": mode, "fixes": [e for e in open_ if e["level"] == "code"]}
@@ -503,8 +530,7 @@ class _Op:
     # ----------------------------------------------------------------- step (D4)
 
     def step(self, trigger: dict[str, Any], report: tuple[str, int] | None, reviewed: str | None) -> dict[str, Any]:
-        if self.git.branch() != f"refs/heads/{self.branch}":
-            raise errors.CpError("INVALID_STATE", "detached or not on the branch")
+        self.on_branch()
         state = load_state(self.node_dir)
         cu = state["catchup"]
         if cu is None:
@@ -513,8 +539,8 @@ class _Op:
                 if last["kind"] == "wait":
                     answer: dict[str, Any] = last["answer"]
                     return answer
-                if last["kind"] == "done":
-                    return self.resume_done(state)  # replayed: done_report and catchups never moved again
+                if last["kind"] == "done":  # replayed: done_report and catchups never moved again
+                    return self.push_check(self.git.rev("HEAD")) or self.resume_done(state)
                 return self.done_checks(state, trigger)
             if trigger["seq"] <= state["max_seq"]:
                 raise errors.CpError("INVALID_STATE", "a trigger older than the last one")
@@ -550,8 +576,9 @@ class _Op:
         if cu["merge"] is None:
             found = self.git.lookup(cu["head"])
             if found is not None:
-                if not self.git.ancestor(self.git.rev(f"{found}^2"), "origin/main"):
-                    return _error("a merge that is not origin/main's")
+                refused = self.foreign(found, cu["head"])
+                if refused is not None:
+                    return refused
                 cu["merge"], cu["clean"] = found, False
         if cu["merge"] is None:
             cu["misses"].append(MERGE_NOT_COMMITTED)
@@ -579,6 +606,10 @@ class _Op:
         head = trigger["head"]
         if self.git.merge_open():
             return _error("a merge is open outside a catch-up")
+        if self.git.index_locked():
+            return _error("a stale index.lock")
+        if self.git.dirty():
+            return _error("uncommitted changes outside a catch-up")  # the merge would refuse it after the count
         current = self.git.rev("HEAD")
         if current != head:
             return _error("HEAD is not the pushed head")
@@ -631,8 +662,10 @@ class _Op:
         cu = state["catchup"]
         if cu["merge"] is None:
             resolve = "resolve" if not cu["misses"] else "finish"
+            if self.git.index_locked():
+                return _error("a stale index.lock")  # a killed git (a merge before its MERGE_HEAD): no merge over it
             if self.git.merge_open():
-                return self.resolve(resolve)
+                return self.implement(resolve)
             current = self.git.rev("HEAD")
             if current == cu["head"]:
                 if not self.fetched:
@@ -661,8 +694,9 @@ class _Op:
                 found = self.git.lookup(cu["head"])
                 if found is None:
                     return _error("HEAD moved without a merge")
-                if not self.git.ancestor(self.git.rev(f"{found}^2"), "origin/main"):
-                    return _error("a merge that is not origin/main's")
+                refused = self.foreign(found, cu["head"])
+                if refused is not None:
+                    return refused
                 cu["merge"], cu["clean"] = found, False  # unknown, so reviewed
                 self.commit(state)
                 faults.hit("catchup.after_lookup_record")
@@ -702,11 +736,9 @@ class _Op:
     def done_checks(self, state: dict[str, Any], trigger: dict[str, Any]) -> dict[str, Any]:
         """Step 5: pushed, then the pending fixes → ``fixes``, or ``done`` (the counter reset)."""
         current = self.git.rev("HEAD")
-        remote = self.remote_state(current)
-        if remote == "ahead":
-            return _error("the remote branch is ahead of HEAD")
-        if remote != "pushed":
-            return _error("HEAD is not pushed")
+        refused = self.push_check(current)
+        if refused is not None:
+            return refused
         open_, drop = self.pending()
         state["catchup"] = None
         if open_:
@@ -776,6 +808,35 @@ class _Op:
         if open_:
             return fixes_answer(open_, drop)
         return done_answer([item for item in DONE_LEFT if not (ready and item == "state")], [], drop)
+
+    def end(self) -> dict[str, Any]:
+        """The node ends its trigger (an ``error`` block whose repair moved and pushed ``HEAD``): the catch-up too.
+
+        A recorded merge in ``HEAD`` and pushed becomes ``base_merge`` at ``HEAD``; ``last`` gets the ``wait`` at
+        ``HEAD`` under the ended trigger, so a reap before the node's own write replays it. No catch-up in
+        progress → nothing written.
+        """
+        self.on_branch()
+        state = load_state(self.node_dir)
+        cu = state["catchup"]
+        if cu is None:
+            return {"ended": False, "base": None}
+        current = self.git.rev("HEAD")
+        merge = cu["merge"]
+        base = None
+        if (
+            merge is not None
+            and self.git.known(merge)
+            and self.git.ancestor(merge, current)
+            and self.remote_state(current) == "pushed"
+        ):
+            state["base_merge"] = {"merge": merge, "head": current}
+            base = merge
+        state["catchup"] = None
+        state["last"] = {"trigger": cu["trigger"], "kind": "wait", "answer": wait_answer(current, True)}
+        self.commit(state)
+        faults.hit("catchup.after_end")
+        return {"ended": True, "base": base}
 
     def unblock(self) -> dict[str, Any]:
         state = load_state(self.node_dir)
@@ -863,3 +924,10 @@ def unblock(
 ) -> dict[str, Any]:
     """``catchup unblock``: clear a ``catchups`` or ``misses`` block (idempotent: ``{"unblocked": null}``)."""
     return _simple("unblock", conn, run, clock, token, task_id)
+
+
+def end(
+    conn: sqlite3.Connection, run: runner.Runner, clock: clock_mod.Clock, *, token: str, task_id: str
+) -> dict[str, Any]:
+    """``catchup end``: end the catch-up in progress with the node's trigger (its error-block re-entry, T1)."""
+    return _simple("end", conn, run, clock, token, task_id)

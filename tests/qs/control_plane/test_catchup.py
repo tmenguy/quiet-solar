@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from control_plane import catchup, db, errors, faults, node_policy, runner
+from control_plane import catchup, db, errors, faults, gitread, node_policy, runner
 
 from .conftest import insert_node, insert_task, open_run, run_cli, sql
 
@@ -119,6 +119,29 @@ class Repo:
 
     def push(self) -> None:
         self.git("push", "origin", f"HEAD:refs/heads/{BRANCH}")
+
+    def main_merge(self) -> None:
+        """The second clone lands a pull request on ``main``: a merge commit of a feature branch."""
+        self.edits += 1
+        self.git("pull", "--ff-only", "origin", "main", where=self.other)
+        self.git("checkout", "-b", "feature", where=self.other)
+        (self.other / f"f{self.edits}.txt").write_text("feature\n")
+        self.git("add", f"f{self.edits}.txt", where=self.other)
+        self.git("commit", "-m", "feature", where=self.other)
+        self.git("checkout", "main", where=self.other)
+        self.git("merge", "--no-ff", "--no-edit", "feature", where=self.other)
+        self.git("branch", "-D", "feature", where=self.other)
+        self.git("push", "origin", "main", where=self.other)
+
+    def bot_push(self) -> None:
+        """A bot pushes a commit to the task branch from the second clone."""
+        self.git("fetch", "origin", BRANCH, where=self.other)
+        self.git("checkout", "-B", BRANCH, f"origin/{BRANCH}", where=self.other)
+        (self.other / "bot.txt").write_text(f"bot {self.edits}\n")
+        self.git("add", "bot.txt", where=self.other)
+        self.git("commit", "-m", "bot", where=self.other)
+        self.git("push", "origin", BRANCH, where=self.other)
+        self.git("checkout", "main", where=self.other)
 
 
 @pytest.fixture
@@ -346,6 +369,7 @@ ARMED_IN_TESTS = (
     "catchup.after_push_write",
     "catchup.after_fixes_write",
     "catchup.after_done_write",
+    "catchup.after_end",
 )
 
 
@@ -595,6 +619,7 @@ def test_the_cli_step_round_trip(w: World, real_cli_runner: None) -> None:
     assert _cli(w, "base") == (0, {"ok": True, "base": None})
     assert _cli(w, "fixes") == (0, {"ok": True, "next": "fixes", "open": [], "drop": []})
     assert _cli(w, "unblock") == (0, {"ok": True, "unblocked": None})
+    assert _cli(w, "end") == (0, {"ok": True, "ended": False, "base": None})
     code, out = _cli(w, "done")
     assert code == 0 and out["next"] == "done"
 
@@ -615,7 +640,7 @@ def test_the_cli_refuses_bad_step_arguments(w: World, extra: list[str], real_cli
     assert w.raw_state() is None
 
 
-@pytest.mark.parametrize("op", ["base", "fixes", "done", "unblock"])
+@pytest.mark.parametrize("op", ["base", "fixes", "done", "unblock", "end"])
 def test_every_op_honours_stopped(w: World, op: str, real_cli_runner: None) -> None:
     sql(w.db, "UPDATE nodes SET state = 'stopped' WHERE id = 'N1'")
     code, out = _cli(w, op)
@@ -1856,3 +1881,207 @@ def test_a_review_with_commits_beside_the_merge(w: World) -> None:
     merge = w.repo.head()
     assert answer["diffs"] == [f"git show --remerge-diff {merge}", f"git diff {w.node.head}..{merge}^1"]
     assert w.node.call(reviewed="f" * 40)["next"] == "review"  # another sha: ignored
+
+
+# --------------------------------------------------------------------------- fix plan #02
+
+
+def test_every_git_call_runs_under_the_env_contract(w: World) -> None:
+    """T5 (D4): the worktree, no inherited repository location, no credential prompt, a surrogate decode."""
+    w.repo.move_main(conflict=True)
+    w.run = wrap = Wrap()
+    w.node.start("conflict")
+    assert w.node.drive(w.node.call())["next"] == "wait"
+    w.op("base")
+    w.op("end")
+    assert {argv[1] for argv, _ in wrap.calls} >= {"fetch", "merge", "log", "ls-remote", "status", "symbolic-ref"}
+    for argv, kw in wrap.calls:
+        assert argv[0] == "git"
+        assert kw["cwd"] == w.repo.wt
+        assert kw["env_remove"] == gitread.ENV_REMOVED
+        assert kw["env_extra"] == {"GIT_TERMINAL_PROMPT": "0"}
+        assert kw["decode_errors"] == "surrogateescape"
+
+
+@pytest.mark.parametrize(
+    ("stderr", "code"),
+    [
+        ("error: cannot lock ref 'refs/remotes/origin/main': is at 1 but expected 2", "BUSY"),
+        ("fatal: Unable to create '/r/.git/refs/remotes/origin/main.lock': File exists.", "BUSY"),
+        ("fatal: Unable to create '/r/.git/objects/pack/tmp_pack_x': No space left on device", "TOOL_FAILED"),
+        ("fatal: Unable to create temporary file: No space left on device", "TOOL_FAILED"),
+    ],
+)
+def test_only_a_ref_lock_on_fetch_is_busy(w: World, stderr: str, code: str) -> None:
+    """T6: "Unable to create" alone (a full disk) is no ref lock."""
+    w.run = wrap = Wrap()
+    wrap.inject(("fetch",), runner.RunResult(1, "", stderr))
+    w.node.start("done")
+    with pytest.raises(errors.CpError) as exc:
+        w.node.call()
+    assert _code(exc) == code
+
+
+def test_a_busy_fetch_tail_is_sanitised(w: World) -> None:
+    """U1: the `BUSY` tail goes through the same surrogate clean-up as a `TOOL_FAILED` one."""
+    w.run = wrap = Wrap()
+    wrap.inject(("fetch",), runner.RunResult(1, "", "error: cannot lock ref 'refs/remotes/origin/m\udcffain'"))
+    w.node.start("done")
+    with pytest.raises(errors.CpError) as exc:
+        w.node.call()
+    assert _code(exc) == "BUSY"
+    tail = "\n".join(exc.value.extra["tail"])
+    assert "\ufffd" in tail
+    tail.encode("utf-8")
+
+
+@pytest.mark.parametrize("report", [False, True])
+def test_guard_a_rebase_onto_main_is_not_the_catch_up_merge(w: World, report: bool) -> None:
+    """T2: after an abort and a rebase, the lookup finds one of main's own merges: never recorded."""
+    w.repo.move_main(conflict=True)
+    w.repo.main_merge()
+    w.node.start("conflict")
+    assert w.node.call()["mode"] == "resolve"
+    w.repo.git("merge", "--abort")
+    w.repo.git("rebase", "-X", "theirs", "origin/main")
+    before = w.raw_state()
+    answer = w.node.implemented() if report else w.node.call()
+    _blocked_error(answer, "the catch-up head is no longer in HEAD")
+    assert w.raw_state() == before
+
+
+def test_a_replayed_done_after_a_bot_push_is_the_remote_ahead(w: World) -> None:
+    """T3: the `done` replay runs step 5's push checks (read-only) before the recompute."""
+    w.node.start("done")
+    assert w.node.call()["next"] == "done"
+    before = w.raw_state()
+    w.repo.bot_push()
+    _blocked_error(w.node.call(), "the remote branch is ahead of HEAD")
+    assert w.raw_state() == before
+
+
+def test_a_replayed_done_with_an_unpushed_commit_is_not_pushed(w: World) -> None:
+    w.node.start("done")
+    assert w.node.call()["next"] == "done"
+    before = w.raw_state()
+    w.repo.commit()
+    _blocked_error(w.node.call(), "HEAD is not pushed")
+    assert w.raw_state() == before
+
+
+def test_a_killed_merge_that_left_only_an_index_lock_is_an_error(w: World) -> None:
+    """T4: a merge killed before it wrote `MERGE_HEAD` leaves `index.lock`: the retry says so, merges nothing."""
+    w.repo.move_main()
+    lock = w.repo.wt / ".git" / "index.lock"
+
+    def killed(argv: list[str]) -> runner.RunResult:
+        lock.write_text("")
+        return runner.RunResult(124, "", "timeout after 120s")
+
+    w.run = wrap = Wrap()
+    wrap.inject(("merge",), killed)
+    w.node.start("conflict")
+    with pytest.raises(errors.CpError) as exc:
+        w.node.call()
+    assert _code(exc) == "TOOL_FAILED"
+    w.run = wrap = Wrap()
+    _blocked_error(w.node.call(), "a stale index.lock")
+    assert not any(argv[1] == "merge" for argv, _ in wrap.calls)
+    lock.unlink()  # the maintainer's repair
+    assert w.node.call() == {"next": "implement", "mode": "gate", "fixes": []}
+    assert w.state()["catchups"] == 1 and _merge_count(w) == 1
+
+
+@pytest.mark.parametrize(
+    ("spoil", "detail"),
+    [
+        (lambda repo: (repo.wt / "a.txt").write_text("uncommitted\n"), "uncommitted changes outside a catch-up"),
+        (lambda repo: (repo.wt / ".git" / "index.lock").write_text(""), "a stale index.lock"),
+    ],
+)
+def test_guard_a_spoilt_tree_at_the_trigger_writes_nothing(
+    w: World, spoil: Callable[[Repo], Any], detail: str
+) -> None:
+    """T4: a dirty tree or a stale `index.lock` is a start guard: no count spent, nothing written."""
+    w.node.start("conflict")
+    assert w.node.call()["next"] == "wait"  # a stale conflict: catchups 1
+    w.repo.move_main()
+    spoil(w.repo)
+    before = w.raw_state()
+    w.node.start("conflict")
+    _blocked_error(w.node.call(), detail)
+    assert w.raw_state() == before and w.state()["catchups"] == 1
+
+
+def _to_the_push(w: World) -> str:
+    w.repo.move_main()
+    w.node.start("conflict")
+    assert w.node.call()["mode"] == "gate"
+    assert w.node.implemented()["next"] == "push"
+    return w.repo.head()
+
+
+def test_end_after_a_push_whose_step_failed_twice_records_the_base(w: World) -> None:
+    """T1 case 1: `tool push` succeeded, the next step failed twice, the error block's re-entry ends the trigger."""
+    merge = _to_the_push(w)
+    w.repo.push()
+    assert w.op("end") == {"ended": True, "base": merge}
+    st = w.state()
+    assert st["catchup"] is None and st["base_merge"] == {"merge": merge, "head": merge}
+    assert w.op("base") == {"base": merge}  # red CI on the catch-up head → a build round on the merge
+    fid = w.finding()
+    w.pending((fid, "code"))
+    assert w.op("fixes")["open"] == [{"finding_id": fid, "level": "code", "what": "w"}]
+    assert w.op("base") == {"base": merge}  # an open fix → the next round, on the merge
+    assert w.op("end") == {"ended": False, "base": None}  # nothing left to end: nothing written
+    assert w.state() == st
+
+
+def test_end_after_the_remote_ahead_repair_records_the_base(w: World) -> None:
+    """T1 case 2: the maintainer pulled the bot's commit and pushed; then the adopt dead end is gone too."""
+    merge = _to_the_push(w)
+    w.repo.bot_push()
+    _blocked_error(w.node.call(), "the remote branch is ahead of HEAD")
+    w.repo.git("pull", "--no-rebase", "--no-edit", "origin", BRANCH)  # the maintainer's repair
+    w.repo.push()
+    head = w.repo.head()
+    assert w.op("end") == {"ended": True, "base": merge}
+    assert w.state()["base_merge"] == {"merge": merge, "head": head}
+    assert w.op("base") == {"base": merge}
+    w.node.head = head  # the node's drop write: a new trigger carries the new head
+    w.node.start("done")
+    assert w.node.call()["next"] == "done"
+    assert w.state()["catchup"] is None
+
+
+def test_end_without_a_pushed_merge_records_no_base(w: World) -> None:
+    """T1: a recorded merge never pushed is no base; the catch-up still ends."""
+    _to_the_push(w)
+    assert w.op("end") == {"ended": True, "base": None}
+    assert w.state()["catchup"] is None and w.state()["base_merge"] is None
+
+
+def test_end_without_a_recorded_merge_records_no_base(w: World) -> None:
+    w.repo.move_main(conflict=True)
+    w.node.start("conflict")
+    assert w.node.call()["mode"] == "resolve"
+    w.repo.git("merge", "--abort")
+    assert w.op("end") == {"ended": True, "base": None}
+    assert w.state()["catchup"] is None and w.state()["base_merge"] is None
+
+
+def test_fault_after_end(w: World) -> None:
+    """A reap between `catchup end` and the node's write: start-up rule 5's call replays the `wait` at HEAD."""
+    merge = _to_the_push(w)
+    w.repo.push()
+    _crash("catchup.after_end", lambda: w.op("end"))
+    assert w.node.call() == catchup.wait_answer(merge, True)
+    assert w.op("end") == {"ended": False, "base": None}
+    assert w.state()["catchups"] == 1
+
+
+def test_end_refuses_a_detached_head(w: World) -> None:
+    w.repo.git("checkout", "--detach")
+    with pytest.raises(errors.CpError) as exc:
+        w.op("end")
+    assert exc.value.detail == "detached or not on the branch"

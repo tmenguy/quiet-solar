@@ -122,7 +122,9 @@ Every command prints one JSON object (`{"ok": false, "error": "<CODE>",
   - `<cp> catchup base --task <T> --token <token>`;
   - `<cp> catchup fixes --task <T> --token <token>`;
   - `<cp> catchup done --task <T> --token <token>`;
-  - `<cp> catchup unblock --task <T> --token <token>`.
+  - `<cp> catchup unblock --task <T> --token <token>`;
+  - `<cp> catchup end --task <T> --token <token>` ("Blocking": an
+    `error` block's re-entry to the wait).
 
 Only `finding open --input` takes `-` (stdin, fed by a heredoc); every
 other file flag needs a file: write it under `.qs-node/io/`. Pass the
@@ -133,7 +135,9 @@ token as `--token "$(cat .qs-node/token)"`.
 - `4` `STOPPED`, `3` `STALE_TOKEN` (you were superseded by a `tool
   spawn` with `replace`) → make **no other call**; end the turn with
   one line (see "Stop").
-- `6` `BUSY` → a `tool` call: replay the **same** key later.
+- `6` `BUSY` → a `tool` call: replay the **same** key later (a
+  `catchup` call: the next bullet; any other keyless command: the
+  generic retry below).
 - A `catchup` call answering `BUSY` → the same call after 60 s; still
   `BUSY` after 6 replays → blocked `error`.
 - A **red gate** (the implementer's verdict) is never a reason to stop.
@@ -704,14 +708,18 @@ the orchestrator (a `fix`, or an `info` saying to go on). Clearing
 reap between the two: the task is still `blocked`, the orchestrator's
 message already acked, and `catchup unblock` answers `{"unblocked":
 null}` — the cause is already cleared — so unblock and go on). An
-`error` block a `catchup` answer gave (a start guard or the done
-checks: the Control Plane wrote nothing), once cleared: if the
+`error` block met at `step: catchup` (a `catchup` answer, or a
+`catchup` or `tool push` call failing twice), once cleared: if the
 maintainer's repair moved and pushed `HEAD` (the remote branch =
-`HEAD` ≠ `round.json`'s `head`), one write — `head` = `HEAD`,
-`pushed_at` = `wait_from` = now, `catchup` = `null`, `step: wait` — so
-CI runs on the new head and step 6 routes again with a new trigger
-(the one exception to never rewriting the trigger: it is ended, not
-rewritten); otherwise start-up rule 5 re-runs the same trigger.
+`HEAD` ≠ `round.json`'s `head`), `catchup end` first — it ends the
+catch-up the Control Plane may still hold (a merge it recorded, in
+`HEAD` and pushed, becomes the next build round's base) — then one
+write — `head` = `HEAD`, `pushed_at` = `wait_from` = now, `catchup` =
+`null`, `step: wait` — so CI runs on the new head and step 6 routes
+again with a new trigger (the one exception to never rewriting the
+trigger: it is ended, not rewritten; a reap between the two: start-up
+rule 5's call answers a `wait` at `HEAD`, acted on as step 7's table
+says); otherwise start-up rule 5 re-runs the same trigger.
 Clearing `objection` re-reads the finding: `rejected` / `settled` /
 `deferred` (the orchestrator decided) → its entry leaves `pending.json`
 as `blocked_on` is cleared, and go on without it; still open → the

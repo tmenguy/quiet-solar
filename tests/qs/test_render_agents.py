@@ -1267,6 +1267,7 @@ _NODE_COMMANDS = (
     "catchup fixes",
     "catchup done",
     "catchup unblock",
+    "catchup end",
     "--receipt",
     "--to unblock",
 )
@@ -1423,8 +1424,8 @@ def test_node_catch_up_wait_answer_polls_a_pending_review_and_skips_an_owed_trig
 
 
 def test_node_names_the_catchup_ops(tmp_path: Path) -> None:
-    """#440 D7: the five `catchup` command lines, and build step 2's base from `catchup base` (a visible round is
-    never started again: `ledger.start_round` has no duplicate guard)."""
+    """#440 D7: the six `catchup` command lines (`catchup end`: fix plan #02 T1), and build step 2's base from
+    `catchup base` (a visible round is never started again: `ledger.start_round` has no duplicate guard)."""
     flat = _flat(_node_text(tmp_path))
     for line in (
         "`<cp> catchup step --task <T> --from <conflict|done> --seq <N> --head <sha> [--implemented <green|red>"
@@ -1433,6 +1434,7 @@ def test_node_names_the_catchup_ops(tmp_path: Path) -> None:
         "`<cp> catchup fixes --task <T> --token <token>`",
         "`<cp> catchup done --task <T> --token <token>`",
         "`<cp> catchup unblock --task <T> --token <token>`",
+        "`<cp> catchup end --task <T> --token <token>`",
     ):
         assert line in flat, line
     assert "later rounds: `--base` = `catchup base` when it is not `null`" in flat
@@ -1452,7 +1454,10 @@ def test_node_step_7_answers(tmp_path: Path, verb: str) -> None:
         "A `catchup` call answering `BUSY` → the same call after 60 s; still `BUSY` after 6 replays → blocked"
         " `error`." in flat
     )
-    assert "- `6` `BUSY` → a `tool` call: replay the **same** key later." in flat
+    assert (
+        "- `6` `BUSY` → a `tool` call: replay the **same** key later (a `catchup` call: the next bullet; any other"
+        " keyless command: the generic retry below)." in flat
+    )
 
 
 def test_node_catchup_rules(tmp_path: Path) -> None:
@@ -1475,6 +1480,13 @@ def test_node_catchup_rules(tmp_path: Path) -> None:
     ):
         assert rule in flat, rule
     assert "`catchup unblock` first, then `task state --to unblock`" in flat
+    blocking = flat[flat.index("## Blocking") :]
+    # fix plan #02 T1: the error block's re-entry ends the Control Plane's catch-up before the node drops the trigger
+    end = "`catchup end` first — it ends the catch-up the Control Plane may still hold"
+    assert end in blocking
+    assert blocking.index(end) < blocking.index("then one write — `head` = `HEAD`, `pushed_at` = `wait_from` = now")
+    assert "An `error` block met at `step: catchup` (a `catchup` answer, or a `catchup` or `tool push` call" in flat
+    assert "An `error` block a `catchup` answer gave" not in flat
     assert "`misses`" in flat[flat.index("## Blocking") :]
 
 

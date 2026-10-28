@@ -1075,6 +1075,9 @@ COMMANDS: dict[str, Command] = {
         Command(
             "catchup unblock", "write", _catchup_op(catchup.unblock), _conf_task_token, help="clear a catch-up block"
         ),
+        Command(
+            "catchup end", "write", _catchup_op(catchup.end), _conf_task_token, help="end the catch-up in progress"
+        ),
         Command("finding open", "write", _finding_open, _conf_finding_open, help="open findings (JSON) → their ids"),
         Command("finding classify", "write", _finding_classify, _conf_finding_classify, help="classify a finding"),
         Command("finding state", "write", _finding_state, _conf_finding_state, help="move a finding to a state"),

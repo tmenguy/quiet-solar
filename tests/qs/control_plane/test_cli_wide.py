@@ -115,6 +115,7 @@ def samples(f: dict[str, str]) -> dict[str, list[str]]:
         "catchup fixes": ["catchup", "fixes", "--task", "T1"],
         "catchup done": ["catchup", "done", "--task", "T1"],
         "catchup unblock": ["catchup", "unblock", "--task", "T1"],
+        "catchup end": ["catchup", "end", "--task", "T1"],
         "finding open": [
             "finding",
             "open",
@@ -177,6 +178,7 @@ NODE_OK = {
     "catchup fixes",
     "catchup done",
     "catchup unblock",
+    "catchup end",
     "finding open",
     "finding classify",
     "finding state",
