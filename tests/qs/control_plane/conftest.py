@@ -78,6 +78,7 @@ MODULES = (
     "restore",
     "node_policy",  # #425: the node's constants (a leaf)
     "coderabbit",  # #425: the CodeRabbit tools
+    "catchup",  # #440: the node's catch-up
     "cli",
 )
 for _name in MODULES:
