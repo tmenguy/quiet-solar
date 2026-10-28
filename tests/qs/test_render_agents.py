@@ -1406,7 +1406,7 @@ def test_node_catch_up_wait_answer_polls_a_pending_review_and_skips_an_owed_trig
     flat = _flat(_node_text(tmp_path))
     wait = str(node_policy.CR_WAIT_S)
     row = flat[flat.index("| `wait` |") : flat.index("| `fixes` |")]
-    assert "one `round.json` write: `catchup` = `null`, `step: wait`;" in row
+    assert "one `round.json` write: `catchup` = `null`, `blocked_on` = `null`, `step: wait`;" in row  # #440 fix #04 Y3
     assert (
         'with `catchup_head` true also `head` = its `head`, `pushed_at` = `wait_from` = now, and a `cr: trigger`'
         ' becomes `cr: skipped` ("head moved");' in row
@@ -1484,6 +1484,9 @@ def test_node_catchup_rules(tmp_path: Path) -> None:
     # fix plan #02 T1: the error block's re-entry ends the Control Plane's catch-up before the node drops the trigger
     end = "`catchup end` first — it ends the catch-up the Control Plane may still hold"
     assert end in blocking
+    # fix plan #04 Y3: the merge in HEAD — recorded or the maintainer's — is the base
+    assert "(the catch-up's merge in `HEAD` — the one it recorded, or one the maintainer made — pushed," in flat
+    assert "(a merge it recorded, in `HEAD` and pushed," not in flat
     write = (
         "then `task state --to unblock` and one `round.json` write, after `catchup end` — `blocked_on` cleared,"
         " `head` = `HEAD`, `pushed_at` = `wait_from` = now"
@@ -1600,7 +1603,11 @@ def test_control_plane_doc_documents_the_catchup_command() -> None:
     assert ", ".join(f"`{n.removeprefix('catchup.')}`" for n in catchup.FAULTS[1:]) in flat
     # fix plan #03 V2 / W2: one repair per guard
     assert '- "untracked files in the way of the merge": move or delete them, then `info`.' in flat
-    assert '- "a second merge is open" / "a merge is open outside a catch-up": finish the open merge' in flat
+    assert '- "a second merge is open": finish the open merge' in flat
+    # fix plan #04 Y4 / Y2: a merge open outside a catch-up is pushed once committed; the branch and dirty repairs
+    assert '- "a merge is open outside a catch-up": commit and push it (or abort it' in flat
+    assert '- "detached or not on the branch" (`INVALID_STATE`): `git checkout <branch>`, then `info`.' in flat
+    assert '"uncommitted changes in the way of the merge": commit or discard the tracked changes' in flat
 
 
 def test_node_writes_the_coderabbit_state_with_the_push(tmp_path: Path) -> None:

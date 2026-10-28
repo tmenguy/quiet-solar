@@ -1901,7 +1901,7 @@ def test_every_git_call_runs_under_the_env_contract(w: World) -> None:
         assert argv[0] == "git"
         assert kw["cwd"] == w.repo.wt
         assert kw["env_remove"] == gitread.ENV_REMOVED
-        assert kw["env_extra"] == {"GIT_TERMINAL_PROMPT": "0"}
+        assert kw["env_extra"] == {"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}  # X1 (fix #04): English messages
         assert kw["decode_errors"] == "surrogateescape"
 
 
@@ -1911,6 +1911,7 @@ def test_every_git_call_runs_under_the_env_contract(w: World) -> None:
         ("error: cannot lock ref 'refs/remotes/origin/main': is at 1 but expected 2", "BUSY"),
         ("fatal: Unable to create '/r/.git/refs/remotes/origin/main.lock': File exists.", "BUSY"),
         ("fatal: Unable to create '/r/.git/objects/pack/tmp_pack_x': No space left on device", "TOOL_FAILED"),
+        ("fatal: Unable to create '/r/.git/refs/remotes/origin/main.lock': No space left on device", "TOOL_FAILED"),
         ("fatal: Unable to create temporary file: No space left on device", "TOOL_FAILED"),
     ],
 )
@@ -2192,3 +2193,68 @@ def test_fault_after_rewind(w: World) -> None:
     assert w.state()["catchup"]["merge"] is None
     assert w.node.call() == {"next": "implement", "mode": "gate", "fixes": []}
     _invariants(w, catchups=1, merges=1)
+
+
+# --------------------------------------------------------------------------- fix plan #04
+
+
+def test_git_runs_in_the_c_locale_whatever_the_callers(w: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    """X1: git's messages are matched in English — a French caller's untracked refusal still names itself."""
+    for name in ("LANG", "LC_ALL", "LC_MESSAGES"):
+        monkeypatch.setenv(name, "fr_FR.UTF-8")
+    monkeypatch.setenv("LANGUAGE", "fr")
+    w.repo.move_main()  # adds m1.txt on main
+    (w.repo.wt / "m1.txt").write_text("untracked, in the merge's way\n")
+    w.node.start("conflict")
+    _blocked_error(w.node.call(), "untracked files in the way of the merge")
+
+
+@pytest.mark.parametrize("gate", ["green", "red"])
+def test_a_report_over_the_merge_reset_away_is_a_miss_so_the_rewind_is_bounded(w: World, gate: str) -> None:
+    """X2: the implementer resets the recorded merge away and reports: a miss, never a green — two block."""
+    w.repo.move_main()
+    w.node.start("conflict")
+    assert w.node.call()["mode"] == "gate"
+    w.repo.git("reset", "--hard", w.node.head)
+    assert w.node.implemented(gate) == {"next": "implement", "mode": "gate", "fixes": []}  # rewound, merged again
+    cu = w.state()["catchup"]
+    assert cu["misses"] == ["merge not committed"] and cu["green"] is None and cu["merge"] == w.repo.head()
+    w.repo.git("reset", "--hard", w.node.head)
+    answer = w.node.implemented(gate)
+    assert answer == {"next": "blocked", "cause": "misses", "detail": "merge not committed, then merge not committed"}
+    assert w.state()["catchups"] == 1 and _merge_count(w) == 0
+
+
+def test_a_merge_refused_by_untracked_files_in_a_directory_is_an_error(w: World) -> None:
+    """Y2: main adds a file where the worktree has an untracked directory — git's other untracked refusal."""
+    other = w.repo.other
+    w.repo.git("pull", "--ff-only", "origin", "main", where=other)
+    (other / "d").write_text("main's file\n")
+    w.repo.git("add", "d", where=other)
+    w.repo.git("commit", "-m", "d", where=other)
+    w.repo.git("push", "origin", "main", where=other)
+    (w.repo.wt / "d").mkdir()
+    (w.repo.wt / "d" / "x.txt").write_text("untracked\n")
+    w.node.start("conflict")
+    _blocked_error(w.node.call(), "untracked files in the way of the merge")
+    shutil.rmtree(w.repo.wt / "d")
+    assert w.node.call()["mode"] == "gate"
+    assert w.state()["catchups"] == 1
+
+
+def test_a_merge_over_uncommitted_changes_is_an_error(w: World) -> None:
+    """Y2: the implementer aborted the merge and left a tracked change: no merge runs over it, nothing written."""
+    w.repo.move_main(conflict=True)
+    w.node.start("conflict")
+    assert w.node.call()["mode"] == "resolve"
+    w.repo.git("merge", "--abort")
+    (w.repo.wt / "a.txt").write_text("uncommitted\n")  # main never touches a.txt: git would merge over it
+    w.run = wrap = Wrap()
+    _blocked_error(w.node.implemented(), "uncommitted changes in the way of the merge")
+    assert not any(argv[1] == "merge" for argv, _ in wrap.calls)
+    before = w.raw_state()
+    _blocked_error(w.node.call(), "uncommitted changes in the way of the merge")
+    assert w.raw_state() == before
+    w.repo.git("checkout", "--", "a.txt")  # the maintainer's repair
+    assert w.node.call()["mode"] == "finish"
+    assert w.state()["catchup"]["misses"] == ["merge not committed"] and w.state()["catchups"] == 1

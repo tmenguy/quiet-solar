@@ -80,9 +80,12 @@ GATE_RED = "gate red"
 NOT_COMMITTED = "changes not committed"  # a green gate over a dirty tree (a commit hook refused the commit)
 MISSES = (MERGE_NOT_COMMITTED, GATE_RED, NOT_COMMITTED)
 DONE_LEFT = ("digest", "report", "state")
-_REF_LOCK = re.compile(r"cannot lock ref|Unable to create '[^'\n]*\.lock'")  # a ref lock, never a full disk
+_REF_LOCK = re.compile(r"cannot lock ref|Unable to create '[^'\n]*\.lock': File exists")  # never a full disk
 _KILLED = (124, 127)  # the runner's timeout and failed-to-start exits
-_UNTRACKED = "untracked working tree files would be overwritten by merge"  # git merge's refusal, no MERGE_HEAD
+_UNTRACKED = (  # git merge's refusals for untracked files in its way (no MERGE_HEAD)
+    "untracked working tree files would be overwritten by merge",
+    "Updating the following directories would lose untracked files in them",
+)
 _NO_OBJECT = "Not a valid object name"  # ``git cat-file -e <sha>^{commit}``'s exit-128 message for a missing object
 _LAST_KINDS = ("wait", "done", "fixes")
 _BLOCK_CAUSES = ("catchups", "misses")
@@ -319,7 +322,7 @@ class _Git:
         return self.runner.run(
             ["git", *args],
             cwd=self.worktree,
-            env_extra={"GIT_TERMINAL_PROMPT": "0"},
+            env_extra={"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"},  # C: the messages matched here are English
             env_remove=gitread.ENV_REMOVED,
             timeout=min(CATCHUP_GIT_TIMEOUT_S, left),
             decode_errors="surrogateescape",  # a non-UTF-8 byte in git's output is never an INTERNAL decode error
@@ -405,7 +408,7 @@ class _Git:
         if res.returncode not in _KILLED:
             if self.merge_open():
                 return False
-            if _UNTRACKED in res.stderr:
+            if any(text in res.stderr for text in _UNTRACKED):
                 return None
         raise self.fail(args, res)  # killed or never started: a MERGE_HEAD it left is not a conflict
 
@@ -519,6 +522,10 @@ class _Op:
             return _error("a merge that is not origin/main's")
         return None
 
+    def in_head(self, merge: str, current: str) -> bool:
+        """The merge is in the object store and in ``current``'s history."""
+        return self.git.known(merge) and self.git.ancestor(merge, current)
+
     def on_branch(self) -> None:
         if self.git.branch() != f"refs/heads/{self.branch}":
             raise errors.CpError("INVALID_STATE", "detached or not on the branch")
@@ -547,7 +554,7 @@ class _Op:
                     return answer
                 if last["kind"] == "done":  # replayed: done_report and catchups never moved again
                     return self.push_check(self.git.rev("HEAD")) or self.resume_done(state)
-                return self.done_checks(state, trigger)
+                return self.done_checks(state, trigger)  # a ``fixes`` replay re-runs the checks on purpose
             if trigger["seq"] <= state["max_seq"]:
                 raise errors.CpError("INVALID_STATE", "a trigger older than the last one")
             return self.count(state, trigger)
@@ -579,15 +586,16 @@ class _Op:
             return None  # a retried call: never counted twice
         if inv in intake or (intake and inv <= max(intake)):
             raise errors.CpError("INVALID_STATE", "inv regressed")
+        merged = cu["merge"] is not None and self.in_head(cu["merge"], self.git.rev("HEAD"))  # reset away: a miss
         if cu["merge"] is None:
             found = self.git.lookup(cu["head"])
             if found is not None:
                 refused = self.foreign(found, cu["head"])
                 if refused is not None:
                     return refused
-                cu["merge"], cu["clean"] = found, False
-        if cu["merge"] is None:
-            cu["misses"].append(MERGE_NOT_COMMITTED)
+                cu["merge"], cu["clean"], merged = found, False, True
+        if not merged:
+            cu["misses"].append(MERGE_NOT_COMMITTED)  # so the rewind of a merge reset away is bounded too
         elif gate == "red":
             cu["misses"].append(GATE_RED)
         elif self.git.dirty():
@@ -686,6 +694,8 @@ class _Op:
                     self.commit(state)
                     faults.hit("catchup.after_stale")
                     return answer
+                if self.git.dirty():
+                    return _error("uncommitted changes in the way of the merge")  # git would merge over them
                 clean = self.git.merge()
                 faults.hit("catchup.after_merge")
                 if clean is None:
@@ -716,7 +726,7 @@ class _Op:
         if self.git.merge_open():
             return _error("a second merge is open")
         current = self.git.rev("HEAD")
-        if not self.git.known(merge) or not self.git.ancestor(merge, current):
+        if not self.in_head(merge, current):
             if current == cu["head"] and not self.git.dirty() and not self.git.index_locked():
                 cu["merge"] = cu["clean"] = cu["green"] = cu["reviewed"] = None  # the repair reset to the head
                 self.commit(state)
@@ -785,7 +795,7 @@ class _Op:
         if base_merge is None or self.consumed(base_merge):
             return {"base": None}
         merge = base_merge["merge"]
-        if not self.git.known(merge) or not self.git.ancestor(merge, self.git.rev("HEAD")):
+        if not self.in_head(merge, self.git.rev("HEAD")):
             return {"base": None}
         return {"base": base_merge["merge"]}
 
@@ -837,7 +847,7 @@ class _Op:
             return {"ended": False, "base": None}
         current = self.git.rev("HEAD")
         merge = cu["merge"]
-        if merge is None or not self.git.known(merge) or not self.git.ancestor(merge, current):
+        if merge is None or not self.in_head(merge, current):
             merge = self.git.lookup(cu["head"])
             if merge is not None and self.foreign(merge, cu["head"]) is not None:
                 merge = None
