@@ -80,7 +80,9 @@ GATE_RED = "gate red"
 NOT_COMMITTED = "changes not committed"  # a green gate over a dirty tree (a commit hook refused the commit)
 MISSES = (MERGE_NOT_COMMITTED, GATE_RED, NOT_COMMITTED)
 DONE_LEFT = ("digest", "report", "state")
-_REF_LOCK = re.compile(r"cannot lock ref|Unable to create '[^'\n]*\.lock': File exists")  # never a full disk
+_REF_LOCK = re.compile(  # a held lock: never a full disk, git's "cannot lock ref '<ref>': " prefix or not
+    r"Unable to create '[^'\n]*\.lock': File exists|cannot lock ref '[^'\n]*': (?!Unable to create)"
+)
 _KILLED = (124, 127)  # the runner's timeout and failed-to-start exits
 _UNTRACKED = (  # git merge's refusals for untracked files in its way (no MERGE_HEAD)
     "untracked working tree files would be overwritten by merge",
@@ -596,6 +598,8 @@ class _Op:
                 cu["merge"], cu["clean"], merged = found, False, True
         if not merged:
             cu["misses"].append(MERGE_NOT_COMMITTED)  # so the rewind of a merge reset away is bounded too
+            if cu["merge"] is None:
+                cu["clean"] = None  # its merge is not this catch-up's any more: a re-merge's conflicts are `resolve`
         elif gate == "red":
             cu["misses"].append(GATE_RED)
         elif self.git.dirty():
@@ -675,7 +679,7 @@ class _Op:
         """Steps 3 and 4: the merge, then what is left after it (the gate, the review, the push)."""
         cu = state["catchup"]
         if cu["merge"] is None:
-            resolve = "resolve" if not cu["misses"] else "finish"
+            resolve = "resolve" if not cu["misses"] or cu["clean"] is False else "finish"  # False: merged since
             if self.git.index_locked():
                 return _error("a stale index.lock")  # a killed git (a merge before its MERGE_HEAD): no merge over it
             if self.git.merge_open():
@@ -704,7 +708,7 @@ class _Op:
                     cu["clean"] = False
                     self.commit(state)
                     faults.hit("catchup.after_conflict_record")
-                    return self.resolve(resolve)
+                    return self.resolve("resolve")  # this call's own merge opened the conflicts
                 cu["merge"], cu["clean"] = self.git.rev("HEAD"), True
                 self.commit(state)
                 faults.hit("catchup.after_record")

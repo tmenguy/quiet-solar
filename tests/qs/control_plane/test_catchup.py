@@ -836,7 +836,7 @@ def test_an_unreachable_origin_is_tool_failed(w: World) -> None:
 
 def test_a_ref_lock_on_fetch_is_busy(w: World) -> None:
     w.run = wrap = Wrap()
-    wrap.inject(("fetch",), runner.RunResult(1, "", "error: cannot lock ref 'refs/remotes/origin/main'"))
+    wrap.inject(("fetch",), runner.RunResult(1, "", "error: cannot lock ref 'refs/remotes/origin/main': is at 1 but expected 2"))
     w.node.start("done")
     with pytest.raises(errors.CpError) as exc:
         w.node.call()
@@ -1234,7 +1234,8 @@ def test_reap_after_push_before_wait_write(w: World) -> None:
 def test_reap_after_done_answer(w: World) -> None:
     w.node.start("done")
     assert w.node.call()["next"] == "done"
-    w.repo.move_main()  # main moved meanwhile: the replay recomputes step 5 only
+    # main moved meanwhile: the replay is D6's read-only recompute: no count, no merge, `done_report` untouched
+    w.repo.move_main()
     assert w.node.call()["next"] == "done"
     assert w.state()["catchups"] == 0 and _merge_count(w) == 0
 
@@ -1447,12 +1448,24 @@ def test_ac4_10_the_implementer_aborts_the_merge(w: World) -> None:
     head = w.node.head
     w.node.call()
     w.repo.git("merge", "--abort")
-    assert w.node.implemented()["mode"] == "finish"  # one miss: merged again, "finish the open merge"
+    assert w.node.implemented()["mode"] == "resolve"  # Z2 (fix #05): one miss, merged again: conflicts → resolve
     assert w.state()["catchup"]["misses"] == ["merge not committed"]
     w.repo.git("merge", "--abort")
     answer = w.node.implemented()
     assert answer == {"next": "blocked", "cause": "misses", "detail": "merge not committed, then merge not committed"}
     assert w.repo.merges(head) == []
+
+
+def test_a_fresh_conflicting_re_merge_after_a_miss_is_resolve(w: World) -> None:
+    """Z2 (fix #05): a miss, then a re-merge that conflicts → `resolve` (both sides' intents), its replay too."""
+    w.repo.move_main(conflict=True)
+    w.node.start("conflict")
+    assert w.node.call()["mode"] == "resolve"
+    w.repo.git("merge", "--abort")
+    answer = w.node.implemented("red")
+    assert answer["mode"] == "resolve"
+    assert w.state()["catchup"]["misses"] == ["merge not committed"] and w.state()["catchup"]["clean"] is False
+    assert w.node.call() == answer  # the replay reads the open MERGE_HEAD the same way
 
 
 def test_ac4_10_the_implementer_returns_without_committing(w: World) -> None:
@@ -1913,10 +1926,21 @@ def test_every_git_call_runs_under_the_env_contract(w: World) -> None:
         ("fatal: Unable to create '/r/.git/objects/pack/tmp_pack_x': No space left on device", "TOOL_FAILED"),
         ("fatal: Unable to create '/r/.git/refs/remotes/origin/main.lock': No space left on device", "TOOL_FAILED"),
         ("fatal: Unable to create temporary file: No space left on device", "TOOL_FAILED"),
+        # Z1 (fix #05): git's ref transaction prefixes the lock error with "cannot lock ref '<ref>': "
+        (
+            "error: cannot lock ref 'refs/remotes/origin/main': Unable to create "
+            "'/r/.git/refs/remotes/origin/main.lock': File exists.",
+            "BUSY",
+        ),
+        (
+            "error: cannot lock ref 'refs/remotes/origin/main': Unable to create "
+            "'/r/.git/refs/remotes/origin/main.lock': No space left on device",
+            "TOOL_FAILED",
+        ),
     ],
 )
 def test_only_a_ref_lock_on_fetch_is_busy(w: World, stderr: str, code: str) -> None:
-    """T6: "Unable to create" alone (a full disk) is no ref lock."""
+    """T6: "Unable to create" without "File exists" (a full disk) is no ref lock, git's prefix or not."""
     w.run = wrap = Wrap()
     wrap.inject(("fetch",), runner.RunResult(1, "", stderr))
     w.node.start("done")
@@ -1925,10 +1949,22 @@ def test_only_a_ref_lock_on_fetch_is_busy(w: World, stderr: str, code: str) -> N
     assert _code(exc) == code
 
 
+def test_a_real_ref_lock_on_fetch_is_busy(w: World) -> None:
+    """Z1 (fix #05): git's own message for a held ref lock, on a real repository, is `BUSY`."""
+    w.repo.move_main()
+    lock = w.repo.wt / w.repo.git("rev-parse", "--git-path", "refs/remotes/origin/main.lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("")
+    w.node.start("done")
+    with pytest.raises(errors.CpError) as exc:
+        w.node.call()
+    assert _code(exc) == "BUSY"
+
+
 def test_a_busy_fetch_tail_is_sanitised(w: World) -> None:
     """U1: the `BUSY` tail goes through the same surrogate clean-up as a `TOOL_FAILED` one."""
     w.run = wrap = Wrap()
-    wrap.inject(("fetch",), runner.RunResult(1, "", "error: cannot lock ref 'refs/remotes/origin/m\udcffain'"))
+    wrap.inject(("fetch",), runner.RunResult(1, "", "error: cannot lock ref 'refs/remotes/origin/m\udcffain': is at 1 but expected 2"))
     w.node.start("done")
     with pytest.raises(errors.CpError) as exc:
         w.node.call()
@@ -2256,5 +2292,5 @@ def test_a_merge_over_uncommitted_changes_is_an_error(w: World) -> None:
     _blocked_error(w.node.call(), "uncommitted changes in the way of the merge")
     assert w.raw_state() == before
     w.repo.git("checkout", "--", "a.txt")  # the maintainer's repair
-    assert w.node.call()["mode"] == "finish"
+    assert w.node.call()["mode"] == "resolve"  # Z2 (fix #05): this call's own merge opened the conflicts
     assert w.state()["catchup"]["misses"] == ["merge not committed"] and w.state()["catchups"] == 1
