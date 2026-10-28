@@ -690,8 +690,8 @@ The causes: `question` (with its `question_id` and, when a finding is
 concerned, its `finding_id`: scope / criteria, a flip-flop you will not
 decide alone, CI against a settled trade-off, `not_fixed` twice, a
 `discovered` entry with `shrinks: true`), `ci_wait`, `catchups` (the
-catch-up bound), `misses` (a catch-up's merge not committed or its gate
-red, twice), `objection`, `classifier` (a refused action), `error` (a
+catch-up bound), `misses` (a catch-up's merge not committed, its gate
+red or its changes left uncommitted, twice), `objection`, `classifier` (a refused action), `error` (a
 command failing twice).
 
 On a later turn, unblock (`task state --to unblock`, `blocked_on`

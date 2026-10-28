@@ -74,8 +74,12 @@ PENDING_FILE = "pending.json"
 LOCK_FILE = "catchup.lock"
 MERGE_NOT_COMMITTED = "merge not committed"
 GATE_RED = "gate red"
+NOT_COMMITTED = "changes not committed"  # a green gate over a dirty tree (a commit hook refused the commit)
+MISSES = (MERGE_NOT_COMMITTED, GATE_RED, NOT_COMMITTED)
 DONE_LEFT = ("digest", "report", "state")
 _REF_LOCK = ("cannot lock ref", "Unable to create")
+_KILLED = (124, 127)  # the runner's timeout and failed-to-start exits
+_NO_OBJECT = "Not a valid object name"  # ``git cat-file -e <sha>^{commit}``'s exit-128 message for a missing object
 _LAST_KINDS = ("wait", "done", "fixes")
 _BLOCK_CAUSES = ("catchups", "misses")
 _CATCHUP_KEYS = frozenset(
@@ -171,7 +175,7 @@ def _catchup_ok(value: Any) -> bool:
         and _opt_sha(value["reviewed"])
         and isinstance(value["misses"], list)
         and len(value["misses"]) <= 2
-        and all(m in (MERGE_NOT_COMMITTED, GATE_RED) for m in value["misses"])
+        and all(m in MISSES for m in value["misses"])
         and isinstance(value["intake"], list)
         and all(_count(i) and i >= 1 for i in value["intake"])
         and _block_ok(value["block"])
@@ -221,9 +225,15 @@ def save_state(node_dir: Path, state: dict[str, Any]) -> None:
     tmp: str | None = None
     try:
         fd, tmp = tempfile.mkstemp(dir=node_dir, prefix=f".{STATE_FILE}.", suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        try:
+            handle = os.fdopen(fd, "w", encoding="utf-8")
+        except OSError:
+            os.close(fd)
+            raise
+        with handle:
             handle.write(text)
-        backups._fsync(Path(tmp))
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp, node_dir / STATE_FILE)
     except OSError as exc:
         if tmp is not None:
@@ -234,7 +244,12 @@ def save_state(node_dir: Path, state: dict[str, Any]) -> None:
 
 
 def _entry_ok(entry: Any) -> bool:
-    return isinstance(entry, dict) and type(entry.get("finding_id")) is int and entry.get("level") in ("code", "plan")
+    return (
+        isinstance(entry, dict)
+        and type(entry.get("finding_id")) is int
+        and 1 <= entry["finding_id"] <= ledger.MAX_INT  # SQLite binds it: never an INTERNAL overflow
+        and entry.get("level") in ("code", "plan")
+    )
 
 
 def load_pending(node_dir: Path) -> list[dict[str, Any]]:
@@ -298,11 +313,13 @@ class _Git:
             env_extra={"GIT_TERMINAL_PROMPT": "0"},
             env_remove=gitread.ENV_REMOVED,
             timeout=min(CATCHUP_GIT_TIMEOUT_S, left),
+            decode_errors="surrogateescape",  # a non-UTF-8 byte in git's output is never an INTERNAL decode error
         )
 
     @staticmethod
     def fail(args: tuple[str, ...], res: runner.RunResult) -> errors.CpError:
-        return errors.CpError("TOOL_FAILED", f"git {' '.join(args)} exited {res.returncode}", tail=tools.tail(res))
+        tail = [line.encode("utf-8", "surrogateescape").decode("utf-8", "replace") for line in tools.tail(res)]
+        return errors.CpError("TOOL_FAILED", f"git {' '.join(args)} exited {res.returncode}", tail=tail)
 
     def out(self, *args: str) -> str:
         res = self.call(*args)
@@ -311,9 +328,10 @@ class _Git:
         return res.stdout.strip()
 
     def branch(self) -> str:
-        args = ("symbolic-ref", "--short", "HEAD")
+        """``HEAD``'s full ref (``refs/heads/<name>``: a tag of the same name never makes it ambiguous)."""
+        args = ("symbolic-ref", "-q", "HEAD")
         res = self.call(*args)
-        if res.returncode in (1, 128):
+        if res.returncode == 1:
             raise errors.CpError("INVALID_STATE", "detached or not on the branch")
         if res.returncode != 0:
             raise self.fail(args, res)
@@ -335,11 +353,22 @@ class _Git:
         return self._yes_no("merge-base", "--is-ancestor", a, b)
 
     def known(self, sha: str) -> bool:
+        """The commit is in the object store; only a missing object is ``False``, any other failure ``TOOL_FAILED``."""
         args = ("cat-file", "-e", f"{sha}^{{commit}}")
         res = self.call(*args)
-        if res.returncode in (124, 127):
-            raise self.fail(args, res)
-        return res.returncode == 0
+        if res.returncode == 0:
+            return True
+        if res.returncode == 1 or (res.returncode == 128 and _NO_OBJECT in res.stderr):
+            return False
+        raise self.fail(args, res)
+
+    def dirty(self) -> bool:
+        """A tracked file changed and not committed (staged or not); untracked files do not count."""
+        return self.out("status", "--porcelain", "--untracked-files=no") != ""
+
+    def index_locked(self) -> bool:
+        """``.git/index.lock`` exists (a killed git left it: every later git write fails on it)."""
+        return (self.worktree / self.out("rev-parse", "--git-path", "index.lock")).exists()
 
     def fetch(self) -> None:
         args = ("fetch", "origin", "main")
@@ -364,9 +393,9 @@ class _Git:
         res = self.call(*args, need=CATCHUP_MIN_LEFT_S)
         if res.returncode == 0:
             return True
-        if self.merge_open():
+        if res.returncode not in _KILLED and self.merge_open():
             return False
-        raise self.fail(args, res)
+        raise self.fail(args, res)  # killed or never started: a MERGE_HEAD it left is not a conflict
 
 
 # --------------------------------------------------------------------------- one op
@@ -392,7 +421,10 @@ class _Op:
         if not self.worktree.is_dir():
             raise errors.CpError("INVALID_STATE", f"task {task_id}'s worktree {self.worktree} is not a directory")
         self.node_dir = self.worktree / ".qs-node"
-        self.node_dir.mkdir(exist_ok=True)
+        try:
+            self.node_dir.mkdir(exist_ok=True)
+        except OSError as exc:
+            raise errors.CpError("TOOL_FAILED", f"cannot create {self.node_dir}: {exc}") from exc
         self.git = _Git(run, self.worktree, self.start)
         self.fetched = False
 
@@ -462,12 +494,16 @@ class _Op:
         open_, _ = self.pending()
         return {"next": "implement", "mode": mode, "fixes": [e for e in open_ if e["level"] == "code"]}
 
+    def resolve(self, mode: str) -> dict[str, Any]:
+        """An open merge for the implementer — unless a killed git left ``index.lock`` (the maintainer's repair)."""
+        if self.git.index_locked():
+            return _error("a stale index.lock")
+        return self.implement(mode)
+
     # ----------------------------------------------------------------- step (D4)
 
-    def step(
-        self, trigger: dict[str, Any], implemented: str | None, inv: int | None, reviewed: str | None
-    ) -> dict[str, Any]:
-        if self.git.branch() != self.branch:
+    def step(self, trigger: dict[str, Any], report: tuple[str, int] | None, reviewed: str | None) -> dict[str, Any]:
+        if self.git.branch() != f"refs/heads/{self.branch}":
             raise errors.CpError("INVALID_STATE", "detached or not on the branch")
         state = load_state(self.node_dir)
         cu = state["catchup"]
@@ -477,6 +513,8 @@ class _Op:
                 if last["kind"] == "wait":
                     answer: dict[str, Any] = last["answer"]
                     return answer
+                if last["kind"] == "done":
+                    return self.resume_done(state)  # replayed: done_report and catchups never moved again
                 return self.done_checks(state, trigger)
             if trigger["seq"] <= state["max_seq"]:
                 raise errors.CpError("INVALID_STATE", "a trigger older than the last one")
@@ -489,9 +527,8 @@ class _Op:
             faults.hit("catchup.after_adopt")
         if cu["block"] is not None:
             return blocked(cu["block"]["cause"], cu["block"]["detail"])
-        if implemented is not None:
-            assert inv is not None
-            answer_ = self.intake(state, implemented, inv)
+        if report is not None:
+            answer_ = self.intake(state, *report)
             if answer_ is not None:
                 return answer_
         if reviewed is not None and reviewed == self.git.rev("HEAD"):
@@ -520,6 +557,8 @@ class _Op:
             cu["misses"].append(MERGE_NOT_COMMITTED)
         elif gate == "red":
             cu["misses"].append(GATE_RED)
+        elif self.git.dirty():
+            cu["misses"].append(NOT_COMMITTED)  # a gate over uncommitted changes gated no commit
         else:
             cu["green"] = self.git.rev("HEAD")
         intake.append(inv)
@@ -593,7 +632,7 @@ class _Op:
         if cu["merge"] is None:
             resolve = "resolve" if not cu["misses"] else "finish"
             if self.git.merge_open():
-                return self.implement(resolve)
+                return self.resolve(resolve)
             current = self.git.rev("HEAD")
             if current == cu["head"]:
                 if not self.fetched:
@@ -614,7 +653,7 @@ class _Op:
                     cu["clean"] = False
                     self.commit(state)
                     faults.hit("catchup.after_conflict_record")
-                    return self.implement(resolve)
+                    return self.resolve(resolve)
                 cu["merge"], cu["clean"] = self.git.rev("HEAD"), True
                 self.commit(state)
                 faults.hit("catchup.after_record")
@@ -635,10 +674,10 @@ class _Op:
         if self.git.merge_open():
             return _error("a second merge is open")
         current = self.git.rev("HEAD")
-        if not self.git.ancestor(merge, current):
+        if not self.git.known(merge) or not self.git.ancestor(merge, current):
             return _error("the catch-up merge is no longer in HEAD")
-        if cu["green"] != current:
-            return self.implement("gate")
+        if cu["green"] != current or self.git.dirty():
+            return self.implement("gate")  # dirty: the gate never saw the tree that would be pushed
         first = self.git.rev(f"{merge}^1")
         if (not cu["clean"] or current != merge or first != cu["head"]) and cu["reviewed"] != current:
             diffs = [f"git show --remerge-diff {merge}"]
@@ -676,7 +715,11 @@ class _Op:
             faults.hit("catchup.after_fixes_write")
             return fixes_answer(open_, drop)
         with db.read(self.conn):
-            top = self.conn.execute("SELECT max(id) FROM reports WHERE task_id = ?", (self.task_id,)).fetchone()[0]
+            number = ledger.latest_round(self.conn, self.task_id, "build")
+            top = self.conn.execute(
+                "SELECT max(id) FROM reports WHERE task_id = ? AND phase = 'build' AND round = ?",
+                (self.task_id, number),
+            ).fetchone()[0]
         state["catchups"] = 0
         state["last"] = {"trigger": dict(trigger), "kind": "done", "answer": None}
         state["done_report"] = int(top or 0)
@@ -696,7 +739,8 @@ class _Op:
         base_merge = state["base_merge"]
         if base_merge is None or self.consumed(base_merge):
             return {"base": None}
-        if not self.git.ancestor(base_merge["merge"], self.git.rev("HEAD")):
+        merge = base_merge["merge"]
+        if not self.git.known(merge) or not self.git.ancestor(merge, self.git.rev("HEAD")):
             return {"base": None}
         return {"base": base_merge["merge"]}
 
@@ -707,6 +751,10 @@ class _Op:
         state = load_state(self.node_dir)
         if state["catchup"] is not None:
             raise errors.CpError("INVALID_STATE", "a catch-up is in progress")
+        return self.resume_done(state)
+
+    def resume_done(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Step 8's resume (read-only): the latest build round's latest report against ``done_report``."""
         with db.read(self.conn):
             number = ledger.latest_round(self.conn, self.task_id, "build")
             report = self.conn.execute(
@@ -719,15 +767,15 @@ class _Op:
         converged = (
             report is not None
             and report["status"] == "converged"
-            and done_report is not None
-            and int(report["id"]) > done_report
+            and (done_report is None or int(report["id"]) > done_report)  # no done recorded: the round's own counts
         )
+        ready = task_state == "ready_to_merge"  # never asked again: ready_to_merge → ready_to_merge is forbidden
         open_, drop = self.pending()
         if converged:
-            return done_answer([] if task_state == "ready_to_merge" else ["state"], open_, drop)
+            return done_answer([] if ready else ["state"], open_, drop)
         if open_:
             return fixes_answer(open_, drop)
-        return done_answer(list(DONE_LEFT), [], drop)
+        return done_answer([item for item in DONE_LEFT if not (ready and item == "state")], [], drop)
 
     def unblock(self) -> dict[str, Any]:
         state = load_state(self.node_dir)
@@ -774,9 +822,10 @@ def step(
             raise errors.CpError("USAGE", f"--{flag} must be a full lowercase sha: {value!r}")
     if type(seq) is not int or seq < 1 or (inv is not None and (type(inv) is not int or inv < 1)):
         raise errors.CpError("USAGE", "--seq and --inv must be positive integers")
+    report = (implemented, inv) if implemented is not None and inv is not None else None
     op = _Op(conn, run, clock, token, task_id)
     with op.locked():
-        return op.step({"from": trigger_from, "seq": seq, "head": head}, implemented, inv, reviewed)
+        return op.step({"from": trigger_from, "seq": seq, "head": head}, report, reviewed)
 
 
 def _simple(

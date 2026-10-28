@@ -289,12 +289,12 @@ class World:
             [number, base, head],
         )
 
-    def report(self, number: int, status: str = "converged") -> int:
+    def report(self, number: int, status: str = "converged", phase: str = "build") -> int:
         sql(
             self.db,
             "INSERT INTO reports (task_id, phase, round, status, summary, fields, at)"
-            " VALUES ('T1', 'build', ?, ?, 's', '{}', 'x')",
-            [number, status],
+            " VALUES ('T1', ?, ?, ?, 's', '{}', 'x')",
+            [phase, number, status],
         )
         return int(sql(self.db, "SELECT max(id) FROM reports")[0][0])
 
@@ -481,7 +481,15 @@ def test_an_unreadable_state_file_is_invalid_state(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "data",
-    ['{"finding_id": 1}', '[{"finding_id": true, "level": "code"}]', '[{"finding_id": 1, "level": "x"}]', "[1]", "{x"],
+    [
+        '{"finding_id": 1}',
+        '[{"finding_id": true, "level": "code"}]',
+        '[{"finding_id": 1, "level": "x"}]',
+        "[1]",
+        "{x",
+        '[{"finding_id": 0, "level": "code"}]',
+        '[{"finding_id": 9223372036854775808, "level": "code"}]',
+    ],
 )
 def test_a_malformed_pending_file_is_invalid_state(tmp_path: Path, data: str) -> None:
     (tmp_path / "pending.json").write_text(data)
@@ -512,6 +520,30 @@ def test_a_crash_before_the_replace_leaves_the_old_file(tmp_path: Path, monkeypa
     assert _code(exc) == "TOOL_FAILED"
     assert (tmp_path / "catchup.json").read_text() == before
     assert sorted(p.name for p in tmp_path.iterdir()) == ["catchup.json"]  # the temp file is gone
+
+
+def test_a_failed_fdopen_closes_the_descriptor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path = tmp_path / "node"
+    tmp_path.mkdir()
+    made: list[int] = []
+    real_mkstemp = catchup.tempfile.mkstemp
+
+    def mkstemp(**kw: Any) -> tuple[int, str]:
+        fd, name = real_mkstemp(**kw)
+        made.append(fd)
+        return fd, name
+
+    def boom(*a: Any, **k: Any) -> Any:
+        raise OSError("no handle")
+
+    monkeypatch.setattr(catchup.tempfile, "mkstemp", mkstemp)
+    monkeypatch.setattr(catchup.os, "fdopen", boom)
+    with pytest.raises(errors.CpError) as exc:
+        catchup.save_state(tmp_path, catchup.empty_state())
+    assert _code(exc) == "TOOL_FAILED" and len(made) == 1
+    with pytest.raises(OSError):
+        os.fstat(made[0])  # closed
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_a_failed_temp_file_is_tool_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -617,6 +649,14 @@ def test_the_task_checks_come_before_any_git(w: World, change: str, word: str) -
         w.node.call()
     assert _code(exc) == "INVALID_STATE" and word in exc.value.detail
     assert wrap.calls == []
+
+
+def test_a_node_dir_that_is_a_file_is_tool_failed(w: World) -> None:
+    w.node_dir.write_text("not a directory\n")
+    w.node.start("conflict")
+    with pytest.raises(errors.CpError) as exc:
+        w.node.call()
+    assert _code(exc) == "TOOL_FAILED" and ".qs-node" in exc.value.detail
 
 
 def test_a_held_lock_is_busy(w: World) -> None:
@@ -735,6 +775,21 @@ def test_a_detached_head_is_invalid_state(w: World) -> None:
     assert _code(exc) == "INVALID_STATE" and exc.value.detail == "detached or not on the branch"
 
 
+def test_a_tag_named_like_the_branch_is_accepted(w: World) -> None:
+    w.repo.git("tag", BRANCH)
+    w.node.start("conflict")
+    assert w.node.call()["next"] == "wait"
+
+
+def test_a_fatal_branch_probe_is_tool_failed(w: World) -> None:
+    w.run = wrap = Wrap()
+    wrap.inject(("symbolic-ref",), runner.RunResult(128, "", "fatal: not a git repository"))
+    w.node.start("conflict")
+    with pytest.raises(errors.CpError) as exc:
+        w.node.call()
+    assert _code(exc) == "TOOL_FAILED" and exc.value.detail.startswith("git symbolic-ref")
+
+
 def test_another_branch_is_invalid_state(w: World) -> None:
     w.repo.git("checkout", "-b", "elsewhere")
     w.node.start("conflict")
@@ -760,15 +815,44 @@ def test_a_ref_lock_on_fetch_is_busy(w: World) -> None:
     assert _code(exc) == "BUSY"
 
 
-@pytest.mark.parametrize(("pattern", "code"), [(("ls-remote",), 128), (("cat-file",), 124)])
-def test_a_failed_remote_check_is_tool_failed(w: World, pattern: tuple[str, ...], code: int) -> None:
+@pytest.mark.parametrize(
+    ("pattern", "code", "stderr"),
+    [
+        (("ls-remote",), 128, "boom"),
+        (("cat-file",), 124, "boom"),
+        (("cat-file",), 128, "fatal: not a git repository (or any of the parent directories): .git"),
+        (("cat-file",), 2, "boom"),
+    ],
+)
+def test_a_failed_remote_check_is_tool_failed(w: World, pattern: tuple[str, ...], code: int, stderr: str) -> None:
     w.run = wrap = Wrap()
     wrap.inject(("ls-remote",), runner.RunResult(0, "f" * 40 + "\trefs/heads/QS_1\n", ""))
-    wrap.inject(pattern, runner.RunResult(code, "", "boom"))
+    wrap.inject(pattern, runner.RunResult(code, "", stderr))
     w.node.start("done")
     with pytest.raises(errors.CpError) as exc:
         w.node.call()
     assert _code(exc) == "TOOL_FAILED"
+
+
+def test_a_missing_object_exit_1_is_the_remote_ahead(w: World) -> None:
+    w.run = wrap = Wrap()
+    wrap.inject(("ls-remote",), runner.RunResult(0, "f" * 40 + "\trefs/heads/QS_1\n", ""))
+    wrap.inject(("cat-file",), runner.RunResult(1, "", ""))
+    w.node.start("done")
+    _blocked_error(w.node.call(), "the remote branch is ahead of HEAD")
+
+
+def test_non_utf8_git_output_is_tool_failed(w: World) -> None:
+    subprocess.run(
+        [b"git", b"remote", b"set-url", b"origin", b"/nonexistent/qs440-\xff\xfe"], cwd=w.repo.wt, check=True
+    )
+    w.node.start("done")
+    with pytest.raises(errors.CpError) as exc:
+        w.node.call()
+    assert _code(exc) == "TOOL_FAILED" and "fetch" in exc.value.detail
+    tail = "\n".join(exc.value.extra["tail"])
+    assert "\ufffd" in tail
+    tail.encode("utf-8")  # no lone surrogate reaches the JSON output
 
 
 def test_a_failed_lookup_is_tool_failed(w: World) -> None:
@@ -795,6 +879,53 @@ def test_a_merge_refused_by_a_dirty_file_writes_nothing_more(w: World) -> None:
     (w.repo.wt / "m1.txt").unlink()
     assert w.node.call()["mode"] == "gate"  # the same call: the merge runs once
     assert w.state()["catchups"] == 1
+
+
+def _real_merge_then(w: World, result: runner.RunResult, *, lock: bool = False) -> Hook:
+    """A ``git merge`` that really runs (and may leave ``MERGE_HEAD``), then answers ``result``."""
+
+    def hook(argv: list[str]) -> runner.RunResult:
+        subprocess.run(argv, cwd=w.repo.wt, capture_output=True, check=False)
+        if lock:
+            (w.repo.wt / ".git" / "index.lock").write_text("")
+        return result
+
+    return hook
+
+
+@pytest.mark.parametrize("code", [124, 127])
+def test_a_killed_merge_is_tool_failed_and_records_no_conflict(w: World, code: int) -> None:
+    w.repo.move_main(conflict=True)
+    w.run = wrap = Wrap()
+    wrap.inject(("merge",), _real_merge_then(w, runner.RunResult(code, "", "timeout after 120s")))
+    w.node.start("conflict")
+    with pytest.raises(errors.CpError) as exc:
+        w.node.call()
+    assert _code(exc) == "TOOL_FAILED" and exc.value.detail.startswith("git merge")
+    cu = w.state()["catchup"]
+    assert cu["clean"] is None and cu["merge"] is None and w.state()["catchups"] == 1
+
+
+def test_a_conflicted_merge_that_left_an_index_lock_is_an_error(w: World) -> None:
+    w.repo.move_main(conflict=True)
+    w.run = wrap = Wrap()
+    wrap.inject(("merge",), _real_merge_then(w, runner.RunResult(1, "", "CONFLICT"), lock=True))
+    w.node.start("conflict")
+    _blocked_error(w.node.call(), "a stale index.lock")
+    assert w.state()["catchup"]["clean"] is False
+    w.run = runner.Runner()
+    _blocked_error(w.node.call(), "a stale index.lock")  # the resume: still the lock
+    (w.repo.wt / ".git" / "index.lock").unlink()  # the maintainer's repair
+    assert w.node.call() == {"next": "implement", "mode": "resolve", "fixes": []}
+    assert w.state()["catchups"] == 1 and _merge_count(w) == 0
+
+
+def test_an_open_merge_with_a_stale_index_lock_is_an_error(w: World) -> None:
+    w.repo.move_main(conflict=True)
+    w.node.start("conflict")
+    assert w.node.call()["mode"] == "resolve"
+    (w.repo.wt / ".git" / "index.lock").write_text("")
+    _blocked_error(w.node.call(), "a stale index.lock")
 
 
 # --------------------------------------------------------------------------- the trigger rule (D2)
@@ -849,6 +980,12 @@ def _merge_count(w: World) -> int:
     return len(w.repo.merges(w.node.head))
 
 
+def _invariants(w: World, *, catchups: int, merges: int) -> None:
+    """AC3: no counter applied twice, at most one merge commit for the catch-up."""
+    assert w.state()["catchups"] == catchups
+    assert _merge_count(w) == merges
+
+
 def test_fault_after_adopt(w: World) -> None:
     w.repo.move_main(conflict=True)
     w.node.start("conflict")
@@ -857,7 +994,8 @@ def test_fault_after_adopt(w: World) -> None:
     _crash("catchup.after_adopt", w.node.call)
     assert w.node.call() == {"next": "implement", "mode": "resolve", "fixes": []}
     st = w.state()
-    assert st["catchups"] == 1 and st["catchup"]["from"] == "conflict" and st["catchup"]["trigger"]["seq"] == 2
+    assert st["catchup"]["from"] == "conflict" and st["catchup"]["trigger"]["seq"] == 2
+    _invariants(w, catchups=1, merges=0)
 
 
 def test_fault_after_intake(w: World) -> None:
@@ -870,7 +1008,8 @@ def test_fault_after_intake(w: World) -> None:
     answer = w.node.call(implemented="green", inv=1)  # the retry repeats the report
     assert answer["next"] == "review"
     cu = w.state()["catchup"]
-    assert cu["intake"] == [1] and cu["misses"] == [] and _merge_count(w) == 1
+    assert cu["intake"] == [1] and cu["misses"] == []
+    _invariants(w, catchups=1, merges=1)
 
 
 def test_a_retried_report_after_tool_failed_counts_once(w: World) -> None:
@@ -897,6 +1036,7 @@ def test_fault_after_reviewed(w: World) -> None:
     assert review["next"] == "review"
     _crash("catchup.after_reviewed", lambda: w.node.call(reviewed=review["head"]))
     assert w.node.call() == {"next": "push", "head": review["head"]}  # a resume: the review is recorded
+    _invariants(w, catchups=1, merges=1)
 
 
 def test_fault_after_unblock(w: World) -> None:
@@ -909,9 +1049,9 @@ def test_fault_after_unblock(w: World) -> None:
     assert w.node.call()["cause"] == "catchups"
     _crash("catchup.after_unblock", lambda: w.op("unblock"))
     assert w.op("unblock") == {"unblocked": None}
-    assert w.state()["catchups"] == 0
+    _invariants(w, catchups=0, merges=0)
     assert w.node.call()["mode"] == "gate"
-    assert w.state()["catchups"] == 1
+    _invariants(w, catchups=1, merges=1)
 
 
 def test_fault_after_bound(w: World) -> None:
@@ -925,7 +1065,8 @@ def test_fault_after_bound(w: World) -> None:
     _crash("catchup.after_bound", w.node.call)
     answer = w.node.call()
     assert answer["next"] == "blocked" and answer["cause"] == "catchups"
-    assert w.state()["catchups"] == 3 and _merge_count(w) == 0 and w.state()["catchup"]["counted"] is False
+    assert w.state()["catchup"]["counted"] is False
+    _invariants(w, catchups=3, merges=0)
 
 
 def test_fault_after_count(w: World) -> None:
@@ -933,16 +1074,16 @@ def test_fault_after_count(w: World) -> None:
     w.node.start("conflict")
     _crash("catchup.after_count", w.node.call)
     assert w.node.call()["mode"] == "gate"
-    assert w.state()["catchups"] == 1 and _merge_count(w) == 1
+    _invariants(w, catchups=1, merges=1)
 
 
 def test_fault_after_fetch_precheck(w: World) -> None:
     w.repo.move_main()
     w.node.start("done")
     _crash("catchup.after_fetch_precheck", w.node.call)
-    assert w.state()["catchups"] == 0
+    _invariants(w, catchups=0, merges=0)
     assert w.node.call()["mode"] == "gate"
-    assert w.state()["catchups"] == 1 and _merge_count(w) == 1
+    _invariants(w, catchups=1, merges=1)
 
 
 def test_fault_after_fetch_merge(w: World) -> None:
@@ -950,14 +1091,15 @@ def test_fault_after_fetch_merge(w: World) -> None:
     w.node.start("conflict")
     _crash("catchup.after_fetch_merge", w.node.call)
     assert w.node.call()["mode"] == "gate"
-    assert w.state()["catchups"] == 1 and _merge_count(w) == 1
+    _invariants(w, catchups=1, merges=1)
 
 
 def test_fault_after_stale(w: World) -> None:
     w.node.start("conflict")
     _crash("catchup.after_stale", w.node.call)
     assert w.node.call() == catchup.wait_answer(w.node.head, False)
-    assert w.state()["catchups"] == 1 and w.state()["catchup"] is None
+    assert w.state()["catchup"] is None
+    _invariants(w, catchups=1, merges=0)
 
 
 def test_fault_after_merge_clean_resumes_through_the_lookup(w: World) -> None:
@@ -968,7 +1110,7 @@ def test_fault_after_merge_clean_resumes_through_the_lookup(w: World) -> None:
     cu = w.state()["catchup"]
     assert cu["clean"] is False and cu["merge"] == w.repo.head()
     assert w.node.implemented()["next"] == "review"  # clean unknown, so reviewed: by design
-    assert _merge_count(w) == 1
+    _invariants(w, catchups=1, merges=1)
 
 
 def test_fault_after_merge_with_conflicts(w: World) -> None:
@@ -976,7 +1118,7 @@ def test_fault_after_merge_with_conflicts(w: World) -> None:
     w.node.start("conflict")
     _crash("catchup.after_merge", w.node.call)
     assert w.node.call()["mode"] == "resolve"
-    assert w.state()["catchups"] == 1
+    _invariants(w, catchups=1, merges=0)
 
 
 def test_fault_after_record(w: World) -> None:
@@ -984,7 +1126,8 @@ def test_fault_after_record(w: World) -> None:
     w.node.start("conflict")
     _crash("catchup.after_record", w.node.call)
     assert w.node.call()["mode"] == "gate"
-    assert w.state()["catchup"]["clean"] is True and _merge_count(w) == 1
+    assert w.state()["catchup"]["clean"] is True
+    _invariants(w, catchups=1, merges=1)
 
 
 def test_fault_after_conflict_record(w: World) -> None:
@@ -992,7 +1135,7 @@ def test_fault_after_conflict_record(w: World) -> None:
     w.node.start("conflict")
     _crash("catchup.after_conflict_record", w.node.call)
     assert w.node.call()["mode"] == "resolve"
-    assert w.state()["catchups"] == 1
+    _invariants(w, catchups=1, merges=0)
 
 
 def test_fault_after_lookup_record(w: World) -> None:
@@ -1002,7 +1145,8 @@ def test_fault_after_lookup_record(w: World) -> None:
     w.repo.resolve()
     _crash("catchup.after_lookup_record", w.node.call)  # a resume without the report
     assert w.node.call()["mode"] == "gate"
-    assert w.state()["catchup"]["merge"] == w.repo.head() and _merge_count(w) == 1
+    assert w.state()["catchup"]["merge"] == w.repo.head()
+    _invariants(w, catchups=1, merges=1)
 
 
 def test_fault_after_push_write(w: World) -> None:
@@ -1015,8 +1159,9 @@ def test_fault_after_push_write(w: World) -> None:
     _crash("catchup.after_push_write", w.node.call)
     head = w.repo.head()
     assert w.node.call() == catchup.wait_answer(head, True)
-    st = w.state()
-    assert st["base_merge"] == {"merge": head, "head": head} and st["catchups"] == 1
+    assert w.state()["base_merge"] == {"merge": head, "head": head}
+    w.node.head = w.node.trigger[2]  # the merges are counted from the catch-up's head
+    _invariants(w, catchups=1, merges=1)
 
 
 def test_fault_after_fixes_write(w: World) -> None:
@@ -1026,13 +1171,15 @@ def test_fault_after_fixes_write(w: World) -> None:
     _crash("catchup.after_fixes_write", w.node.call)
     answer = w.node.call()
     assert answer == {"next": "fixes", "open": [{"finding_id": fid, "level": "code", "what": "w"}], "drop": []}
+    _invariants(w, catchups=0, merges=0)
 
 
 def test_fault_after_done_write(w: World) -> None:
     w.node.start("done")
     _crash("catchup.after_done_write", w.node.call)
     assert w.node.call() == catchup.done_answer(["digest", "report", "state"], [], [])
-    assert w.state()["catchups"] == 0 and w.state()["done_report"] == 0
+    assert w.state()["done_report"] == 0
+    _invariants(w, catchups=0, merges=0)
 
 
 # --------------------------------------------------------------------------- node-side reap points (D4)
@@ -1372,10 +1519,26 @@ def test_d6_an_older_rounds_converged_does_not_count(w: World) -> None:
     assert w.op("done") == catchup.done_answer(["digest", "report", "state"], [], [])
 
 
-def test_d6_no_done_recorded_is_not_converged(w: World) -> None:
+def test_d6_no_done_recorded_counts_the_latest_rounds_converged(w: World) -> None:
+    """``catchup.json`` deleted at ``step: done``: the converged report on the latest round counts (no repost)."""
     w.build_round(1, None, w.repo.head())
     w.report(1)
-    assert w.op("done") == catchup.done_answer(["digest", "report", "state"], [], [])
+    assert w.op("done") == catchup.done_answer(["state"], [], [])
+    sql(w.db, "UPDATE tasks SET state = 'ready_to_merge' WHERE id = 'T1'")
+    assert w.op("done") == catchup.done_answer([], [], [])
+
+
+def test_d6_a_ready_to_merge_task_is_never_asked_for_the_state(w: World) -> None:
+    """A blocked report superseded the converged one after ``ready_to_merge``: no forbidden transition asked."""
+    w.node.start("done")
+    w.node.call()
+    w.build_round(1, None, w.repo.head())
+    w.report(1)
+    sql(w.db, "UPDATE tasks SET state = 'ready_to_merge' WHERE id = 'T1'")
+    w.report(1, "blocked")
+    assert w.op("done") == catchup.done_answer(["digest", "report"], [], [])
+    w.report(1)  # the one converged report the blocked one superseded
+    assert w.op("done") == catchup.done_answer([], [], [])
 
 
 def test_d6_a_later_blocked_supersedes_a_converged(w: World) -> None:
@@ -1386,6 +1549,26 @@ def test_d6_a_later_blocked_supersedes_a_converged(w: World) -> None:
     assert w.op("done")["left"] == ["state"]
     w.report(1, "blocked")
     assert w.op("done")["left"] == ["digest", "report", "state"]
+
+
+def test_a_re_issued_done_step_keeps_the_done_record(w: World) -> None:
+    w.node.start("done")
+    assert w.node.call() == catchup.done_answer(["digest", "report", "state"], [], [])
+    before = w.raw_state()
+    w.build_round(1, None, w.repo.head())
+    w.report(1)  # step 8's converged report, then the node re-issues the step
+    assert w.node.call() == catchup.done_answer(["state"], [], [])
+    assert w.raw_state() == before  # nothing written: done_report and catchups kept
+    assert w.op("done") == catchup.done_answer(["state"], [], [])
+
+
+def test_done_report_is_the_latest_build_rounds(w: World) -> None:
+    w.build_round(1, None, w.repo.head())
+    build = w.report(1, "continuing")
+    w.report(1, phase="plan")  # a later report of another phase
+    w.node.start("done")
+    w.node.call()
+    assert w.state()["done_report"] == build
 
 
 def test_catchup_done_refuses_a_catch_up_in_progress(w: World) -> None:
@@ -1407,6 +1590,53 @@ def test_guard_the_merge_reset_away(w: World) -> None:
     w.repo.git("reset", "--hard", w.node.head)
     w.repo.commit()
     _blocked_error(w.node.implemented(), "the catch-up merge is no longer in HEAD")
+
+
+def test_guard_an_unknown_recorded_merge(w: World) -> None:
+    w.repo.move_main()
+    w.node.start("conflict")
+    w.node.call()
+    st = w.state()
+    st["catchup"]["merge"] = "e" * 40  # gone from the object store (a reset, then a gc)
+    catchup.save_state(w.node_dir, st)
+    _blocked_error(w.node.call(), "the catch-up merge is no longer in HEAD")
+
+
+def test_guard_a_green_report_on_a_dirty_tree_is_a_miss(w: World) -> None:
+    w.repo.move_main()
+    w.node.start("conflict")
+    w.node.call()
+    (w.repo.wt / "a.txt").write_text("uncommitted\n")  # the commit hook refused the commit
+    assert w.node.implemented() == {"next": "implement", "mode": "gate", "fixes": []}
+    cu = w.state()["catchup"]
+    assert cu["green"] is None and cu["misses"] == ["changes not committed"]
+    w.repo.git("checkout", "--", "a.txt")
+    assert w.node.implemented() == {"next": "push", "head": w.repo.head()}  # a clean tree: unchanged
+
+
+def test_guard_two_dirty_green_reports_block(w: World) -> None:
+    w.repo.move_main()
+    w.node.start("conflict")
+    w.node.call()
+    (w.repo.wt / "a.txt").write_text("uncommitted\n")
+    w.node.implemented()
+    answer = w.node.implemented()
+    assert answer == {
+        "next": "blocked",
+        "cause": "misses",
+        "detail": "changes not committed, then changes not committed",
+    }
+
+
+def test_guard_a_tree_dirtied_after_the_green_gate_is_not_pushed(w: World) -> None:
+    w.repo.move_main()
+    w.node.start("conflict")
+    w.node.call()
+    assert w.node.implemented()["next"] == "push"
+    (w.repo.wt / "a.txt").write_text("uncommitted\n")
+    assert w.node.call() == {"next": "implement", "mode": "gate", "fixes": []}
+    w.repo.git("checkout", "--", "a.txt")
+    assert w.node.call() == {"next": "push", "head": w.repo.head()}
 
 
 def test_guard_the_remote_ahead_unknown_locally(w: World) -> None:
@@ -1592,6 +1822,16 @@ def test_base_is_null_once_the_merge_left_head(w: World) -> None:
     w.node.start("conflict")
     w.node.drive(w.node.call())
     w.repo.git("reset", "--hard", "HEAD~1")
+    assert w.op("base") == {"base": None}
+
+
+def test_base_is_null_when_the_merge_is_unknown(w: World) -> None:
+    w.repo.move_main()
+    w.node.start("conflict")
+    w.node.drive(w.node.call())
+    st = w.state()
+    st["base_merge"]["merge"] = "e" * 40
+    catchup.save_state(w.node_dir, st)
     assert w.op("base") == {"base": None}
 
 
