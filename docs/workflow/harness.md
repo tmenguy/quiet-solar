@@ -345,6 +345,12 @@ you are already on the CLI. Caveats:
   the loop above does not depend on it.
 - Persona survival was **observed once (n=1)** under controlled
   conditions — treat it as evidence, not as an established contract.
+- **A node's hooks are absent after it.** A Control Plane node
+  session (spawned `--bg`, its hooks only in `--settings`) reopened
+  with `claude --resume` from a terminal already ran with no node hook,
+  and it still had none after `/desktop` moved it into the app: not
+  confirmed on 2.1.309 (the app's Claude Code): see #444. A `--bg` messenger restricted with
+  `--tools=SendMessage` (one-word form) does work on 2.1.312 (#437).
 
 Verified 2026-07-31 against `claude` 2.1.220 and `Claude.app`
 (`com.anthropic.claudefordesktop`) 1.24012.9.
@@ -420,8 +426,9 @@ hand-sets a model.
   overriding its frontmatter (`models.spawn_policy`). `effortLevel`
   through `--settings` **does** take effect on a `--bg` session:
   checked live on 2026-10-18 (#424 L6, Claude Code 2.1.302 — the
-  session's banner showed the effort sent). The post-merge node run of
-  #424 (AC9) will confirm it on a real node.
+  session's banner showed the effort sent). On a real node it was
+  confirmed live on 2026-10-29 (Claude Code 2.1.312, #437): the node
+  ran at the policy's effort, at spawn and after `tool resume`.
 - **One complete row per harness** in `HARNESS_MODELS`, in that
   harness's own vocabulary, **both in exact versions**:
 
