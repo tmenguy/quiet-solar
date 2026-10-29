@@ -16,6 +16,7 @@ DB_NAME = "harness_state.db"
 DEFAULT_BACKUP_DIR = Path("~/.local/state/quiet-solar/cp-backups")
 DEFAULT_MESSENGER_DIR = Path("~/.local/state/quiet-solar/cp-messenger")
 DEFAULT_REVIEW_DIR = Path("~/.local/state/quiet-solar/cp-reviews")
+DEFAULT_BOARD_DIR = Path("~/.local/state/quiet-solar/cp-board")
 
 
 def code_root() -> Path:
@@ -154,6 +155,11 @@ def messenger_dir() -> Path:
 def review_root() -> Path:
     """Where review sessions run (#407 D5): ``QS_CP_REVIEW_DIR``, never inside a checkout."""
     return state_dir("QS_CP_REVIEW_DIR", DEFAULT_REVIEW_DIR)
+
+
+def board_dir() -> Path:
+    """Where the board pages go (#428 D2): ``QS_CP_BOARD_DIR``, never inside a checkout."""
+    return state_dir("QS_CP_BOARD_DIR", DEFAULT_BOARD_DIR)
 
 
 def ensure_private_dir(d: Path) -> Path:

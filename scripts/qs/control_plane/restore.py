@@ -52,15 +52,16 @@ def _log(message: str) -> None:
     sys.stderr.flush()
 
 
-def _last_error(conn: sqlite3.Connection) -> dict[str, Any] | None:
+def last_error(conn: sqlite3.Connection) -> dict[str, Any] | None:
     """``meta.last_backup_error``; a value that is not an object (hand-edited, truncated) as ``{at: None, error}``."""
-    value = _meta(conn, LAST_ERROR)
+    value = meta_value(conn, LAST_ERROR)
     if value is None or isinstance(value, dict):
         return value
     return {"at": None, "error": str(value)}
 
 
-def _meta(conn: sqlite3.Connection, key: str) -> Any:
+def meta_value(conn: sqlite3.Connection, key: str) -> Any:
+    """A ``meta`` value, JSON-decoded; the raw text when it is not JSON; ``None`` when absent."""
     row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
     if row is None:
         return None
@@ -82,23 +83,19 @@ def _open_runs(conn: sqlite3.Connection) -> tuple[str, ...]:
     return tuple(r[0] for r in conn.execute("SELECT id FROM runs WHERE state = 'open' ORDER BY rowid"))
 
 
-def _db_path(conn: sqlite3.Connection) -> Path:
-    return Path(next(r[2] for r in conn.execute("PRAGMA database_list") if r[1] == "main"))
-
-
 def backup_hook(conn: sqlite3.Connection, clock: clock_mod.Clock) -> None:
     global _logged_error
     runs = _open_runs(conn)
-    error = _last_error(conn)
+    error = last_error(conn)
     due = (
         bool(runs)
-        and (_meta(conn, LAST_AT) is None or _older_than(clock, _meta(conn, LAST_AT), backups.BACKUP_EVERY_S))
+        and (meta_value(conn, LAST_AT) is None or _older_than(clock, meta_value(conn, LAST_AT), backups.BACKUP_EVERY_S))
         and (error is None or _older_than(clock, error.get("at"), backups.BACKUP_EVERY_S))
     )
     if due:
         now = db.now(clock)
         try:
-            db_path = _db_path(conn)
+            db_path = db.path_of(conn)
             backups.take(conn, clock.now(), db_path)
         except (errors.CpError, OSError, sqlite3.Error) as exc:
             error = {"at": now, "error": f"{type(exc).__name__}: {exc}"}

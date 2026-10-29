@@ -489,7 +489,7 @@ class TestRestore:
             real_begin = db.begin
 
             def begin(c: sqlite3.Connection, statement: str) -> None:
-                if restore._db_path(c).name.endswith(".partial"):  # the staged copy only
+                if db.path_of(c).name.endswith(".partial"):  # the staged copy only
                     raise restore.errors.CpError("BUSY", "database busy: database is locked")
                 real_begin(c, statement)
 
@@ -531,7 +531,7 @@ class TestRestore:
         real_fix_up, real_overwrite = restore._fix_up, restore._overwrite
 
         def fix_up(c: sqlite3.Connection, waiters: Any, meta: Any) -> None:
-            staged = restore._db_path(c)
+            staged = db.path_of(c)
             live_waiters = [r[0] for r in sql(migrated, "SELECT id FROM waiters")]
             seen.append((staged.name, staged.stat().st_mode & 0o777, live_waiters))
             real_fix_up(c, waiters, meta)
@@ -903,3 +903,23 @@ def test_a_new_daemon_forgets_the_log_once_flags(monkeypatch) -> None:  # J8
     monkeypatch.setattr(backups, "_dir_fsync_logged", True)
     activeloop._reset_for_tests()
     assert restore._logged_error is None and backups._dir_fsync_logged is False
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        (None, None),
+        ('{"at": "t", "error": "boom"}', {"at": "t", "error": "boom"}),
+        ('"oops"', {"at": None, "error": "oops"}),  # #428: a value that is not an object
+        ("not json", {"at": None, "error": "not json"}),
+    ],
+)
+def test_last_error_reads_any_stored_value(migrated: Path, stored: str | None, expected: Any) -> None:
+    if stored is not None:
+        sql(migrated, "INSERT INTO meta (key, value) VALUES (?, ?)", [restore.LAST_ERROR, stored])
+    c = db.connect(migrated)
+    try:
+        assert restore.last_error(c) == expected
+        assert restore.meta_value(c, restore.LAST_AT) is None
+    finally:
+        c.close()

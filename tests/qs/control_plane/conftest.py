@@ -76,6 +76,8 @@ MODULES = (
     "ciwatch",
     "watchdog",
     "restore",
+    "board_render",
+    "board",
     "cli",
 )
 for _name in MODULES:
@@ -337,6 +339,18 @@ class FakeKill:
             self.on_call(pid, sig)
 
 
+@dataclass
+class FakeOpenUrl:
+    """``Deps.open_url`` (#428): records each URL, answers ``result``."""
+
+    calls: list[str] = field(default_factory=list)
+    result: bool = True
+
+    def __call__(self, url: str) -> bool:
+        self.calls.append(url)
+        return self.result
+
+
 class FakeGitHub(ciwatch.GitHub):
     """Scripted ``prs``: a ``PrCi`` per PR number (absent → ``None``), a rate, or a ``CiFailure``; counts calls."""
 
@@ -380,7 +394,12 @@ def fake_kill() -> FakeKill:
 
 
 @pytest.fixture
-def deps(fake_clock, fake_runner, fake_probe, fake_claude, fake_popen, fake_kill) -> cli.Deps:
+def fake_open_url() -> FakeOpenUrl:
+    return FakeOpenUrl()
+
+
+@pytest.fixture
+def deps(fake_clock, fake_runner, fake_probe, fake_claude, fake_popen, fake_kill, fake_open_url) -> cli.Deps:
     return cli.Deps(
         clock=fake_clock,
         runner=fake_runner,
@@ -389,6 +408,7 @@ def deps(fake_clock, fake_runner, fake_probe, fake_claude, fake_popen, fake_kill
         popen=fake_popen,
         kill=fake_kill,
         resolve_model=cli._policy_resolver,
+        open_url=fake_open_url,
     )
 
 
@@ -422,6 +442,7 @@ def _cp_isolation(
     monkeypatch.setenv("QS_CP_BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setenv("QS_CP_MESSENGER_DIR", str(tmp_path / "messenger"))
     monkeypatch.setenv("QS_CP_REVIEW_DIR", str(tmp_path / "reviews"))  # #407
+    monkeypatch.setenv("QS_CP_BOARD_DIR", str(tmp_path / "board"))  # #428: no test writes the real board
     (tmp_path / "state").mkdir()
     # A fake main checkout, identical locally (a linked worktree) and in CI.
     fake_main = tmp_path / "main"

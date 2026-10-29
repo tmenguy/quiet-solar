@@ -23,6 +23,7 @@ from typing import Any, NoReturn, TextIO
 from . import (
     activeloop,
     alerts,
+    board,
     codever,
     daemon,
     db,
@@ -81,6 +82,14 @@ class Deps:
     popen: Callable[..., Any]
     kill: Callable[[int, int], None]
     resolve_model: tools.ResolveModel
+    open_url: Callable[[str], bool]  # #428: `board` opens its page
+
+
+def _open_url(url: str) -> bool:
+    """Open ``url`` in the default browser (``webbrowser`` imported lazily: only ``board`` needs it)."""
+    import webbrowser
+
+    return bool(webbrowser.open(url))
 
 
 def _policy_resolver(stem: str, lane: str | None) -> tuple[str, str | None]:
@@ -111,6 +120,7 @@ def make_deps() -> Deps:
         popen=subprocess.Popen,
         kill=os.kill,
         resolve_model=_policy_resolver,
+        open_url=_open_url,
     )
 
 
@@ -266,6 +276,40 @@ def _restore(args: argparse.Namespace, io: Io) -> dict[str, Any]:
 
 def _ensure(args: argparse.Namespace, io: Io) -> dict[str, Any]:
     return ensure_daemon(io)
+
+
+def _conf_board(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--no-open", action="store_true", help="write the page but do not open it")
+
+
+def _board(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    """#428 D9: start the daemon, render the board once, print its path and open it (exempt: its own checks)."""
+    path, main, clock = paths.select_db(), paths.main(), io.deps.clock
+    try:  # before anything starts: a newer DB is SCHEMA_TOO_NEW (exit 5), with no `ensure`
+        db.check_schema(path, wait=False, clock=clock)
+    except errors.CpError as exc:
+        if exc.code != "SCHEMA_PENDING":
+            raise
+    result: dict[str, Any] = {}
+    try:
+        result["daemon"] = ensure_daemon(io, path)["status"]
+    except Exception as exc:  # noqa: BLE001 — the board is written anyway; its banner tells a stopped daemon
+        result["daemon"] = "error"
+        result["daemon_error"] = f"{type(exc).__name__}: {exc}"
+    try:
+        try:
+            with connection(io, "read") as conn:
+                schema = "missing" if conn is None else "ok"
+                dest = board.render_to(conn, clock, path, main)
+        except errors.CpError as exc:
+            if exc.code != "SCHEMA_PENDING":
+                raise
+            schema, dest = "pending", board.render_to(None, clock, path, main)
+    except OSError as exc:
+        raise errors.CpError("INTERNAL", f"board write failed: {exc}", hint="check QS_CP_BOARD_DIR") from exc
+    url = dest.as_uri()
+    opened = False if args.no_open else io.deps.open_url(url)
+    return {"path": str(dest), "url": url, **result, "schema": schema, "opened": bool(opened)}
 
 
 def session_id(args: argparse.Namespace) -> str:
@@ -983,6 +1027,7 @@ COMMANDS: dict[str, Command] = {
         Command("version", "exempt", _version, help="print the package and schema version (no DB)"),
         Command("daemon", "exempt", _daemon, help="run the daemon (migrates the DB, heartbeats, ticks)"),
         Command("ensure", "exempt", _ensure, help="start or restart the daemon if needed"),
+        Command("board", "exempt", _board, _conf_board, help="write the read-only board page and open it"),
         Command(
             "halt clear",
             "exempt",

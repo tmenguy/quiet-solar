@@ -62,7 +62,7 @@ def seams() -> Seams:
 
 def _builtin() -> list[tuple[str, ticks.Hook]]:
     """The built-in hooks, in tick order (each task adds its own, and its name to ``BUILTIN_NAMES``)."""
-    from . import ciwatch, detectors, hookroute, restore, reviewpilot, selfcheck, watchdog
+    from . import board, ciwatch, detectors, hookroute, restore, reviewpilot, selfcheck, watchdog
 
     return [
         (selfcheck.CODE_VERSION, selfcheck.code_version_hook),
@@ -73,6 +73,7 @@ def _builtin() -> list[tuple[str, ticks.Hook]]:
         (ciwatch.CI_WATCH, ciwatch.ci_watch_hook),
         (watchdog.LIVENESS_WATCHDOG, watchdog.liveness_watchdog_hook),
         (restore.BACKUP, restore.backup_hook),
+        (board.BOARD, board.board_hook),  # #428: last, so the page shows what every other hook wrote
     ]
 
 
@@ -89,6 +90,7 @@ BUILTIN_NAMES: frozenset[str] = frozenset(
         "ci_watch",
         "liveness_watchdog",
         "backup",
+        "board",
     }
 )
 
@@ -105,9 +107,10 @@ def _reset_for_tests() -> None:
     """Drop the cached seams and every hook module's in-memory state (a new daemon)."""
     global _seams
     _seams = None
-    from . import backups, ciwatch, detectors, restore, reviewpilot, watchdog
+    from . import backups, board, ciwatch, detectors, restore, reviewpilot, watchdog
 
     backups._reset_for_tests()
+    board._reset_for_tests()
     reviewpilot._reset_for_tests()
     restore._reset_for_tests()
     detectors._reset_for_tests()

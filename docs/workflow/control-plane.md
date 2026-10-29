@@ -65,7 +65,7 @@ The hooks print the Claude Code hook protocol instead, or nothing.
 
 Kinds:
 
-- **exempt:** never waits and never starts the daemon;
+- **exempt:** no entry schema check by `main`; `ensure` and `board` start the daemon;
 - **read:** checks the schema without waiting, never starts the daemon, and answers empty on a missing DB;
 - **write:** waits for the self-migration, starting the daemon if needed.
 
@@ -74,6 +74,7 @@ Kinds:
 | `version` | — | — | exempt |
 | `daemon` | — | — | exempt |
 | `ensure` | — | — | exempt |
+| `board` | `[--no-open]` (#428: write the read-only board page and open it; see [Board](#board-428)) | — | exempt |
 | `halt clear` | `--reason TEXT` | — (the maintainer, through the `ask` prompt) | exempt |
 | `restore` | `--confirm` | — (the maintainer, through the `ask` prompt) | exempt |
 | `hook stop` / `hook pre-tool-use` | stdin: hook JSON | — | exempt |
@@ -126,6 +127,7 @@ Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 
 - **`review read`** (#407). No DB, no token: one fixed `git` invocation in the main checkout (see [Reading code](#reading-code-review-read)).
 - **`daemon`.** It migrates.
 - **`ensure`.** It reads the daemon lease defensively.
+- **`board`** (#428). Its own checks: a newer DB is `SCHEMA_TOO_NEW` before any `ensure`; then it starts the daemon and renders the page whatever the DB's state (missing, migrating, older); see [Board](#board-428).
 - **`halt clear` and `restore`** (#406). The maintainer's commands: no token, since the DB may have no open run, or be lost. A newer DB is `SCHEMA_TOO_NEW` before anything else; see [The merge gate](#the-merge-gate-and-the-self-check) and [Backups and restore](#backups-and-restore).
 - **The read commands** (`session status`, `snapshot`, `task show`, `ledger show`, `export-summary`):
   - a missing DB is an empty answer;
@@ -150,7 +152,7 @@ Time flags (`--visibility`, `--poll`, `wait --timeout`) must be finite, above 0 
 | the ledger (v2) | `rounds`, `findings`, `finding_events`, `blast_radius` (see [The ledger](#the-ledger-375)) |
 | review sessions (v4, #407) | `reviews`, `review_tasks`, `review_triggers` (see [Review sessions](#review-sessions-407)) |
 
-Migration v3 (#406) adds `alerts` and seeds `meta.hook_events_cursor` past the existing `hook_events` (so history is never replayed). Migration v4 (#407) adds the review tables and seeds `meta.review_pilot_cursor` past the existing `task_history`. The active loop also keeps these `meta` keys, written at runtime: `selfcheck`, `selfcheck_override`, `selfcheck_pending`, `last_backup_at`, `last_backup_error`.
+Migration v3 (#406) adds `alerts` and seeds `meta.hook_events_cursor` past the existing `hook_events` (so history is never replayed). Migration v4 (#407) adds the review tables and seeds `meta.review_pilot_cursor` past the existing `task_history`. The active loop also keeps these `meta` keys, written at runtime: `selfcheck`, `selfcheck_override`, `selfcheck_pending`, `last_backup_at`, `last_backup_error`. `snapshot` exposes them read-only (#428): `merge_gate` = `{selfcheck, override, pending}` (each `None` when absent or not an object) and `backup` = `{last_at, last_error}` (`last_error` as `restore.last_error` reads it: a value that is not an object is `{at: None, error}`). Both are global, never filtered by `--run`.
 
 The schema version is `PRAGMA user_version`.
 
@@ -217,6 +219,7 @@ The daemon is the active loop: one Python process for every run. Each tick (`TIC
 | `ci_watch` | its own schedule | `tasks.ci_state` / `ci_sha` for every open PR; `ci_red` |
 | `liveness_watchdog` | `LIVENESS_EVERY_S` | `node_dead`, `orchestrator_dead`, and the wake-up ladder |
 | `backup` | `BACKUP_EVERY_S`, from `meta` | periodic backups and `backup_failed` |
+| `board` | `BOARD_EVERY_S` | rewrites this DB's board page, last so it shows what the tick wrote (#428, [Board](#board-428)) |
 
 ### Registering a tick hook
 
@@ -629,6 +632,45 @@ Its canonical JSON is stored in `digests.body` (no migration), capped at `DIGEST
 
 **A node's worktree files.** A node keeps its own files in `.qs-node/` at its worktree's top level, gitignored (`/.qs-node/`): `plan.md` (the plan, the contract once the plan loop converges), `digest.json` (its digest as last put: `digest put --file .qs-node/digest.json`), `binding.json` and `round.json`. The node writes them (6b-2; the suggested layouts, which 6b-2 may adjust, are `binding.json` = `{"run", "task", "node", "generation"}`, **never the token**, and `round.json` = `{"phase", "round"}`); child 18 defines what it reads. Nothing in the Control Plane reads or writes them, and `tool worktree-cleanup` removes them with the worktree (`git worktree remove --force` deletes ignored files too).
 
+## Board (#428)
+
+A **read-only board** of every run: one static HTML page, with no server and no socket. It leads with what waits for the maintainer and in which chat session, then shows each open run, the cross-run alerts and reviews, and the system's health. It never acts: every row the maintainer may act on carries a **ready-to-copy** prompt for the right orchestrator chat, or a command for a terminal.
+
+**The command.** `cp.py board [--no-open]` (exempt):
+
+1. `db.check_schema(wait=False)`: a newer DB is `SCHEMA_TOO_NEW` (exit 5) before anything starts; a pending one goes on;
+2. `ensure`: a start error is `"daemon": "error"` plus `daemon_error`, and the command goes on;
+3. renders and writes the page once (`board.render_to`); a write `OSError` is `INTERNAL` with the hint `check QS_CP_BOARD_DIR`;
+4. opens it (`Deps.open_url`) unless `--no-open`.
+
+It prints `{"ok": true, "path", "url" (file://), "daemon", "schema": "ok"|"pending"|"missing", "opened"}`; `schema` is the state that was rendered. There is no long-running `board` process: the daemon keeps the page fresh.
+
+**The file.** `board.board_path(db)` = `QS_CP_BOARD_DIR / sha256(<resolved db path>)[:8] / index.html`, the per-DB split of the backups: a temporary DB's board never overwrites the live one. The file is 0600 in 0700 directories. `board.write` writes a temporary file of its own per writer (`mkstemp`), then `os.replace`: a reload always reads a whole page, and a failure leaves the previous page and no temporary file. The hook and the command name the same file for the same DB (the hook resolves its DB with `db.path_of(conn)`). **Caveat:** a daemon started under another `QS_CP_BOARD_DIR` writes elsewhere; the page the command printed then goes stale, and its banner says so.
+
+**The hook.** `board` runs last in every tick, throttled to `BOARD_EVERY_S` (its throttle turn is taken first, so a failing board is retried only every period). It runs no subprocess. Its cost is **one full `snapshot` read every 10 s** (every table, unfiltered, one read transaction, released before rendering); a board projection of `snapshot` is a follow-up if it gets slow. A failed write (`OSError`, `CpError`, `sqlite3.Error`) is logged once per distinct message (`[cp-board] …`) and forgotten on success; any other exception is the active loop's (logged and skipped). **No alert** is raised: a failed board must not page an orchestrator. The idle exit counts open runs only.
+
+**The read path.** `snapshot` only — with its `merge_gate` and `backup` keys — through `board.model(snap, now, main, code_schema)`, a pure view model that **never raises on a value read from the DB**: an unreadable stamp is shown raw, a `meta` record of the wrong type reads as absent, integers go through `mergegate.int_or`, sorting uses `str()` keys. `snapshot.empty()` (no DB, or a migration in progress) gives one line: "no state readable yet — the daemon refreshes this page".
+
+**The page**, top to bottom:
+
+1. the header: the generated-at time and the "waiting for you" count;
+2. **waiting for you**, across all runs, in rule order:
+   1. an open `orchestrator_not_listening` (→ the run's chat) or `orchestrator_dead` (→ a new session on the main checkout), open runs only, oldest first;
+   2. a question in state `asked` on an open run (→ the run's chat), blocking first, then the oldest;
+   3. a task of an open run in `proposed` or `ready` with an unvalidated criterion (→ the run's chat): criteria are validated before a node is spawned;
+   4. a merge halt, `failed` or `stuck` (→ any orchestrator chat, else a new session on the main checkout), shown with or without an open run. It is derived read-only: `stuck` when `selfcheck_pending.since` is older than `PENDING_ESCALATE_S`; else `failed` when the record is `ok: false` with `tries >= SELFCHECK_ESCALATE_AFTER` and no override of its `code_version`. The authority stays `tool merge`;
+   5. a backup failure, `backup.last_error` (same destination as rule 4);
+3. one section per open run: its chat and orchestrator state, the progress (done = merged + validated, dropped apart, remaining the rest; work items count), a layered SVG graph of its tasks (Kahn's layering; a dependency outside the run is dropped and counted; the tasks in or after a cycle form a last layer with a dashed border; each box links to its task), the tasks table (state, node, PR and CI, criteria, open findings) with one `<details>` per task (criteria, open and asked questions, copy blocks), its alerts (cross-run kinds excepted) and the reviews touching it;
+4. cross-run: the alerts of `alerts.CROSS_RUN_KINDS`, grouped by fingerprint with every run they were raised on, and the `cross_run` reviews;
+5. system: the daemon (running as `daemon._fresh` decides), its schema against the code's, the three merge-gate records raw, the backup state and the newest hook alerts;
+6. closed runs: one collapsed summary row each.
+
+**The copy blocks** (level 0: text only). Each is a `<pre data-copy>` plus a copy button (`navigator.clipboard`, else the text is selected for ⌘C). **A block holds ids of a fixed shape and fixed words only — never LLM-written text** (no title, question, reason or name, which are shown beside it, escaped): `T\d+`, `Q-\d+`, `R\d+`, a node `short_id` of `[0-9a-zA-Z-]{1,64}`, and the halt word. An id off its shape gives no block. They are: `Answer to <Q>: `; `Show me the acceptance criteria of <T> so I can validate them.`; `Where is <T>? Summarise its state, its open findings and what it waits for.`; `Resume the run <R>: claim it and drain its queue.`; `The merge gate is <failed|stuck>. Show me the self-check record, then clear the halt with cp.py halt clear only if I agree.`; `The Control Plane backup is failing. Show me the last backup error from the snapshot.`; and, for a terminal, `claude attach <short_id>` (a live node) and `<python> <cp.py> board` (the stale banner), every variable part `shlex.quote`d whole.
+
+**Security** (read-only by construction): nothing listens; the file is private and holds session ids, paths and question texts but never a token or a nonce; every value is escaped, attribute values included, and LLM-written text goes into element content only; there is no inline event handler; a `Content-Security-Policy` `<meta>` before the one fixed script allows `default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-<hash of the script>'` (the script holds no data: it reads `data-` attributes on `<body>`), and the page loads nothing external; a URL is a link only when it starts with `https://github.com/`. As defence in depth, `board_render.scrub` redacts the token shapes and any standalone 32-hex run in the final page (a 40-hex git sha and a UUID are kept).
+
+**Freshness.** The page's script ticks every `BOARD_REFRESH_S`: it shows the red **"last known state"** banner once the page is older than `BOARD_STALE_S` (120 s: one tick can take about 60 s, the review pilot's worst case), then reloads, unless text is selected or a copy button was clicked in the last 5 s; a reload skipped for `BOARD_FORCE_RELOAD_S` is forced. The banner carries the `cp.py board` command. Open `<details>` survive a reload (by id, in `sessionStorage`; Firefox's per-file origin may drop them); the browser keeps the scroll position. A halt raised with no open run is rendered while the daemon lives (until its idle exit), then stays on the page under the banner, and `cp.py board` starts the daemon again.
+
 ## Locks and caps
 
 | name | holder | purpose |
@@ -869,6 +911,7 @@ The shim and the settings commands run `<MAIN>/venv/bin/python`. Without it they
 | `QS_CP_BACKUP_DIR` | `~/.local/state/quiet-solar/cp-backups/` | every backup, in a per-DB subdirectory. Never inside a checkout or a linked worktree (`POLICY_REFUSED`, naming the variable) |
 | `QS_CP_MESSENGER_DIR` | `~/.local/state/quiet-solar/cp-messenger/` | the watchdog messenger's working directory (0700). Never inside a checkout |
 | `QS_CP_REVIEW_DIR` | `~/.local/state/quiet-solar/cp-reviews/` | where review sessions run, one 0700 directory per DB and review (#407). Never inside a checkout or a linked worktree |
+| `QS_CP_BOARD_DIR` | `~/.local/state/quiet-solar/cp-board/` | the board pages, one 0700 subdirectory per DB (#428). Never inside a checkout or a linked worktree. The daemon and `cp.py board` must see the same value |
 | `QS_CP_MAX_GATES` | 2 | gate slots |
 | `QS_CP_MAX_NODES` | 4 | node sessions across all runs |
 | `QS_CP_TOKEN` | — | **git only**: injected by the tools into the steps that may push, so `pre-push` accepts them. Every `claude` launch removes it |
@@ -917,6 +960,7 @@ Most are overridable by a function argument. These are module-level only (tests 
 | `READ_MAX_BYTES` / `READ_TIMEOUT_S` | 256 KiB / 60 | `gitread` |
 | `PILOT_EVERY_S` / `PILOT_RETRY_S` / `PILOT_ATTEMPTS` / `LIVENESS_CONFIRM` / `MERGES_PER_TICK` / `STOP_WINDOW_S` / `STOP_BACKOFF_MAX_S` / `STOP_TAIL` | 30 / 60 / 2 / 2 / 100 / 7 days / 3600 / 200 | `reviewpilot` |
 | `PILOT_KINDS` | `overlap_cross_run`, `duplicate_task_cross_run` | `reviewpilot` |
+| `BOARD_EVERY_S` / `BOARD_REFRESH_S` / `BOARD_STALE_S` / `BOARD_FORCE_RELOAD_S` / `GRAPH_TITLE_MAX` | 10 / 10 / 120 / 60 / 40 | `board` |
 
 ## Seams
 
@@ -936,6 +980,7 @@ Most are overridable by a function argument. These are module-level only (tests 
 | `activeloop.make_seams` | `Seams(Runner, ProcessProbe, ClaudeCli, paths.main(), ciwatch.GitHub, subprocess.Popen)` | the test `Deps` (its `FakePopen` too), the fake main checkout and a `FakeGitHub` |
 | `codever.loaded_version` | the hash at `cli._daemon` entry | the fake main checkout's `code_version`; the `real_loaded_version` fixture restores it |
 | `mergegate.merge_allowed` | the gate | `open`; the `real_gate` fixture restores it |
+| `Deps.open_url` (#428) | `cli._open_url`: `webbrowser.open`, imported at call time | `FakeOpenUrl`: records each URL, answers `result` |
 
 ## Conventions: what no hook enforces
 
