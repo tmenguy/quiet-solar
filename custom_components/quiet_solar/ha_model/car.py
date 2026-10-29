@@ -55,6 +55,7 @@ from ..const import (
     MAX_POSSIBLE_AMPERAGE,
     USER_ORIGINATED_CAR_NAME,
     USER_ORIGINATED_CHARGER_NAME,
+    USER_ORIGINATED_USER_FROZEN,
     CONF_TYPE_NAME_QSCar,
 )
 from ..ha_model.device import HADeviceMixin
@@ -391,6 +392,17 @@ class QSCar(HADeviceMixin, AbstractDevice):
         # action: it skips this pin (only — the car's own snapshot above still runs).
         if self.charger is not None and key != USER_ORIGINATED_CHARGER_NAME and not _USER_REPLAY_FOR_INIT.get():
             self.charger.set_user_originated(USER_ORIGINATED_CAR_NAME, self.name)
+        # QS-431: any USER action freezes the car (no automatic person constraint until
+        # the store is cleared: unplug, reset, pin taken, stale/unauthorised pin). An
+        # entity restore replay is no user action and must not freeze. Not gated on the
+        # charger-choice key: picking a charger from the car card is a user action on
+        # the car. Direct dict write: it lives in the persisted store.
+        if not _USER_REPLAY_FOR_INIT.get():
+            self._user_originated[USER_ORIGINATED_USER_FROZEN] = True
+
+    def is_user_frozen(self) -> bool:
+        """QS-431: True when a genuine user action has taken manual control of the car."""
+        return self.get_user_originated(USER_ORIGINATED_USER_FROZEN) is True
 
     def update_to_be_saved_extra_device_info(self, data_to_update: dict, time: datetime):
         super().update_to_be_saved_extra_device_info(data_to_update, time)
@@ -2742,6 +2754,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def _reset_charge_targets(self):
         self._next_charge_target = None
         self._next_charge_target_energy = None
+
+    def reset_charge_targets(self) -> None:
+        """QS-431: public entry for the charger-card reset (lazy default, QS-352)."""
+        self._reset_charge_targets()
 
     async def setup_car_charge_target_if_needed(self, asked_target_charge=None):
 

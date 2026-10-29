@@ -46,6 +46,7 @@ from custom_components.quiet_solar.const import (
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    USER_ORIGINATED_USER_FROZEN,
     CONF_TYPE_NAME_QSRadiator,
 )
 from custom_components.quiet_solar.ha_model.bistate_transport import (
@@ -947,6 +948,10 @@ class TestCarDouble:
 
     def has_user_originated(self, key: str) -> bool:
         return key in self._user_originated
+
+    def is_user_frozen(self) -> bool:
+        """QS-431: mirrors ``QSCar.is_user_frozen``."""
+        return self._user_originated.get(USER_ORIGINATED_USER_FROZEN) is True
 
     def clear_user_originated(self, key: str) -> None:
         self._user_originated.pop(key, None)

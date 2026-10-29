@@ -406,6 +406,8 @@ class TestPersonAsapTargetPreservation(unittest.IsolatedAsyncioTestCase):
         mock_car.has_user_originated.side_effect = lambda key: key == "charge_target_percent"
         mock_car.get_user_originated.side_effect = lambda key: 90.0 if key == "charge_target_percent" else None
         mock_car.setup_car_charge_target_if_needed = AsyncMock(return_value=90.0)
+        # QS-431: an override retargets a person ASAP only on a user-frozen car
+        mock_car.is_user_frozen = MagicMock(return_value=True)
 
         setup_charger_with_plugged_car(self.charger, mock_car, self.time)
 

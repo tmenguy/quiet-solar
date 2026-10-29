@@ -48,6 +48,8 @@ TOOL_ARGS: dict[str, dict[str, Any]] = {
     "integrate-finish": {},
     "integrate-drop": {},
     "review": {"kind": "global", "run": "R1"},  # #407: task-less (no --task)
+    "coderabbit": {"head": "a" * 40},  # #425
+    "coderabbit-trigger": {"head": "a" * 40},
 }
 
 
@@ -98,6 +100,23 @@ def samples(f: dict[str, str]) -> dict[str, list[str]]:
         "lock acquire": ["lock", "acquire", "--name", "integration:QS_11", "--purpose", "p", "--session-id", ORCH],
         "lock release": ["lock", "release", "--name", "integration:QS_11", "--session-id", ORCH],
         "round start": ["round", "start", "--task", "T1", "--phase", "build", "--head", "h1"],
+        "catchup step": [  # #440
+            "catchup",
+            "step",
+            "--task",
+            "T1",
+            "--from",
+            "conflict",
+            "--seq",
+            "1",
+            "--head",
+            "a" * 40,
+        ],
+        "catchup base": ["catchup", "base", "--task", "T1"],
+        "catchup fixes": ["catchup", "fixes", "--task", "T1"],
+        "catchup done": ["catchup", "done", "--task", "T1"],
+        "catchup unblock": ["catchup", "unblock", "--task", "T1"],
+        "catchup end": ["catchup", "end", "--task", "T1"],
         "finding open": [
             "finding",
             "open",
@@ -149,10 +168,18 @@ NODE_OK = {
     "tool gate",
     "tool push",
     "tool pr-create",
+    "tool coderabbit",  # #425
+    "tool coderabbit-trigger",
     "tool integrate-start",
     "tool integrate-finish",
     "tool integrate-drop",
     "round start",
+    "catchup step",  # #440
+    "catchup base",
+    "catchup fixes",
+    "catchup done",
+    "catchup unblock",
+    "catchup end",
     "finding open",
     "finding classify",
     "finding state",

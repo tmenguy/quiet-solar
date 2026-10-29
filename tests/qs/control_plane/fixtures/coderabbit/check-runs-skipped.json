@@ -1,0 +1,25 @@
+[
+ {
+  "total_count": 1,
+  "check_runs": [
+   {
+    "id": 122293542387,
+    "name": "CodeRabbit",
+    "head_sha": "bed28561cc61272a03b96f4b00d393be79f374e5",
+    "status": "completed",
+    "conclusion": "skipped",
+    "started_at": "2026-10-27T15:43:35Z",
+    "completed_at": "2026-10-27T15:43:35Z",
+    "output": {
+     "title": "Review skipped",
+     "summary": "Result: Skipped - Review skipped\nRun ID: `cdd75f81-e975-4fd1-bfdd-e2971d012fda`\n\n| Step | Status | Time |\n| --- | --- | --- |\n| Prepare review scope | Skipped | 3s 273ms |\n| Prepare repository workspace | Skipped | 0s |\n| Run analysis checks | Skipped | 0s |\n| Generate review feedback | Skipped | 0s |\n| Publish review results | Skipped | 0s |\n| Time taken | | 3s 274ms |"
+    },
+    "app": {
+     "id": 347564,
+     "slug": "coderabbitai",
+     "name": "coderabbitai"
+    }
+   }
+  ]
+ }
+]

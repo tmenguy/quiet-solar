@@ -24,6 +24,8 @@ from . import (
     activeloop,
     alerts,
     board,
+    catchup,
+    coderabbit,
     codever,
     daemon,
     db,
@@ -61,6 +63,7 @@ items.register_item_tools()  # #400's tools: the parser and the parametrized tes
 ledger.register_export()  # #375's summary sections; the export is reachable only through this module
 activeloop.register_builtin()  # QS-406: the daemon's tick hooks (idempotent; main() calls it again)
 reviews.register_review_tool()  # #407: `tool review` (idempotent; main() calls it again)
+coderabbit.register_coderabbit_tools()  # #425: `tool coderabbit` / `coderabbit-trigger` (idempotent)
 
 
 @dataclass(frozen=True)
@@ -894,6 +897,47 @@ def _round_start(args: argparse.Namespace, io: Io) -> dict[str, Any]:
     )
 
 
+def _full_sha(text: str) -> str:
+    """A full lowercase sha (40 or 64 hex): an abbreviation would never compare equal to ``HEAD`` (#440)."""
+    if not catchup.FULL_SHA_RE.fullmatch(text):
+        raise argparse.ArgumentTypeError(f"not a full lowercase sha: {text!r}")
+    return text
+
+
+def _conf_catchup_step(p: argparse.ArgumentParser) -> None:
+    _conf_task_token(p)
+    p.add_argument("--from", dest="trigger_from", required=True, choices=catchup.FROMS)
+    p.add_argument("--seq", type=_sql_id, required=True)
+    p.add_argument("--head", type=_full_sha, required=True)
+    p.add_argument("--implemented", choices=catchup.GATES)
+    p.add_argument("--inv", type=_sql_id)
+    p.add_argument("--reviewed", type=_full_sha)
+
+
+def _catchup_step(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+    return _write(  # catchup.step refuses --implemented without --inv (and the reverse): USAGE
+        io,
+        catchup.step,
+        io.deps.runner,
+        io.deps.clock,
+        token=args.token,
+        task_id=args.task,
+        trigger_from=args.trigger_from,
+        seq=args.seq,
+        head=args.head,
+        implemented=args.implemented,
+        inv=args.inv,
+        reviewed=args.reviewed,
+    )
+
+
+def _catchup_op(fn: Callable[..., dict[str, Any]]) -> Callable[[argparse.Namespace, Io], dict[str, Any]]:
+    def handler(args: argparse.Namespace, io: Io) -> dict[str, Any]:
+        return _write(io, fn, io.deps.runner, io.deps.clock, token=args.token, task_id=args.task)
+
+    return handler
+
+
 def _conf_finding_open(p: argparse.ArgumentParser) -> None:
     _conf_task_token(p)
     p.add_argument("--phase", required=True, choices=schema_ledger.PHASES)
@@ -1063,6 +1107,22 @@ COMMANDS: dict[str, Command] = {
         Command("export-summary", "read", _export_summary, _conf_export, help="write the task summary into a worktree"),
         Command("ledger show", "read", _ledger_show, _conf_ledger_show, help="a task's finding ledger (filtered)"),
         Command("round start", "write", _round_start, _conf_round_start, help="start a review round → its base..head"),
+        Command(
+            "catchup step", "write", _catchup_step, _conf_catchup_step, help="the node's catch-up: its next action"
+        ),
+        Command(
+            "catchup base", "write", _catchup_op(catchup.base), _conf_task_token, help="the next build round's base"
+        ),
+        Command("catchup fixes", "write", _catchup_op(catchup.fixes), _conf_task_token, help="the open pending fixes"),
+        Command(
+            "catchup done", "write", _catchup_op(catchup.done), _conf_task_token, help="step 8's resume: what is left"
+        ),
+        Command(
+            "catchup unblock", "write", _catchup_op(catchup.unblock), _conf_task_token, help="clear a catch-up block"
+        ),
+        Command(
+            "catchup end", "write", _catchup_op(catchup.end), _conf_task_token, help="end the catch-up in progress"
+        ),
         Command("finding open", "write", _finding_open, _conf_finding_open, help="open findings (JSON) → their ids"),
         Command("finding classify", "write", _finding_classify, _conf_finding_classify, help="classify a finding"),
         Command("finding state", "write", _finding_state, _conf_finding_state, help="move a finding to a state"),
@@ -1176,6 +1236,7 @@ def _emit(out: TextIO, payload: dict[str, Any]) -> None:
 def main(argv: Sequence[str] | None = None, *, stdin: TextIO | None = None, stdout: TextIO | None = None) -> int:
     items.register_item_tools()  # cheap, and keeps a reset registry whole before build_parser()
     reviews.register_review_tool()
+    coderabbit.register_coderabbit_tools()
     activeloop.register_builtin()  # likewise for the tick hooks
     io = Io(stdin=stdin or sys.stdin, stdout=stdout or sys.stdout, deps=make_deps())
     argv = list(sys.argv[1:] if argv is None else argv)

@@ -1,0 +1,22 @@
+[
+ [
+  {
+   "id": 5598133439,
+   "user": {
+    "login": "coderabbitai[bot]"
+   },
+   "commit_id": "fcb132c1d5d039b4d8d482e6e969f02be4cd2159",
+   "state": "COMMENTED",
+   "body": "**Actionable comments posted: 3**\n\n<details>\n<summary>🤖 Prompt to fix review comments</summary>\n\n(trimmed)\n\n</details>\n"
+  },
+  {
+   "id": 5601237998,
+   "user": {
+    "login": "coderabbitai[bot]"
+   },
+   "commit_id": "66c34d3774a7426d96725aaa982ae29930d423bd",
+   "state": "COMMENTED",
+   "body": "**Actionable comments posted: 2**\n\n<details>\n<summary>🤖 Prompt to fix review comments</summary>\n\n(trimmed)\n\n</details>\n"
+  }
+ ]
+]

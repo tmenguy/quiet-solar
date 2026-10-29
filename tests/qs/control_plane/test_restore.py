@@ -298,7 +298,7 @@ class TestRestore:
         assert run_cli("restore", "--confirm")[0] == 0  # the backup predates T1
         insert_task(migrated, "T9", backed_up["run"], is_deliverable=1, pr_number=9, state="building")
         insert_node(migrated, "N1", backed_up["run"], "T9", state="running", session_id="S-n")
-        fake_github.prs_by_number[9] = ciwatch.PrCi("OPEN", "h9", "SUCCESS", (), False)
+        fake_github.prs_by_number[9] = ciwatch.PrCi("OPEN", "h9", "SUCCESS", (), False, 1)
         fake_claude.listing = [agent(ORCH)]
         c = db.connect(migrated)
         try:

@@ -1,0 +1,25 @@
+[
+ {
+  "total_count": 1,
+  "check_runs": [
+   {
+    "id": 122285927802,
+    "name": "CodeRabbit",
+    "head_sha": "01fc582ec3466626338a79348a9f2c25397836f6",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T15:30:42Z",
+    "completed_at": "2026-10-27T15:37:32Z",
+    "output": {
+     "title": "Finished",
+     "summary": "Result: Success - Review completed\nRun ID: `1c1b2c72-bbe7-4423-95db-7c419a98e49c`\nCodeRabbit Review: [Open CodeRabbit Review](https://app.coderabbit.ai/change-stack/tmenguy/quiet-solar/pull/435?scope=ghh_OusAJGA4HG8ljoOV0wJvVx8NmnZIjc2DdjmxOu0xZWA)\n\n| Step | Status | Time |\n| --- | --- | --- |\n| Prepare review scope | Completed | 14s 286ms |\n| Prepare repository workspace | Completed | 5ms |\n| Run analysis checks | Completed | 3m 21s 262ms |\n| Generate review feedback | Completed | 3m 25s 357ms |\n| Publish review results | Completed | 3s 755ms |\n| Time taken | | 7m 4s 962ms |"
+    },
+    "app": {
+     "id": 347564,
+     "slug": "coderabbitai",
+     "name": "coderabbitai"
+    }
+   }
+  ]
+ }
+]

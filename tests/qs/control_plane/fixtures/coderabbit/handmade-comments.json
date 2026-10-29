@@ -1,0 +1,202 @@
+[
+ [
+  {
+   "id": 1,
+   "pull_request_review_id": 9001,
+   "in_reply_to_id": null,
+   "path": "a.py",
+   "line": 10,
+   "start_line": 8,
+   "original_line": null,
+   "original_start_line": null,
+   "user": {
+    "login": "coderabbitai[bot]"
+   },
+   "body": "<!-- coderabbit-ai-generated:v1 -->\n\n**🎯 Functional Correctness** | **🔴 Critical** | **⚡ Quick win**\n\n**Guard the empty list.**\n\n`f([])` raises IndexError.\n"
+  },
+  {
+   "id": 2,
+   "pull_request_review_id": 9001,
+   "in_reply_to_id": null,
+   "path": "b.py",
+   "line": 5,
+   "start_line": null,
+   "original_line": null,
+   "original_start_line": null,
+   "user": {
+    "login": "coderabbitai[bot]"
+   },
+   "body": "_⚠️ Potential issue_ | _🟠 Major_\n\n**Close the handle on error.**\n\nThe file leaks when `parse` raises.\n"
+  },
+  {
+   "id": 3,
+   "pull_request_review_id": 9001,
+   "in_reply_to_id": null,
+   "path": "s.py",
+   "line": 3,
+   "start_line": 2,
+   "original_line": null,
+   "original_start_line": null,
+   "user": {
+    "login": "coderabbitai[bot]"
+   },
+   "body": "**🔒 Security & Privacy** | **🛡️ Detected with Advanced Tier** | **🟡 Minor**\n\n**Quote the shell argument.**\n\nbody\n"
+  },
+  {
+   "id": 4,
+   "pull_request_review_id": 9001,
+   "in_reply_to_id": null,
+   "path": "p.py",
+   "line": 30,
+   "start_line": null,
+   "original_line": null,
+   "original_start_line": null,
+   "user": {
+    "login": "coderabbitai[bot]"
+   },
+   "body": "**🛡️ Detected with Advanced Tier** | **⚡ Performance & Scalability** | **🔵 Trivial**\n\n**Hoist the regex.**\n\nbody\n"
+  },
+  {
+   "id": 5,
+   "pull_request_review_id": 9001,
+   "in_reply_to_id": null,
+   "path": "c.py",
+   "line": null,
+   "start_line": null,
+   "original_line": 7,
+   "original_start_line": null,
+   "user": {
+    "login": "coderabbitai[bot]"
+   },
+   "body": "Just a plain comment, no header and no bold line.\n"
+  },
+  {
+   "id": 6,
+   "pull_request_review_id": 9001,
+   "in_reply_to_id": null,
+   "path": "r.py",
+   "line": 12,
+   "start_line": 20,
+   "original_line": null,
+   "original_start_line": null,
+   "user": {
+    "login": "coderabbitai[bot]"
+   },
+   "body": "**🩺 Stability & Availability** | **🟠 Major**\n\n<details>\n<summary>Analysis</summary>\n\n**Not the title (inside details).**\n\n</details>\n\n**Retry on a timeout.**\n\nbody\n"
+  },
+  {
+   "id": 7,
+   "pull_request_review_id": 9001,
+   "in_reply_to_id": 1,
+   "path": "a.py",
+   "line": 10,
+   "start_line": null,
+   "original_line": null,
+   "original_start_line": null,
+   "user": {
+    "login": "coderabbitai[bot]"
+   },
+   "body": "Thanks, fixed."
+  }
+ ],
+ [
+  {
+   "id": 1,
+   "pull_request_review_id": 9001,
+   "in_reply_to_id": null,
+   "path": "a.py",
+   "line": 10,
+   "start_line": 8,
+   "original_line": null,
+   "original_start_line": null,
+   "user": {
+    "login": "coderabbitai[bot]"
+   },
+   "body": "<!-- coderabbit-ai-generated:v1 -->\n\n**🎯 Functional Correctness** | **🔴 Critical** | **⚡ Quick win**\n\n**Guard the empty list.**\n\n`f([])` raises IndexError.\n"
+  },
+  {
+   "id": 9,
+   "pull_request_review_id": 9001,
+   "in_reply_to_id": null,
+   "path": "d.py",
+   "line": 3,
+   "start_line": null,
+   "original_line": null,
+   "original_start_line": null,
+   "user": {
+    "login": "coderabbitai[bot]"
+   },
+   "body": "**🧹 Maintainability & Code Quality** | **🟡 Minor**\n\n**!!! ???**\n\nbody\n"
+  },
+  {
+   "id": 10,
+   "pull_request_review_id": 9001,
+   "in_reply_to_id": null,
+   "path": "../evil.py",
+   "line": 4,
+   "start_line": null,
+   "original_line": null,
+   "original_start_line": null,
+   "user": {
+    "login": "coderabbitai[bot]"
+   },
+   "body": "**🎯 Functional Correctness** | **🟠 Major**\n\n**Escape the path.**\n\nbody\n"
+  },
+  {
+   "id": 11,
+   "pull_request_review_id": 9999,
+   "in_reply_to_id": null,
+   "path": "a.py",
+   "line": 1,
+   "start_line": null,
+   "original_line": null,
+   "original_start_line": null,
+   "user": {
+    "login": "coderabbitai[bot]"
+   },
+   "body": "**🎯 Functional Correctness** | **🔴 Critical**\n\n**Another head's comment.**\n\nbody\n"
+  },
+  {
+   "id": 12,
+   "pull_request_review_id": 9001,
+   "in_reply_to_id": null,
+   "path": "m.py",
+   "line": 9,
+   "start_line": null,
+   "original_line": null,
+   "original_start_line": null,
+   "user": {
+    "login": "coderabbitai[bot]"
+   },
+   "body": "**🧹 Maintainability & Code Quality** | **🟡 Minor**\n\n**Keep the very very very very very very very very very very very very very very very very very very very very very very very very very very very very very very very very very very very very very very very very long title\u001f**\n\nbody\n"
+  },
+  {
+   "id": 13,
+   "pull_request_review_id": 9001,
+   "in_reply_to_id": null,
+   "path": "q.py",
+   "line": 50,
+   "start_line": 44,
+   "original_line": null,
+   "original_start_line": null,
+   "user": {
+    "login": "coderabbitai[bot]"
+   },
+   "body": "**<picture><img src=\"https://example.invalid/amber-16.svg\" alt=\"\"></picture> Major** · **Stability & Availability** · **Quick win**\n\n**Pass the remaining budget.**\n\nbody\n"
+  },
+  {
+   "id": 14,
+   "pull_request_review_id": 9001,
+   "in_reply_to_id": null,
+   "path": "f.py",
+   "line": null,
+   "start_line": null,
+   "original_line": null,
+   "original_start_line": null,
+   "user": {
+    "login": "coderabbitai[bot]"
+   },
+   "body": "**🎯 Functional Correctness** | **🔵 Trivial**\n\nA file-level comment, no line at all.\n"
+  }
+ ]
+]

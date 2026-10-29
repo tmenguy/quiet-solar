@@ -1,0 +1,16 @@
+{
+ "id": 4381308634,
+ "pull_request_review_id": 5657492427,
+ "in_reply_to_id": null,
+ "path": "scripts/qs/control_plane/reviewpilot.py",
+ "line": 650,
+ "start_line": 624,
+ "original_line": 644,
+ "original_start_line": 620,
+ "commit_id": "e1e0a3ab6034ae9924e00340196b1468949e685b",
+ "original_commit_id": "afec602693e20cf90fa64910b96b4aab7d37ea2f",
+ "user": {
+  "login": "coderabbitai[bot]"
+ },
+ "body": "**<picture><img src=\"https://storage.googleapis.com/coderabbit_public_assets/review-comment-icons-v1/amber-16.svg\" width=\"16\" height=\"16\" align=\"absmiddle\" alt=\"\"></picture> Minor** · **Stability & Availability** · **Quick win**\n\n<details>\n<summary>🔎 Supported by static analysis</summary>\n<dl>\n<dd>\n\nScript executed:\n\n```bash\nsed -n '597,648p' scripts/qs/control_plane/reviewpilot.py\nrg -n 'HOOK_SUBPROCESS_S|def stop\\(|timeout=' scripts/qs/control_plane/liveness.py scripts/qs/control_plane/reviewpilot.py tests/qs/control_plane/test_reviewpilot.py\n```\n\nRepository: tmenguy/quiet-solar\n\nLength of output: 6046\n\n---\n\n\n\n</dd>\n</dl>\n</details>\n\n**Pass the remaining stop budget to `Claude.stop`.**\n\n`stop_closed` checks the remaining `HOOK_SUBPROCESS_S` budget before each `_stop` call, but `_stop` passes the full `ticks.HOOK_SUBPROCESS_S` value to `Claude.stop`. If a stop starts near the budget limit and blocks, its subprocess can run for the full timeout and exceed the stop step's budget.\n\nPass the remaining duration instead of the full budget.\n"
+}

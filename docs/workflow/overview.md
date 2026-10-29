@@ -173,7 +173,8 @@ persona body executes, but the per-phase "answer mid-flight" UX is
 gone. This is broken-by-design UX kept **only as a fallback path** for
 environments without the CLI launcher (notably Claude Desktop). The
 slash command files under `.claude/commands/` are reworded — not
-deleted — to flag this distinction.
+deleted — to flag this distinction. Exception (QS-434): `/release` runs
+the `qs-release` protocol inline in the main session.
 
 ### Claude Desktop limitation
 
