@@ -345,12 +345,18 @@ you are already on the CLI. Caveats:
   the loop above does not depend on it.
 - Persona survival was **observed once (n=1)** under controlled
   conditions — treat it as evidence, not as an established contract.
-- **A node's hooks are absent after it.** A Control Plane node
-  session (spawned `--bg`, its hooks only in `--settings`) reopened
-  with `claude --resume` from a terminal already ran with no node hook,
-  and it still had none after `/desktop` moved it into the app: not
-  confirmed on 2.1.309 (the app's Claude Code): see #444. A `--bg` messenger restricted with
-  `--tools=SendMessage` (one-word form) does work on 2.1.312 (#437).
+- **A node's hooks do not survive an interactive reopen.** Not
+  confirmed — a `fail`, the DB `sqlite3` call was allowed (2026-10-29,
+  #437: see #444). A Control Plane node session (spawned `--bg`, its
+  hooks only in `--settings`) reopened from a terminal with
+  `claude --resume <id>` ran with no node hook, on Claude Code 2.1.312.
+  The same session moved into the app with `/desktop` still had no
+  node hook, on the app's Claude Code 2.1.309.
+- `--tools=SendMessage` (the `=` form, a single argv word, so the
+  list-valued option cannot swallow the prompt, as `--add-dir` does in
+  #424 L8) works with `--bg` on 2.1.312 (2026-10-29, #437, a hand-run
+  messenger). The watchdog's messenger does not pass it
+  (`scripts/qs/control_plane/watchdog.py`, `--allowedTools` only).
 
 Verified 2026-07-31 against `claude` 2.1.220 and `Claude.app`
 (`com.anthropic.claudefordesktop`) 1.24012.9.
