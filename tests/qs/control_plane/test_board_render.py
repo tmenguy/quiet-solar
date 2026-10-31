@@ -248,6 +248,13 @@ class TestCsp:
         tick = script[script.index("function tick()") : load]
         assert "checkStale();" in tick and tick.index("checkStale();") < tick.index("location.reload()")
 
+    def test_the_script_forces_a_reload_after_the_force_period(self) -> None:
+        script = board_render.SCRIPT
+        assert "var forceMs = Number(body.dataset.forceReloadS) * 1000;" in script
+        tick = script[script.index("function tick()") : script.rindex("checkStale();")]
+        guard = "if (now - skippedSince < forceMs) { setTimeout(tick, refreshMs); return; }"
+        assert guard in tick and tick.index(guard) < tick.index("location.reload()")
+
     def test_the_page_loads_nothing_external(self) -> None:
         tags = _parse(_page(bf.fixture())).tags
         assert not [t for t, attrs in tags if t in ("link", "img", "iframe", "object", "embed")]

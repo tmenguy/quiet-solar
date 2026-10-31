@@ -299,8 +299,10 @@ def _board(args: argparse.Namespace, io: Io) -> dict[str, Any]:
         status = ensure_daemon(io, path)
         result["daemon"] = status["status"]
         if status["status"] == "migrate_failed":
-            result["daemon_error"] = status.get("error")
-            note = f"the migration failed: {status.get('error')}"
+            result["daemon_error"] = status.get("error") or "no detail recorded"
+            note = f"the migration failed: {result['daemon_error']}"
+        elif status["status"] == "restoring":  # no daemon runs during a restore
+            note = board.RESTORING_NOTE
     except Exception as exc:  # noqa: BLE001 — the board is written anyway; its note tells a stopped daemon
         result["daemon"] = "error"
         result["daemon_error"] = f"{type(exc).__name__}: {exc}"

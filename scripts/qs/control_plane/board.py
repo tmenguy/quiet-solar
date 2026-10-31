@@ -12,6 +12,7 @@ rewritten atomically by the ``board`` tick hook and by ``cp.py board``. It is re
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import sqlite3
@@ -51,6 +52,7 @@ DONE_STATES = tasks.TERMINAL - {"dropped"}  # merged, validated
 CRITERIA_STATES = frozenset({"proposed", "ready"})  # rule 3: criteria are validated at start-up (decision C)
 EMPTY_LINE = "no state readable yet — the daemon refreshes this page"
 EMPTY_LINE_NO_DAEMON = "no state readable yet"  # with a note: no daemon will refresh this page
+RESTORING_NOTE = "a restore is in progress; the daemon will refresh this page once it ends"
 
 
 def board_path(db_path: Path) -> Path:
@@ -72,7 +74,8 @@ def write(html: str, dest: Path) -> Path:
         try:
             handle = os.fdopen(fd, "wb")
         except BaseException:
-            os.close(fd)
+            with contextlib.suppress(OSError):  # a failing close never hides the fdopen error
+                os.close(fd)
             raise
         with handle:  # a lone surrogate (a surrogateescape'd path read from the DB) never raises
             handle.write(html.encode("utf-8", "backslashreplace"))
@@ -130,6 +133,7 @@ def _halt(gate: Any, now: datetime, current: str | None = None) -> str | None:
     ):
         return None
     version = rec.get("code_version")  # equal to `current` when it is known
+    # only matters when `current` is None: a known version already returned on its override above
     masked = ov is not None and version is not None and ov.get("code_version") == version
     return None if masked else "failed"
 
@@ -292,8 +296,8 @@ def _task_row(
     }
 
 
-def _oldest(now: datetime, stamps: list[Any], *, newest: bool = False) -> Any:
-    """The oldest (or newest) readable stamp of ``stamps``; the first one when none is readable."""
+def _extreme_stamp(now: datetime, stamps: list[Any], *, newest: bool) -> Any:
+    """The newest (``newest``) or oldest readable stamp of ``stamps``; the first one when none is readable."""
     aged = [(age, s) for s in stamps if (age := _age(now, s)) is not None]
     if not aged:
         return stamps[0]
@@ -310,8 +314,8 @@ def _alert_group(now: datetime, rows: list[dict[str, Any]], names: dict[str, Any
             runs.append(name)
     return {
         **_alert_row(rows[0]),
-        "first_seen": _oldest(now, [a["first_seen"] for a in rows]),
-        "last_seen": _oldest(now, [a["last_seen"] for a in rows], newest=True),
+        "first_seen": _extreme_stamp(now, [a["first_seen"] for a in rows], newest=False),
+        "last_seen": _extreme_stamp(now, [a["last_seen"] for a in rows], newest=True),
         "cleared": all(a["cleared_at"] is not None for a in rows),
         "runs": runs,
     }
@@ -421,6 +425,8 @@ def _waiting(
     if error is not None:
         detail = error.get("error") if isinstance(error, dict) else error
         at = error.get("at") if isinstance(error, dict) else None
+        if not at or not str(at).strip():  # an empty or blank date names none
+            at = None
         out.append(
             {
                 "rule": 5,
@@ -547,7 +553,7 @@ def model(
     for a in all_alerts:
         if a["kind"] in alerts.CROSS_RUN_KINDS and str(a["run_id"]) in open_ids:
             members.setdefault(str(a["fingerprint"]), []).append(a)
-    groups = {fp: _alert_group(now, rows, names) for fp, rows in members.items()}
+    groups = sorted((_alert_group(now, rows, names) for rows in members.values()), key=lambda g: g["cleared"])
     cross_reviews = [
         _review_row(r, [t for t in rts if str(t["review_id"]) == str(r["id"])])
         for r in reviews
@@ -573,7 +579,7 @@ def model(
         "empty": False,
         "waiting": waiting,
         "runs": sections,
-        "cross_run": {"alerts": list(groups.values()), "reviews": cross_reviews},
+        "cross_run": {"alerts": groups, "reviews": cross_reviews},
         "system": _system(snap, now, code_schema),
         "closed_runs": closed,
     }
@@ -583,8 +589,14 @@ def model(
 
 
 def _code_version(main: Path) -> str | None:
-    """The code version on disk under ``main``; ``None`` when it cannot be read."""
+    """The code version on disk under ``main``; ``None`` mid git operation or when it cannot be read.
+
+    Mid-operation (``codever.git_busy``) the files are half-written: the halt falls back to the
+    unknown-version rule instead of flickering, as ``selfcheck.code_version_hook`` waits it out.
+    """
     try:
+        if codever.git_busy(main) is not None:
+            return None
         return codever.code_version(main)
     except Exception:  # noqa: BLE001 — the board must render; an unknown version keeps the record's own
         return None

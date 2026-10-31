@@ -65,8 +65,9 @@ class TestFile:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         dest = board.board_path(tmp_path / "a.db")
-        real_mkstemp = board.tempfile.mkstemp
+        real_mkstemp, real_close = board.tempfile.mkstemp, os.close
         fds: list[int] = []
+        closed: list[int] = []
 
         def mkstemp(**kw):
             fd, name = real_mkstemp(**kw)
@@ -76,12 +77,33 @@ class TestFile:
         def fdopen(fd: int, mode: str):
             raise OSError("no fdopen")
 
+        def close(fd: int) -> None:
+            closed.append(fd)
+            real_close(fd)
+
         monkeypatch.setattr(board.tempfile, "mkstemp", mkstemp)
         monkeypatch.setattr(board.os, "fdopen", fdopen)
+        monkeypatch.setattr(board.os, "close", close)
         with pytest.raises(OSError, match="no fdopen"):
             board.write("x", dest)
-        with pytest.raises(OSError):
-            os.fstat(fds[0])  # closed
+        assert closed == fds and len(fds) == 1
+        assert list(dest.parent.iterdir()) == []
+
+    def test_a_failing_close_keeps_the_fdopen_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        dest = board.board_path(tmp_path / "a.db")
+        real_close = os.close
+
+        def fdopen(fd: int, mode: str):
+            raise OSError("no fdopen")
+
+        def close(fd: int) -> None:
+            real_close(fd)
+            raise OSError("bad close")
+
+        monkeypatch.setattr(board.os, "fdopen", fdopen)
+        monkeypatch.setattr(board.os, "close", close)
+        with pytest.raises(OSError, match="no fdopen"):
+            board.write("x", dest)
         assert list(dest.parent.iterdir()) == []
 
     def test_a_lone_surrogate_is_written(self, tmp_path: Path) -> None:
@@ -144,6 +166,18 @@ class TestModel:
         assert m["waiting"][5]["detail"] == "OSError: disk full"
         assert m["waiting"][5]["text"] == f"The Control Plane backup is failing (last error at {bf.ago(100)})."
 
+    def test_asked_questions_of_equal_blocking_are_oldest_first(self) -> None:
+        snap = bf.fixture()
+        snap["questions"].append(bf._question("Q-7", "R1", "T2", "asked", 900))  # after Q-2, yet older
+        assert [w["copy"][1] for w in _model(snap)["waiting"] if w["rule"] == 2] == ["Q-1", "Q-7", "Q-2"]
+
+    @pytest.mark.parametrize("at", ["", "   ", None])
+    def test_a_backup_error_with_no_date_names_none(self, at) -> None:
+        snap = bf.fixture()
+        snap["backup"]["last_error"] = {"at": at, "error": "OSError: disk full"}
+        [rule5] = [w for w in _model(snap)["waiting"] if w["rule"] == 5]
+        assert rule5["text"] == "The Control Plane backup is failing." and rule5["detail"] == "OSError: disk full"
+
     def test_orchestrator_state_per_run(self) -> None:
         m = _model(bf.fixture())
         assert _run(m, "R1")["orchestrator"] == "not listening" and _run(m, "R2")["orchestrator"] == "gone"
@@ -188,6 +222,21 @@ class TestModel:
         assert group["cleared"] is False  # one member is open
         assert group["first_seen"] == bf.ago(70) and group["last_seen"] == bf.ago(20)
         assert group["runs"] == ["alpha", "beta"]  # each run once, first-seen order
+
+    def test_cross_run_groups_are_open_first(self) -> None:
+        snap = bf.fixture()
+        for a in snap["alerts"][3:5]:
+            a.update(cleared_at=bf.ago(1))
+        fp = "overlap_cross_run:y:1"
+        snap["alerts"].append(bf._alert(11, "R1", "overlap_cross_run", "T2|T30", 15, fingerprint=fp))
+        snap["alerts"].append(bf._alert(12, "R2", "overlap_cross_run", "T2|T30", 15, fingerprint=fp))
+        snap["alerts"].append(bf._alert(13, "R1", "overlap_cross_run", "T5|T30", 15, fingerprint="z", cleared=True))
+        groups = _model(snap)["cross_run"]["alerts"]
+        assert [(g["subject"], g["cleared"]) for g in groups] == [
+            ("T2|T30", False),
+            ("T1|T30", True),  # the cleared ones keep their snapshot order
+            ("T5|T30", True),
+        ]
 
     def test_a_cross_run_group_of_cleared_alerts_is_cleared(self) -> None:
         snap = bf.fixture()
@@ -355,6 +404,10 @@ class TestHalt:
         m = board.model(snap, now=bf.NOW, main=MAIN, code_schema=6, code_version=current)
         assert [w["copy"] for w in m["waiting"] if w["rule"] == 4] == ([] if halt is None else [["halt", halt]])
 
+    def test_a_halt_with_open_runs_goes_to_any_of_their_chats(self) -> None:
+        [rule4] = [w for w in _model(bf.with_gate(selfcheck=FAILED))["waiting"] if w["rule"] == 4]
+        assert rule4["run"] is None and rule4["where"] == {"to": "any_chat", "chats": ["alpha-chat", "beta"]}
+
     def test_a_halt_with_no_open_run_goes_to_a_new_session(self) -> None:
         snap = bf.with_gate(selfcheck=FAILED)
         for run in snap["runs"]:
@@ -461,6 +514,17 @@ class TestHook:
         board.render_to(conn, fake_clock, migrated, fake_main, note="n")
         assert seen[-1]["code_version"] is None and seen[-1]["note"] == "n"
 
+    def test_a_git_operation_makes_the_code_version_unknown(self, fake_main: Path, monkeypatch) -> None:
+        from control_plane import codever
+
+        assert board._code_version(fake_main) == codever.code_version(fake_main)
+        (fake_main / ".git").mkdir(parents=True, exist_ok=True)
+        (fake_main / ".git" / "MERGE_HEAD").write_text("x")
+        assert board._code_version(fake_main) is None
+        computed: list[Path] = []
+        monkeypatch.setattr(codever, "code_version", lambda main: computed.append(main) or "v")
+        assert board._code_version(fake_main) is None and computed == []  # no hash mid-operation
+
     def test_render_to_shows_the_note(self, tmp_path: Path, fake_clock, fake_main: Path) -> None:
         dest = board.render_to(None, fake_clock, tmp_path / "none.db", fake_main, note="the daemon <failed>")
         page = dest.read_text()
@@ -537,6 +601,13 @@ class TestHook:
         board.ticks._reset_for_tests()
         board.board_hook(conn, fake_clock)
         assert capsys.readouterr().err.count("[cp-board]") == 2
+
+    def test_a_new_daemon_forgets_the_logged_error(self, monkeypatch) -> None:
+        from control_plane import activeloop
+
+        monkeypatch.setattr(board, "_logged_error", "x")
+        activeloop._reset_for_tests()
+        assert board._logged_error is None
 
     def test_the_daemon_survives_a_raising_render(
         self, migrated: Path, fake_clock, fake_probe, monkeypatch, active_loop, capsys
@@ -625,10 +696,29 @@ class TestCommand:
         page = Path(out["path"]).read_text()
         assert "the migration failed: boom" in page and board.EMPTY_LINE_NO_DAEMON in page
 
-    def test_a_running_daemon_adds_no_note(self, migrated: Path, invoke, monkeypatch) -> None:
+    @pytest.mark.parametrize("status", [{"status": "migrate_failed"}, {"status": "migrate_failed", "error": None}])
+    def test_a_failed_migration_with_no_error_text(self, db_path: Path, invoke, monkeypatch, status: dict) -> None:
         from control_plane import cli
 
-        monkeypatch.setattr(cli, "ensure_daemon", lambda io, path=None: {"status": "already_running", "pid": 1})
+        monkeypatch.setattr(cli, "ensure_daemon", lambda io, path=None: status)
+        code, out = invoke("board", "--no-open")
+        assert code == 0 and out["daemon_error"] == "no detail recorded"
+        page = Path(out["path"]).read_text()
+        assert "the migration failed: no detail recorded" in page and "None" not in page
+
+    def test_a_restore_in_progress_is_noted(self, migrated: Path, invoke, monkeypatch) -> None:
+        from control_plane import cli
+
+        monkeypatch.setattr(cli, "ensure_daemon", lambda io, path=None: {"status": "restoring"})
+        code, out = invoke("board", "--no-open")
+        assert code == 0 and out["daemon"] == "restoring" and "daemon_error" not in out
+        assert board.RESTORING_NOTE in Path(out["path"]).read_text()
+
+    @pytest.mark.parametrize("status", ["already_running", "newer_running"])
+    def test_a_running_daemon_adds_no_note(self, migrated: Path, invoke, monkeypatch, status: str) -> None:
+        from control_plane import cli
+
+        monkeypatch.setattr(cli, "ensure_daemon", lambda io, path=None: {"status": status, "pid": 1})
         code, out = invoke("board", "--no-open")
         assert code == 0 and "daemon_error" not in out and 'id="note"' not in Path(out["path"]).read_text()
 
