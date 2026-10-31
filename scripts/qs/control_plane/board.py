@@ -26,6 +26,7 @@ from . import (
     activeloop,
     alerts,
     board_render,
+    codever,
     daemon,
     db,
     errors,
@@ -49,6 +50,7 @@ GRAPH_TITLE_MAX = 40
 DONE_STATES = tasks.TERMINAL - {"dropped"}  # merged, validated
 CRITERIA_STATES = frozenset({"proposed", "ready"})  # rule 3: criteria are validated at start-up (decision C)
 EMPTY_LINE = "no state readable yet — the daemon refreshes this page"
+EMPTY_LINE_NO_DAEMON = "no state readable yet"  # with a note: no daemon will refresh this page
 
 
 def board_path(db_path: Path) -> Path:
@@ -67,8 +69,13 @@ def write(html: str, dest: Path) -> Path:
     paths.ensure_private_dir(dest.parent)
     fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix="index.html.", suffix=".partial")
     try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(html.encode("utf-8"))
+        try:
+            handle = os.fdopen(fd, "wb")
+        except BaseException:
+            os.close(fd)
+            raise
+        with handle:  # a lone surrogate (a surrogateescape'd path read from the DB) never raises
+            handle.write(html.encode("utf-8", "backslashreplace"))
         os.replace(tmp, dest)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
@@ -98,22 +105,32 @@ def _list(value: Any) -> list[dict[str, Any]]:
     return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
 
 
-def _halt(gate: Any, now: datetime) -> str | None:
-    """``"stuck"``, ``"failed"`` or ``None``: read-only, for rule 4 only (D5; the authority is ``tool merge``)."""
+def _halt(gate: Any, now: datetime, current: str | None = None) -> str | None:
+    """``"stuck"``, ``"failed"`` or ``None``: read-only, for rule 4 only (D5; the authority is ``tool merge``).
+
+    ``current`` is the code version on disk. Known, it mirrors ``mergegate.merge_allowed``: only the records
+    of the current version count. ``None`` (unknown): every record counts, as of the record's own version.
+    """
     gate = _dict(gate) or {}
-    pending = _dict(gate.get("pending"))
-    if pending is not None:  # always newer than the record and the override (both delete it)
-        waited = _age(now, pending.get("since"))
-        return "stuck" if waited is not None and waited > mergegate.PENDING_ESCALATE_S else None
-    rec = _dict(gate.get("selfcheck"))
+    rec, ov, pending = (_dict(gate.get(key)) for key in ("selfcheck", "override", "pending"))
+    if current is not None:
+        if ov is not None and ov.get("code_version") == current:
+            return None
+        rec = rec if rec is not None and rec.get("code_version") == current else None
+        pending = pending if pending is not None and pending.get("code_version") == current else None
+    waited = None if pending is None else _age(now, pending.get("since"))
+    if waited is not None and (current is None or rec is None):
+        # a readable pending mark is newer than the record and the override (both delete it); an
+        # unreadable one hides nothing
+        return "stuck" if waited > mergegate.PENDING_ESCALATE_S else None
     if (
         rec is None
         or rec.get("ok") is not False
         or mergegate.int_or(rec.get("tries"), 1) < mergegate.SELFCHECK_ESCALATE_AFTER
     ):
         return None
-    ov = _dict(gate.get("override"))
-    masked = ov is not None and ov.get("code_version") is not None and ov.get("code_version") == rec.get("code_version")
+    version = rec.get("code_version")  # equal to `current` when it is known
+    masked = ov is not None and version is not None and ov.get("code_version") == version
     return None if masked else "failed"
 
 
@@ -275,6 +292,31 @@ def _task_row(
     }
 
 
+def _oldest(now: datetime, stamps: list[Any], *, newest: bool = False) -> Any:
+    """The oldest (or newest) readable stamp of ``stamps``; the first one when none is readable."""
+    aged = [(age, s) for s in stamps if (age := _age(now, s)) is not None]
+    if not aged:
+        return stamps[0]
+    pick = min if newest else max
+    return pick(aged, key=lambda pair: pair[0])[1]
+
+
+def _alert_group(now: datetime, rows: list[dict[str, Any]], names: dict[str, Any]) -> dict[str, Any]:
+    """One cross-run group: open if any member is open, the widest time span, each run once."""
+    runs: list[Any] = []
+    for a in rows:
+        name = names[str(a["run_id"])]
+        if name not in runs:
+            runs.append(name)
+    return {
+        **_alert_row(rows[0]),
+        "first_seen": _oldest(now, [a["first_seen"] for a in rows]),
+        "last_seen": _oldest(now, [a["last_seen"] for a in rows], newest=True),
+        "cleared": all(a["cleared_at"] is not None for a in rows),
+        "runs": runs,
+    }
+
+
 def _alert_row(a: dict[str, Any]) -> dict[str, Any]:
     return {
         "kind": a["kind"],
@@ -378,12 +420,13 @@ def _waiting(
     error = (_dict(snap.get("backup")) or {}).get("last_error")
     if error is not None:
         detail = error.get("error") if isinstance(error, dict) else error
+        at = error.get("at") if isinstance(error, dict) else None
         out.append(
             {
                 "rule": 5,
                 "run": None,
                 "where": _where_any(open_runs),
-                "text": "The Control Plane backup is failing.",
+                "text": "The Control Plane backup is failing" + ("." if at is None else f" (last error at {at})."),
                 "detail": detail,
                 "copy": ["backup"],
             }
@@ -422,11 +465,24 @@ def _header(now: datetime, main: Path, code_schema: int) -> dict[str, Any]:
     }
 
 
-def model(snap: dict[str, Any], *, now: datetime, main: Path, code_schema: int) -> dict[str, Any]:
-    """The board's view model of ``snap`` (a ``snapshot`` dict): pure, and tolerant of any DB value (D4)."""
-    out = _header(now, main, code_schema)
+def model(
+    snap: dict[str, Any],
+    *,
+    now: datetime,
+    main: Path,
+    code_schema: int,
+    code_version: str | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    """The board's view model of ``snap`` (a ``snapshot`` dict): pure, and tolerant of any DB value (D4).
+
+    ``code_version`` is the code on disk (``None``: unknown, see ``_halt``); ``note`` says why no daemon
+    will refresh the page (``cp.py board`` only).
+    """
+    out = {**_header(now, main, code_schema), "note": note}
     if snap.get("schema_version") is None:  # `snapshot.empty()`: no DB yet, or a migration in progress
-        return {**out, "empty": True, "empty_line": EMPTY_LINE, "waiting": []}
+        line = EMPTY_LINE if note is None else EMPTY_LINE_NO_DAEMON
+        return {**out, "empty": True, "empty_line": line, "waiting": []}
     runs = _list(snap.get("runs"))
     open_runs = [r for r in runs if r["state"] == "open"]
     open_ids = {str(r["id"]) for r in open_runs}
@@ -443,13 +499,12 @@ def model(snap: dict[str, Any], *, now: datetime, main: Path, code_schema: int) 
         questions.setdefault(str(q["task_id"]), []).append(q)
     rts = _list(snap.get("review_tasks"))
     reviews = _list(snap.get("reviews"))
-    halt = _halt(snap.get("merge_gate"), now)
+    halt = _halt(snap.get("merge_gate"), now, code_version)
     waiting = _waiting(snap, open_runs, halt, all_alerts)
-    orch = {
-        item["run"]: ("not listening" if item["where"]["to"] == "chat" else "gone")
-        for item in waiting
-        if item["rule"] == 1
-    }
+    orch: dict[Any, str] = {}
+    for item in waiting:
+        if item["rule"] == 1 and orch.get(item["run"]) != "gone":  # gone wins over not listening
+            orch[item["run"]] = "not listening" if item["where"]["to"] == "chat" else "gone"
     sections = []
     for run in open_runs:
         rid = str(run["id"])
@@ -488,11 +543,11 @@ def model(snap: dict[str, Any], *, now: datetime, main: Path, code_schema: int) 
             }
         )
     names = {str(r["id"]): r["name"] for r in runs}
-    groups: dict[str, dict[str, Any]] = {}
+    members: dict[str, list[dict[str, Any]]] = {}
     for a in all_alerts:
         if a["kind"] in alerts.CROSS_RUN_KINDS and str(a["run_id"]) in open_ids:
-            group = groups.setdefault(str(a["fingerprint"]), {**_alert_row(a), "runs": []})
-            group["runs"].append(names[str(a["run_id"])])
+            members.setdefault(str(a["fingerprint"]), []).append(a)
+    groups = {fp: _alert_group(now, rows, names) for fp, rows in members.items()}
     cross_reviews = [
         _review_row(r, [t for t in rts if str(t["review_id"]) == str(r["id"])])
         for r in reviews
@@ -527,10 +582,27 @@ def model(snap: dict[str, Any], *, now: datetime, main: Path, code_schema: int) 
 # --------------------------------------------------------------------------- render_to and the hook (D8)
 
 
-def render_to(conn: sqlite3.Connection | None, clock: clock_mod.Clock, db_path: Path, main: Path) -> Path:
+def _code_version(main: Path) -> str | None:
+    """The code version on disk under ``main``; ``None`` when it cannot be read."""
+    try:
+        return codever.code_version(main)
+    except Exception:  # noqa: BLE001 — the board must render; an unknown version keeps the record's own
+        return None
+
+
+def render_to(
+    conn: sqlite3.Connection | None, clock: clock_mod.Clock, db_path: Path, main: Path, *, note: str | None = None
+) -> Path:
     """Render the board of ``conn`` (``None``: no readable state) and write it to ``board_path(db_path)``."""
     snap = snapshot.empty() if conn is None else snapshot.snapshot(conn, clock)
-    view = model(snap, now=clock.now(), main=main, code_schema=migrations.current_schema_version())
+    view = model(
+        snap,
+        now=clock.now(),
+        main=main,
+        code_schema=migrations.current_schema_version(),
+        code_version=_code_version(main),
+        note=note,
+    )
     return write(board_render.scrub(board_render.render(view)), board_path(db_path))
 
 
@@ -549,6 +621,13 @@ def _log(message: str) -> None:
     sys.stderr.flush()
 
 
+def _error_key(exc: BaseException) -> str:
+    """What makes two failures the same: an ``OSError``'s errno and text, never its (random temp) file name."""
+    if isinstance(exc, OSError) and exc.strerror is not None:
+        return f"{type(exc).__name__}: [Errno {exc.errno}] {exc.strerror}"
+    return f"{type(exc).__name__}: {exc}"
+
+
 def board_hook(conn: sqlite3.Connection, clock: clock_mod.Clock) -> None:
     """The ``board`` tick hook: rewrite this DB's board every ``BOARD_EVERY_S`` (registered last)."""
     global _logged_error
@@ -557,9 +636,9 @@ def board_hook(conn: sqlite3.Connection, clock: clock_mod.Clock) -> None:
     try:
         render_to(conn, clock, db.path_of(conn), activeloop.seams().main)
     except (OSError, errors.CpError, sqlite3.Error) as exc:
-        message = f"{type(exc).__name__}: {exc}"
-        if message != _logged_error:
-            _logged_error = message
-            _log(f"board write failed: {message}")
+        key = _error_key(exc)
+        if key != _logged_error:
+            _logged_error = key
+            _log(f"board write failed: {type(exc).__name__}: {exc}")
         return
     _logged_error = None

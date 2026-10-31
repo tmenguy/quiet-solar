@@ -294,25 +294,36 @@ def _board(args: argparse.Namespace, io: Io) -> dict[str, Any]:
         if exc.code != "SCHEMA_PENDING":
             raise
     result: dict[str, Any] = {}
+    note: str | None = None
     try:
-        result["daemon"] = ensure_daemon(io, path)["status"]
-    except Exception as exc:  # noqa: BLE001 — the board is written anyway; its banner tells a stopped daemon
+        status = ensure_daemon(io, path)
+        result["daemon"] = status["status"]
+        if status["status"] == "migrate_failed":
+            result["daemon_error"] = status.get("error")
+            note = f"the migration failed: {status.get('error')}"
+    except Exception as exc:  # noqa: BLE001 — the board is written anyway; its note tells a stopped daemon
         result["daemon"] = "error"
         result["daemon_error"] = f"{type(exc).__name__}: {exc}"
+        note = f"the daemon failed to start: {result['daemon_error']}"
     try:
         try:
             with connection(io, "read") as conn:
                 schema = "missing" if conn is None else "ok"
-                dest = board.render_to(conn, clock, path, main)
+                dest = board.render_to(conn, clock, path, main, note=note)
         except errors.CpError as exc:
             if exc.code != "SCHEMA_PENDING":
                 raise
-            schema, dest = "pending", board.render_to(None, clock, path, main)
+            schema, dest = "pending", board.render_to(None, clock, path, main, note=note)
     except OSError as exc:
         raise errors.CpError("INTERNAL", f"board write failed: {exc}", hint="check QS_CP_BOARD_DIR") from exc
     url = dest.as_uri()
-    opened = False if args.no_open else io.deps.open_url(url)
-    return {"path": str(dest), "url": url, **result, "schema": schema, "opened": bool(opened)}
+    out = {"path": str(dest), "url": url, **result, "schema": schema, "opened": False}
+    if not args.no_open:
+        try:
+            out["opened"] = bool(io.deps.open_url(url))
+        except Exception as exc:  # noqa: BLE001 — the page is written: print its path whatever the browser does
+            out["open_error"] = f"{type(exc).__name__}: {exc}"
+    return out
 
 
 def session_id(args: argparse.Namespace) -> str:

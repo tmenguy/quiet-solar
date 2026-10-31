@@ -119,6 +119,12 @@ class TestContent:
         assert 'data-stale-s="120"' in body.group(1) and 'data-refresh-s="10"' in body.group(1)
         assert 'data-force-reload-s="60"' in body.group(1)
 
+    def test_a_note_is_shown_escaped(self) -> None:
+        m = board.model(snapshot.empty(), now=bf.NOW, main=MAIN, code_schema=6, note="the daemon <b>x</b>")
+        page = board_render.render(m)
+        assert '<p id="note"><b>the daemon is not refreshing this page:</b> the daemon &lt;b&gt;x&lt;/b&gt;</p>' in page
+        assert board.EMPTY_LINE_NO_DAEMON in page and 'id="note"' not in _page(bf.fixture())
+
     def test_nothing_waiting_and_the_empty_page(self) -> None:
         page = _page(bf.MINIMAL_SNAPSHOT)
         assert "Nothing is waiting for you." in page and "<b>0</b> waiting for you" in page
@@ -169,7 +175,7 @@ class TestHostile:
         if value == HOSTILE[2]:
             assert value in page  # shown beside the block, as text
 
-    @pytest.mark.parametrize("short_id", ["bad id", "x;rm", "a" * 65, "", "$(id)"])
+    @pytest.mark.parametrize("short_id", ["bad id", "x;rm", "a" * 65, "", "$(id)", "-x", "--foo", "-"])
     def test_a_short_id_off_its_shape_gives_no_attach_block(self, short_id: str) -> None:
         snap = bf.fixture()
         snap["nodes"][1]["short_id"] = short_id
@@ -190,6 +196,10 @@ class TestHostile:
     def test_an_id_off_its_shape_gives_no_block(self, kind: str, value: Any) -> None:
         assert board_render.copy_text(kind, value) is None
         assert board_render._copy(None) == ""
+
+    def test_a_short_id_of_its_shape_gives_an_attach_block(self) -> None:
+        assert board_render.copy_text("attach", "a-1") == "claude attach a-1"
+        assert board_render.copy_text("attach", "9" + "z" * 63) == "claude attach 9" + "z" * 63
 
     def test_a_terminal_block_quotes_the_whole_path(self) -> None:
         text = board_render.copy_text("board", main="/a b/c'd")
@@ -229,6 +239,14 @@ class TestCsp:
         assert board_render.scrub(board_render.SCRIPT) == board_render.SCRIPT
         assert " on" not in board_render.SCRIPT.replace(" one", "")  # no inline-handler style assignment
         assert "src" not in board_render.SCRIPT and "http" not in board_render.SCRIPT
+
+    def test_the_script_checks_the_age_at_load_and_on_every_tick(self) -> None:
+        script = board_render.SCRIPT
+        assert script.count("checkStale();") == 2
+        load = script.rindex("checkStale();")
+        assert load < script.rindex("setTimeout(tick, refreshMs);") and load > script.index("function tick()")
+        tick = script[script.index("function tick()") : load]
+        assert "checkStale();" in tick and tick.index("checkStale();") < tick.index("location.reload()")
 
     def test_the_page_loads_nothing_external(self) -> None:
         tags = _parse(_page(bf.fixture())).tags

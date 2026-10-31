@@ -349,9 +349,12 @@ class FakeOpenUrl:
 
     calls: list[str] = field(default_factory=list)
     result: bool = True
+    error: Exception | None = None
 
     def __call__(self, url: str) -> bool:
         self.calls.append(url)
+        if self.error is not None:
+            raise self.error
         return self.result
 
 

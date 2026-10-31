@@ -65,9 +65,12 @@ SCRIPT = """
       }
     });
   });
+  function checkStale() {
+    if (Date.now() - generated > staleMs) { banner.hidden = false; }
+  }
   function tick() {
     var now = Date.now();
-    if (now - generated > staleMs) { banner.hidden = false; }
+    checkStale();
     var sel = window.getSelection();
     var busy = (sel !== null && sel.toString().length > 0) || now - lastCopy < 5000;
     if (busy) {
@@ -77,6 +80,7 @@ SCRIPT = """
     saveOpen();
     location.reload();
   }
+  checkStale();
   setTimeout(tick, refreshMs);
 })();
 """
@@ -127,7 +131,7 @@ BOX_W, BOX_H, GAP_X, GAP_Y, PAD = 190, 34, 70, 12, 10
 TASK_ID = re.compile(r"T\d+")
 QUESTION_ID = re.compile(r"Q-\d+")
 RUN_ID = re.compile(r"R\d+")
-SHORT_ID = re.compile(r"[0-9a-zA-Z-]{1,64}")
+SHORT_ID = re.compile(r"[0-9a-zA-Z][0-9a-zA-Z-]{0,63}")  # never a leading `-`: no option for `claude attach`
 HALTS = frozenset({"failed", "stuck"})
 
 
@@ -430,9 +434,14 @@ def render(m: dict[str, Any]) -> str:
         " the daemon is stopped or the board write is failing. Refresh it from a terminal:"
         f"{_copy(copy_text('board', main=m['main']))}</div>"
     )
+    note = (
+        ""
+        if m.get("note") is None
+        else f'<p id="note"><b>the daemon is not refreshing this page:</b> {esc(m["note"])}</p>'
+    )
     header = (
         f"<header><h1>Quiet Solar board</h1><p>generated at {esc(m['generated_at'])}"
-        f" · <b>{len(m['waiting'])}</b> waiting for you</p></header>"
+        f" · <b>{len(m['waiting'])}</b> waiting for you</p>{note}</header>"
     )
     if m["empty"]:
         main = f'<p id="empty">{esc(m["empty_line"])}</p>'

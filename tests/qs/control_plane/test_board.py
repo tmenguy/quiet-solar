@@ -61,6 +61,36 @@ class TestFile:
         assert dest.read_text() == "old"
         assert sorted(p.name for p in dest.parent.iterdir()) == ["index.html"]
 
+    def test_a_failing_fdopen_closes_the_fd_and_removes_the_temp_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dest = board.board_path(tmp_path / "a.db")
+        real_mkstemp = board.tempfile.mkstemp
+        fds: list[int] = []
+
+        def mkstemp(**kw):
+            fd, name = real_mkstemp(**kw)
+            fds.append(fd)
+            return fd, name
+
+        def fdopen(fd: int, mode: str):
+            raise OSError("no fdopen")
+
+        monkeypatch.setattr(board.tempfile, "mkstemp", mkstemp)
+        monkeypatch.setattr(board.os, "fdopen", fdopen)
+        with pytest.raises(OSError, match="no fdopen"):
+            board.write("x", dest)
+        with pytest.raises(OSError):
+            os.fstat(fds[0])  # closed
+        assert list(dest.parent.iterdir()) == []
+
+    def test_a_lone_surrogate_is_written(self, tmp_path: Path) -> None:
+        snap = bf.fixture()
+        snap["backup"]["last_error"] = {"at": bf.ago(100), "error": "OSError: /x/\udc80"}
+        page = board.board_render.scrub(board.board_render.render(_model(snap)))
+        dest = board.write(page, board.board_path(tmp_path / "a.db"))
+        assert "OSError: /x/\\udc80" in dest.read_text(encoding="utf-8")
+
     def test_a_board_dir_inside_a_checkout_is_refused(
         self, tmp_path: Path, fake_main: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -112,12 +142,59 @@ class TestModel:
         assert m["waiting"][2]["detail"] == "question Q-1?" and "(blocking)" in m["waiting"][2]["text"]
         assert m["waiting"][4]["detail"] == "Snapshot keys"
         assert m["waiting"][5]["detail"] == "OSError: disk full"
+        assert m["waiting"][5]["text"] == f"The Control Plane backup is failing (last error at {bf.ago(100)})."
 
     def test_orchestrator_state_per_run(self) -> None:
         m = _model(bf.fixture())
         assert _run(m, "R1")["orchestrator"] == "not listening" and _run(m, "R2")["orchestrator"] == "gone"
         assert _run(m, "R1")["chat"] == "alpha-chat" and _run(m, "R1")["short_id"] == "abc-1"
         assert _run(m, "R2")["chat"] == "beta" and _run(m, "R2")["short_id"] is None  # no lease: the run's name
+
+    def test_a_dead_and_deaf_orchestrator_is_gone(self) -> None:
+        snap = bf.fixture()
+        snap["alerts"].append(bf._alert(8, "R1", "orchestrator_dead", "R1", 80))  # older than not listening
+        m = _model(snap)
+        assert _run(m, "R1")["orchestrator"] == "gone"
+        snap["alerts"][-1]["first_seen"] = bf.ago(10)  # newer: still gone
+        assert _run(_model(snap), "R1")["orchestrator"] == "gone"
+
+    def test_a_lease_less_run_with_tasks_points_at_its_name(self) -> None:
+        snap = bf.fixture()
+        snap["tasks"].append(bf._task("T40", "R2", "ready", "Beta task"))
+        snap["criteria"].append(bf._criterion("T40", 0, "open", False))
+        snap["questions"].append(bf._question("Q-6", "R2", "T40", "asked", 600))
+        m = _model(snap)
+        beta = [(w["rule"], w["where"], w["copy"]) for w in m["waiting"] if w["run"] == "R2" and w["rule"] in (2, 3)]
+        assert beta == [
+            (2, {"to": "chat", "chat": "beta"}, ["answer", "Q-6"]),
+            (3, {"to": "chat", "chat": "beta"}, ["criteria", "T40"]),
+        ]
+
+    def test_a_cross_run_review_of_closed_runs_only_is_not_shown(self) -> None:
+        snap = bf.fixture()
+        snap["reviews"].append(bf._review("V3", "cross_run", "finished", None, "old"))
+        snap["review_tasks"].append(bf._review_task("V3", "T20", "R3", "pass", "ok"))
+        snap["review_tasks"].append(bf._review_task("V3", "T30", "R4", "pass", "ok"))
+        assert [r["id"] for r in _model(snap)["cross_run"]["reviews"]] == ["V2"]
+
+    def test_a_cross_run_group_merges_its_alerts(self) -> None:
+        snap = bf.fixture()
+        fp = "overlap_cross_run:x:1"
+        snap["alerts"][3].update(cleared_at=bf.ago(1), first_seen=bf.ago(30), last_seen=bf.ago(20))
+        snap["alerts"][4].update(first_seen=bf.ago(50), last_seen=bf.ago(25))
+        snap["alerts"].append(bf._alert(9, "R1", "overlap_cross_run", "T1|T30", 70, fingerprint=fp, last_seen="x"))
+        snap["alerts"].append(bf._alert(10, "R2", "overlap_cross_run", "T1|T30", 10, fingerprint=fp, last_seen=None))
+        [group] = _model(snap)["cross_run"]["alerts"]
+        assert group["cleared"] is False  # one member is open
+        assert group["first_seen"] == bf.ago(70) and group["last_seen"] == bf.ago(20)
+        assert group["runs"] == ["alpha", "beta"]  # each run once, first-seen order
+
+    def test_a_cross_run_group_of_cleared_alerts_is_cleared(self) -> None:
+        snap = bf.fixture()
+        for a in snap["alerts"][3:5]:
+            a.update(cleared_at=bf.ago(1), first_seen="x", last_seen=None)
+        [group] = _model(snap)["cross_run"]["alerts"]
+        assert group["cleared"] is True and group["first_seen"] == "x" and group["last_seen"] is None
 
     def test_placement(self) -> None:
         m = _model(bf.fixture())
@@ -211,7 +288,17 @@ class TestModel:
 
         m = _model(snapshot.empty())
         assert m["empty"] is True and m["waiting"] == [] and m["empty_line"] == board.EMPTY_LINE
-        assert "runs" not in m
+        assert "runs" not in m and m["note"] is None
+
+    def test_a_note_replaces_the_refresh_claim(self) -> None:
+        from control_plane import snapshot
+
+        note = "the daemon failed to start: RuntimeError: no fork"
+        m = board.model(snapshot.empty(), now=bf.NOW, main=MAIN, code_schema=6, note=note)
+        assert m["note"] == note and m["empty_line"] == board.EMPTY_LINE_NO_DAEMON
+        assert "refreshes" not in board.EMPTY_LINE_NO_DAEMON
+        full = board.model(bf.fixture(), now=bf.NOW, main=MAIN, code_schema=6, note=note)
+        assert full["note"] == note and full["empty"] is False
 
 
 FAILED = {"code_version": "v1", "ok": False, "at": "t", "tries": 3, "failures": []}
@@ -232,6 +319,7 @@ class TestHalt:
             ({"pending": {"code_version": "v1", "since": bf.ago(60)}}, None),  # pending, not stuck
             ({"selfcheck": FAILED, "pending": {"since": bf.ago(60)}}, None),  # a pending mark is newer
             ({"pending": {"code_version": "v1", "since": "x"}}, None),  # an unreadable `since`
+            ({"selfcheck": FAILED, "pending": {"since": "garbage"}}, "failed"),  # a corrupt mark hides nothing
         ],
     )
     def test_the_gate_cases(self, records: dict, halt: str | None) -> None:
@@ -239,6 +327,33 @@ class TestHalt:
         assert board._halt(bf.with_gate(**records)["merge_gate"], bf.NOW) == halt
         rule4 = [w for w in m["waiting"] if w["rule"] == 4]
         assert [w["copy"] for w in rule4] == ([] if halt is None else [["halt", halt]])
+
+    @pytest.mark.parametrize(
+        ("records", "current", "halt"),
+        [
+            ({"selfcheck": FAILED}, "v1", "failed"),
+            ({"selfcheck": FAILED}, "v2", None),  # an old version's failure: the fix landed
+            ({"selfcheck": FAILED, "override": {"code_version": "v1"}}, "v1", None),  # masks the current record
+            ({"selfcheck": FAILED, "override": {"code_version": "v1"}}, "v2", None),
+            ({"selfcheck": {**FAILED, "code_version": "v2"}, "override": {"code_version": "v1"}}, "v2", "failed"),
+            ({"selfcheck": {**FAILED, "tries": 2}}, "v1", None),  # retrying
+            (
+                {"selfcheck": {**FAILED, "ok": True}, "pending": {"code_version": "v1", "since": bf.ago(700)}},
+                "v1",
+                None,
+            ),
+            ({"pending": {"code_version": "v1", "since": bf.ago(700)}}, "v1", "stuck"),
+            ({"pending": {"code_version": "v1", "since": bf.ago(700)}}, "v2", None),  # an old version's mark
+            ({"pending": {"code_version": "v1", "since": bf.ago(60)}}, "v1", None),
+            ({"selfcheck": FAILED, "pending": {"code_version": "v1", "since": "garbage"}}, "v1", "failed"),
+            ({"override": {"code_version": "v1"}, "pending": {"code_version": "v1", "since": bf.ago(700)}}, "v1", None),
+        ],
+    )
+    def test_the_current_code_version_decides(self, records: dict, current: str, halt: str | None) -> None:
+        snap = bf.with_gate(**records)
+        assert board._halt(snap["merge_gate"], bf.NOW, current) == halt
+        m = board.model(snap, now=bf.NOW, main=MAIN, code_schema=6, code_version=current)
+        assert [w["copy"] for w in m["waiting"] if w["rule"] == 4] == ([] if halt is None else [["halt", halt]])
 
     def test_a_halt_with_no_open_run_goes_to_a_new_session(self) -> None:
         snap = bf.with_gate(selfcheck=FAILED)
@@ -328,6 +443,30 @@ class TestHook:
         dest = board.render_to(None, fake_clock, tmp_path / "none.db", fake_main)
         assert board.EMPTY_LINE in dest.read_text()
 
+    def test_render_to_passes_the_code_version(
+        self, conn, migrated: Path, fake_clock, fake_main: Path, monkeypatch
+    ) -> None:
+        from control_plane import codever
+
+        seen: list[dict] = []
+        real = board.model
+        monkeypatch.setattr(board, "model", lambda snap, **kw: seen.append(kw) or real(snap, **kw))
+        board.render_to(conn, fake_clock, migrated, fake_main)
+        assert seen[-1]["code_version"] == codever.code_version(fake_main) and seen[-1]["note"] is None
+
+        def broken(main: Path) -> str:
+            raise OSError("unreadable")
+
+        monkeypatch.setattr(codever, "code_version", broken)
+        board.render_to(conn, fake_clock, migrated, fake_main, note="n")
+        assert seen[-1]["code_version"] is None and seen[-1]["note"] == "n"
+
+    def test_render_to_shows_the_note(self, tmp_path: Path, fake_clock, fake_main: Path) -> None:
+        dest = board.render_to(None, fake_clock, tmp_path / "none.db", fake_main, note="the daemon <failed>")
+        page = dest.read_text()
+        assert board.EMPTY_LINE_NO_DAEMON in page and board.EMPTY_LINE not in page
+        assert "the daemon &lt;failed&gt;" in page
+
     def test_writes_on_the_first_tick_then_every_period(self, conn, migrated: Path, fake_clock, monkeypatch) -> None:
         writes: list[Path] = []
         real = board.write
@@ -362,6 +501,32 @@ class TestHook:
         board.board_hook(conn, fake_clock)
         assert capsys.readouterr().err.count("[cp-board]") == 1
 
+    def test_a_different_error_logs_again(self, conn, fake_clock, monkeypatch, capsys) -> None:
+        raised = iter([OSError("a"), OSError("b")])
+
+        def boom(html: str, dest: Path) -> Path:
+            raise next(raised)
+
+        monkeypatch.setattr(board, "write", boom)
+        board.board_hook(conn, fake_clock)
+        fake_clock.advance(board.BOARD_EVERY_S)
+        board.board_hook(conn, fake_clock)
+        err = capsys.readouterr().err
+        assert err.count("[cp-board]") == 2 and "OSError: a" in err and "OSError: b" in err
+
+    def test_an_os_error_on_another_temp_name_logs_once(self, conn, fake_clock, monkeypatch, capsys) -> None:
+        names = iter(["index.html.abc.partial", "index.html.xyz.partial"])
+
+        def boom(html: str, dest: Path) -> Path:
+            raise OSError(28, "No space left on device", next(names))
+
+        monkeypatch.setattr(board, "write", boom)
+        board.board_hook(conn, fake_clock)
+        fake_clock.advance(board.BOARD_EVERY_S)
+        board.board_hook(conn, fake_clock)
+        err = capsys.readouterr().err
+        assert err.count("[cp-board]") == 1 and "No space left on device" in err
+
     def test_reset_forgets_the_logged_error(self, conn, fake_clock, monkeypatch, capsys) -> None:
         def boom(html: str, dest: Path) -> Path:
             raise OSError("full")
@@ -385,15 +550,26 @@ class TestHook:
             raise KeyError("renamed")
 
         monkeypatch.setattr(board_render, "render", broken)
+        hooks = ticks.hooks()
+        first, earlier = hooks[0], []
+        assert first.__name__ != board.BOARD
+
+        def spy(conn, clk) -> None:
+            earlier.append(1)
+            first(conn, clk)
+
+        spy.__name__ = first.__name__
+        hooks[0] = spy
         out = daemon.run(
             fake_clock,
             probe=fake_probe,
             db_path=migrated,
-            tick_hooks=ticks.hooks(),
+            tick_hooks=hooks,
             max_ticks=2,
             tick_s=board.BOARD_EVERY_S,  # every tick is due
         )
         assert out["ticks"] == 2 and len(calls) == 2  # the next due tick runs the board again
+        assert len(earlier) == 2  # an earlier hook ran on both ticks
         assert capsys.readouterr().err.count("'board' failed") == 2
 
     def test_cp_version_lists_it(self, invoke) -> None:
@@ -437,7 +613,29 @@ class TestCommand:
         monkeypatch.setattr(cli, "ensure_daemon", fail)
         code, out = invoke("board", "--no-open")
         assert code == 0 and out["daemon"] == "error" and out["daemon_error"] == "RuntimeError: no fork"
-        assert Path(out["path"]).is_file()
+        page = Path(out["path"]).read_text()
+        assert "the daemon failed to start: RuntimeError: no fork" in page
+
+    def test_a_failed_migration_is_noted(self, db_path: Path, invoke, monkeypatch) -> None:
+        from control_plane import cli
+
+        monkeypatch.setattr(cli, "ensure_daemon", lambda io, path=None: {"status": "migrate_failed", "error": "boom"})
+        code, out = invoke("board", "--no-open")
+        assert code == 0 and out["daemon"] == "migrate_failed" and out["daemon_error"] == "boom"
+        page = Path(out["path"]).read_text()
+        assert "the migration failed: boom" in page and board.EMPTY_LINE_NO_DAEMON in page
+
+    def test_a_running_daemon_adds_no_note(self, migrated: Path, invoke, monkeypatch) -> None:
+        from control_plane import cli
+
+        monkeypatch.setattr(cli, "ensure_daemon", lambda io, path=None: {"status": "already_running", "pid": 1})
+        code, out = invoke("board", "--no-open")
+        assert code == 0 and "daemon_error" not in out and 'id="note"' not in Path(out["path"]).read_text()
+
+    def test_a_raising_open_url_is_not_internal(self, migrated: Path, invoke, fake_open_url) -> None:
+        fake_open_url.error = RuntimeError("no browser")
+        code, out = invoke("board")
+        assert code == 0 and out["opened"] is False and out["open_error"] == "RuntimeError: no browser"
 
     def test_a_missing_db(self, db_path: Path, invoke) -> None:
         code, out = invoke("board", "--no-open")
