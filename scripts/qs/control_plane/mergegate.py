@@ -91,7 +91,7 @@ def _pending_age(clock: clock_mod.Clock, pending: dict[str, Any]) -> float | Non
         return None
 
 
-def _int_or(value: Any, default: int) -> int:
+def int_or(value: Any, default: int) -> int:
     """``int(value)``; ``default`` for a missing, zero or hand-edited value (``"x"``, a list, ``1e999``…) (H6, I3)."""
     try:
         return int(value or default)
@@ -108,7 +108,7 @@ def merge_allowed(conn: sqlite3.Connection, version: str, clock: clock_mod.Clock
         return Verdict(OPEN, f"self-check passed for {v12}")
     rec = failed_record(conn, version)
     if rec is not None:
-        tries = _int_or(rec.get("tries"), 1)
+        tries = int_or(rec.get("tries"), 1)
         if tries >= SELFCHECK_ESCALATE_AFTER:
             return Verdict(FAILED, f"automatic merges are halted: self-check failed for {v12}; ask the maintainer")
         nxt = next_retry_at(rec)
@@ -137,7 +137,7 @@ def record(
 ) -> dict[str, Any]:
     """Record a self-check result for ``version`` (and clear its pending mark) → the record."""
     prev = failed_record(conn, version)
-    tries = 0 if ok else (_int_or(prev.get("tries"), 0) + 1 if prev is not None else 1)
+    tries = 0 if ok else (int_or(prev.get("tries"), 0) + 1 if prev is not None else 1)
     rec = {"code_version": version, "ok": ok, "at": db.now(clock), "tries": tries, "failures": failures}
     _put(conn, RECORD, rec)
     _delete(conn, PENDING)

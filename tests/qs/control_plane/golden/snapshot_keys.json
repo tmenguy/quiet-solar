@@ -11,6 +11,10 @@
     "run_id",
     "subject"
   ],
+  "backup": [
+    "last_at",
+    "last_error"
+  ],
   "blast_radius": [
     "actor",
     "at",
@@ -140,6 +144,11 @@
     "name",
     "purpose",
     "token_subject"
+  ],
+  "merge_gate": [
+    "override",
+    "pending",
+    "selfcheck"
   ],
   "nodes": [
     "generation",

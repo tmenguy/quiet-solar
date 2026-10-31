@@ -496,6 +496,53 @@ class TestSnapshot:
         assert [r["id"] for r in run_cli("snapshot", "--run", "R2")[1]["runs"]] == ["R2"]
         assert run_cli("snapshot", "--run", "nope")[1]["error"] == "NOT_FOUND"
 
+    def test_the_merge_gate_and_the_backup_state(self, busy_world) -> None:
+        """#428 D3: the three gate records and the backup state, read-only from `meta`, never filtered by `--run`."""
+        w = busy_world
+        before = sql(w["db"], "SELECT key, value FROM meta ORDER BY key")
+        snap = run_cli("snapshot")[1]
+        assert snap["merge_gate"] == {"selfcheck": None, "override": None, "pending": None}
+        assert snap["backup"] == {"last_at": None, "last_error": None}
+        records = {
+            "selfcheck": {"code_version": "v1", "ok": False, "at": "t", "tries": 3, "failures": []},
+            "selfcheck_override": {"code_version": "v0", "reason": "r", "at": "t"},
+            "selfcheck_pending": {"code_version": "v2", "since": "t"},
+            "last_backup_at": "2026-10-03T11:00:00.000000Z",
+            "last_backup_error": {"at": "t", "error": "OSError: full"},
+        }
+        for key, value in records.items():
+            sql(w["db"], "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", [key, json.dumps(value)])
+        for argv in (("snapshot",), ("snapshot", "--run", "R1")):
+            snap = run_cli(*argv)[1]
+            assert snap["merge_gate"] == {
+                "selfcheck": records["selfcheck"],
+                "override": records["selfcheck_override"],
+                "pending": records["selfcheck_pending"],
+            }
+            assert snap["backup"] == {"last_at": records["last_backup_at"], "last_error": records["last_backup_error"]}
+        assert run_cli("snapshot", "--run", "R1")[1]["merge_gate"]["selfcheck"]["tries"] == 3
+        assert len(sql(w["db"], "SELECT key FROM meta")) == len(before) + len(records)  # nothing written by a read
+
+    def test_unreadable_meta_values(self, busy_world) -> None:
+        w = busy_world
+        for key, value in (
+            ("selfcheck", "not json"),
+            ("selfcheck_override", "[1, 2]"),
+            ("selfcheck_pending", '"x"'),
+            ("last_backup_error", '"oops"'),
+        ):
+            sql(w["db"], "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", [key, value])
+        snap = run_cli("snapshot")[1]
+        assert snap["merge_gate"] == {"selfcheck": None, "override": None, "pending": None}
+        assert snap["backup"]["last_error"] == {"at": None, "error": "oops"}
+
+    def test_empty_has_the_same_shapes(self) -> None:
+        empty = snapshot.empty()
+        assert sorted(empty["merge_gate"]) == ["override", "pending", "selfcheck"]
+        assert set(empty["merge_gate"].values()) == {None}
+        assert sorted(empty["backup"]) == ["last_at", "last_error"] and set(empty["backup"].values()) == {None}
+        assert empty["merge_gate"] is not snapshot.empty()["merge_gate"]  # a fresh dict per call
+
     def test_missing_db_is_empty(self, db_path) -> None:
         code, snap = run_cli("snapshot", "--run", "R1")
         snap.pop("ok")
@@ -543,6 +590,64 @@ class TestSnapshot:
     def test_unparseable_json_columns_are_kept_as_text(self, busy_world) -> None:
         sql(busy_world["db"], "UPDATE hook_events SET detail = 'not json'")
         assert run_cli("snapshot")[1]["hook_alerts"][0]["detail"] == "not json"
+
+
+class TestBoardNoNonce:
+    """#428 AC4: no nonce and no token shape in the board, written four ways."""
+
+    @staticmethod
+    def _nonces(path: Path) -> list[str]:
+        rows = sql(
+            path,
+            "SELECT nonce FROM run_leases UNION SELECT nonce FROM nodes"
+            " UNION SELECT nonce FROM reviews UNION SELECT grant_nonce FROM reviews",
+        )
+        found = [r[0] for r in rows if r[0]]
+        assert SESSION_NONCE in found and GRANT_NONCE in found and "ab" * 16 in found and len(found) >= 4
+        return found
+
+    def _check(self, html: str, path: Path) -> None:
+        for nonce in self._nonces(path):
+            assert nonce not in html
+        assert not re.search(r"(?:run|node):[A-Z]\d+\.\d+\.[0-9a-f]{32}|review:V\d+\.[01]\.[0-9a-f]{32}", html)
+
+    def test_before_scrub(self, busy_world, fake_clock, fake_main) -> None:
+        from control_plane import board, board_render, db
+
+        c = db.connect(busy_world["db"])
+        try:
+            snap = snapshot.snapshot(c, fake_clock)
+        finally:
+            c.close()
+        self._check(
+            board_render.render(board.model(snap, now=fake_clock.now(), main=fake_main, code_schema=CUR)),
+            busy_world["db"],
+        )
+
+    def test_the_command(self, busy_world) -> None:
+        code, out = run_cli("board", "--no-open")
+        assert code == 0, out
+        self._check(Path(out["path"]).read_text(), busy_world["db"])
+
+    def test_the_hook(self, busy_world, fake_clock, active_loop) -> None:
+        from control_plane import board, db
+
+        c = db.connect(busy_world["db"])
+        try:
+            board.board_hook(c, fake_clock)
+        finally:
+            c.close()
+        self._check(board.board_path(busy_world["db"]).read_text(), busy_world["db"])
+
+    def test_render_to(self, busy_world, fake_clock, tmp_path) -> None:
+        from control_plane import board, db
+
+        c = db.connect(busy_world["db"])
+        try:
+            dest = board.render_to(c, fake_clock, busy_world["db"], tmp_path / "some main")
+        finally:
+            c.close()
+        self._check(dest.read_text(), busy_world["db"])
 
 
 class TestTaskShow:

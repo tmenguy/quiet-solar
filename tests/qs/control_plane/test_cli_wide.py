@@ -28,6 +28,7 @@ EXEMPT = {
     "hook pre-push",
     "hooks-settings",
     "review read",  # #407: no DB, no token
+    "board",  # #428: runs its own checks, starts the daemon
 }
 READ = {"session status", "snapshot", "task show", "export-summary", "ledger show"}
 NO_TOKEN_WRITES = {"run open", "run claim"}
@@ -371,6 +372,7 @@ def test_exempt_commands_under_a_newer_db(world, fake_popen, fake_clock) -> None
     assert run_cli("hook", "pre-push", stdin="refs/heads/QS_1_2 a refs/heads/QS_1_2 b\n")[0] == 1  # still refused
     assert run_cli("halt", "clear", "--reason", "r")[1]["error"] == "SCHEMA_TOO_NEW"
     assert run_cli("restore", "--confirm")[1]["error"] == "SCHEMA_TOO_NEW"  # before any stop: no popen, no sleep
+    assert run_cli("board", "--no-open")[1]["error"] == "SCHEMA_TOO_NEW"  # #428: before any ensure
     assert fake_popen.calls == [] and fake_clock.sleeps == []
 
 
