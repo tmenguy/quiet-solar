@@ -10,7 +10,7 @@ import json
 import sqlite3
 from typing import Any
 
-from . import alerts, daemon, db, errors, ledger, migrations, reports, tasks
+from . import alerts, daemon, db, errors, ledger, mergegate, migrations, reports, restore, tasks
 from . import clock as clock_mod
 
 SECRET_COLUMNS = frozenset({"nonce", "grant_nonce"})  # #407: a review's session nonce and launch grant
@@ -44,6 +44,8 @@ KEYS = (
     "reviews",
     "review_tasks",
     "review_triggers",
+    "merge_gate",
+    "backup",
 )
 
 
@@ -65,6 +67,8 @@ def empty() -> dict[str, Any]:
     out: dict[str, Any] = {k: [] for k in KEYS}
     out["schema_version"] = None
     out["daemon"] = None
+    out["merge_gate"] = {"selfcheck": None, "override": None, "pending": None}
+    out["backup"] = {"last_at": None, "last_error": None}
     return out
 
 
@@ -182,6 +186,13 @@ def snapshot(conn: sqlite3.Connection | None, clock: clock_mod.Clock, run_id: st
             "reviews": _rows(conn, f"SELECT * FROM reviews WHERE 1 = 1 {review_flt} ORDER BY created_at, id", p),
             "review_tasks": _rows(conn, f"SELECT * FROM review_tasks WHERE 1 = 1 {flt} ORDER BY review_id, task_id", p),
             "review_triggers": _rows(conn, f"SELECT * FROM review_triggers WHERE 1 = 1 {trigger_flt} ORDER BY id", p),
+            # #428 D3: global, read-only from `meta` (never `merge_allowed`, which writes)
+            "merge_gate": {
+                "selfcheck": mergegate.get(conn, mergegate.RECORD),
+                "override": mergegate.get(conn, mergegate.OVERRIDE),
+                "pending": mergegate.get(conn, mergegate.PENDING),
+            },
+            "backup": {"last_at": restore.meta_value(conn, restore.LAST_AT), "last_error": restore.last_error(conn)},
         }
 
 

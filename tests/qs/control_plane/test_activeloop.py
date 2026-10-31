@@ -81,6 +81,14 @@ class TestBuiltins:
         assert names.index("detectors") + 1 == names.index("review_pilot") == names.index("hook_route") - 1
         assert dict(activeloop._builtin())["review_pilot"] is reviewpilot.review_pilot_hook
 
+    def test_the_board_runs_last(self) -> None:
+        """#428 D8: after every hook that writes, so each page shows the tick's state."""
+        from control_plane import board
+
+        assert [n for n, _ in activeloop._builtin()][-1] == "board" == board.BOARD
+        assert dict(activeloop._builtin())["board"] is board.board_hook
+        assert "board" in activeloop.BUILTIN_NAMES
+
     def test_the_self_check_sees_a_missing_pilot_or_review_tool(self) -> None:
         from control_plane import selfcheck
 
@@ -209,6 +217,9 @@ def test_guard_with_an_open_run_and_work_for_every_hook(
         fake_clock, probe=fake_probe, db_path=migrated, tick_hooks=ticks.hooks(), max_ticks=3, loaded_version=loaded
     )
     assert out["exit"] == "max_ticks" and out["ticks"] == 3  # an open run: the daemon never idles out
+    from control_plane import board
+
+    assert board.board_path(migrated).is_file()  # #428: the board hook wrote its page, with no subprocess
     kinds = {r[0] for r in sql(migrated, "SELECT DISTINCT kind FROM alerts")}
     assert {"ci_red", "selfcheck_failed"} <= kinds
     assert fake_runner.matching("claude", "--bg") and fake_github.calls

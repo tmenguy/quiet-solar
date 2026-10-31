@@ -32,6 +32,14 @@ class TestConnect:
         ro.close()
 
 
+def test_path_of_returns_the_main_file(migrated: Path) -> None:
+    c = db.connect(migrated)
+    try:
+        assert db.path_of(c) == migrated.resolve()
+    finally:
+        c.close()
+
+
 class TestWrite:
     def test_commit_and_rollback(self, conn: sqlite3.Connection) -> None:
         with db.write(conn):

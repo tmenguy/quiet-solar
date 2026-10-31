@@ -213,5 +213,10 @@ def now(clock: clock_mod.Clock) -> str:
     return clock_mod.iso(clock.now())
 
 
+def path_of(conn: sqlite3.Connection) -> Path:
+    """The file of ``conn``'s main database."""
+    return Path(next(r[2] for r in conn.execute("PRAGMA database_list") if r[1] == "main"))
+
+
 def as_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return None if row is None else {k: row[k] for k in row.keys()}  # noqa: SIM118 — sqlite3.Row
