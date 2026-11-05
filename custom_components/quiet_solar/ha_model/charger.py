@@ -1849,6 +1849,49 @@ class QSChargerGroup(LogOnChangeMixin):
                                         )
                                         next_possible_budgeted_amp = None
 
+                                    if (
+                                        next_possible_budgeted_amp is not None
+                                        and battery_asked_charge > 0
+                                        and all_after is False
+                                        and cs.is_before_battery is False
+                                        and power_budget - global_diff_power - diff_power - battery_asked_charge < 0
+                                    ):
+                                        # the budget of a mixed group includes the battery's share, only a
+                                        # before-battery charger is allowed to use it
+                                        _LOGGER.info(
+                                            "budgeting_algorithm_minimize_diffs (%s %s): forbid change because of battery reservation for after-battery charger, power_budget %s diff_power %s battery_asked_charge %s from %s to next_possible_budgeted_amp %s",
+                                            cs.name,
+                                            cs.command,
+                                            power_budget - global_diff_power,
+                                            diff_power,
+                                            battery_asked_charge,
+                                            cs.get_budget_amps(),
+                                            next_possible_budgeted_amp,
+                                        )
+                                        next_possible_budgeted_amp = None
+
+                                    if (
+                                        next_possible_budgeted_amp is not None
+                                        and cs.is_before_battery is False
+                                        # a reset first drops a running car's budget to 0: only prevent real starts
+                                        and cs.current_real_max_charging_amp == 0
+                                        and cs.budgeted_amp == 0
+                                        and any(
+                                            other.bump_solar
+                                            and other.possible_amps == [0]
+                                            and other.charge_score > cs.charge_score
+                                            for other in actionable_chargers
+                                        )
+                                    ):
+                                        # started now, it would hold its own lockout against the bump car, whose
+                                        # OFF->ON lockout is about to end
+                                        _LOGGER.info(
+                                            "budgeting_algorithm_minimize_diffs (%s %s): forbid start of after-battery charger while a higher score bump solar charger is locked off",
+                                            cs.name,
+                                            cs.command,
+                                        )
+                                        next_possible_budgeted_amp = None
+
                                 if next_possible_budgeted_amp is not None:
                                     if (
                                         self._is_current_acceptable(
@@ -2419,7 +2462,9 @@ class QSChargerGroup(LogOnChangeMixin):
                     )
 
             if new_amp is not None:
-                if new_amp != init_amp:
+                # the idle amps re-applied to a stopped charger are bookkeeping, and a charger being stopped
+                # can't overshoot: only a real current change on a charging charger arms the Fix D cooldown
+                if new_amp != init_amp and new_state:
                     cs.charger._last_amp_change_time = time
                 cs.charger._expected_amperage.set(int(new_amp), time)
 
@@ -3057,6 +3102,16 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
         can_change_state = self._expected_charge_state.is_ok_to_set(time, time_to_check)
 
+        # the solver asks this green consign to consume the battery: it is a command-forced charge
+        forced_green_consign = (
+            cs.command.is_like(CMD_AUTO_GREEN_CONSIGN)
+            and cs.command.power_consign > 0
+            and self.home.battery is not None
+            and self.home.battery_can_discharge()
+            # it is really adapting what was computed to get in the battery vs the situation now
+            and self.home.battery.get_current_battery_asked_change_for_outside_production_system() < 0
+        )
+
         # we need to force a charge here from a given minimum
         if cs.command.is_like(CMD_AUTO_FROM_CONSIGN):
             possible_num_phases, min_amps = cs.get_consign_amps_values(consign_is_minimum=True)
@@ -3131,17 +3186,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 possible_amps = run_list
                 if cs.can_be_started_and_stopped:
                     if can_change_state:
-                        do_add_0 = True
-                        if cs.command.is_like(CMD_AUTO_GREEN_CONSIGN) and cs.command.power_consign > 0:
-                            if self.home.battery is not None:
-                                battery_asked_charge = (
-                                    self.home.battery.get_current_battery_asked_change_for_outside_production_system()
-                                )  # it is really adapting what was computed to get in the battery vs the situation now
-                                battery_can_discharge = self.home.battery_can_discharge()
-                                if battery_can_discharge and battery_asked_charge < 0:
-                                    do_add_0 = False
-
-                        if do_add_0:
+                        if not forced_green_consign:
                             possible_amps = [0]
                             possible_amps.extend(run_list)
 
@@ -3192,8 +3237,20 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         )
         cs.charge_score = score
 
-        if cs.possible_amps is not None and len(cs.possible_amps) > 0 and cs.possible_amps[0] > 0:
-            cs.charge_score += native_score_span  # to be sure that we are above the ones that are not forced to charge
+        # a green charger that only can't stop yet because of its ON->OFF hysteresis is not forced to charge
+        # (computed here: can_be_started_and_stopped is only final once the command has been handled)
+        locked_on_by_hysteresis = (
+            cs.can_be_started_and_stopped and current_state and not can_change_state and not forced_green_consign
+        )
+
+        if (
+            cs.possible_amps is not None
+            and len(cs.possible_amps) > 0
+            and cs.possible_amps[0] > 0
+            and not locked_on_by_hysteresis
+        ):
+            # only for command-forced charges: to be sure that we are above the ones that are not forced to charge
+            cs.charge_score += native_score_span
 
         return cs
 
