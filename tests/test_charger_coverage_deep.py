@@ -311,6 +311,71 @@ class TestGetStableDynamicChargeStatus:
         cs_ct = charger.get_stable_dynamic_charge_status(now)
         assert cs_ct.charge_score > cs_no_ct.charge_score
 
+    # QS-448 RC-A: "cannot stop yet" is not "commanded to charge".
+    def _setup_bump_tesla_off(self):
+        """Bump car stopped and past its lockout, on the production GREEN_CAP consign 0 command."""
+        _, _, tesla, car, now = self._setup(is_3p=True)
+        car._qs_bump_solar_priority = True
+        tesla.current_command = copy_command(CMD_AUTO_GREEN_CAP, power_consign=0)
+        tesla._expected_charge_state.value = False
+        tesla._expected_amperage.value = 0
+        tesla._expected_num_active_phases.value = 3
+        return tesla, now
+
+    def _setup_on_locked_charger(self, command, is_locked=True):
+        """Charger ON at its minimum, inside (or past) its ON->OFF lockout."""
+        _, home, charger, _, now = self._setup(is_3p=True)
+        charger.current_command = command
+        charger._expected_charge_state.value = True
+        charger._expected_amperage.value = charger.min_charge
+        charger._expected_num_active_phases.value = 3
+        charger._expected_charge_state._num_set = 5
+        lockout_start = now - timedelta(minutes=11) if is_locked else now - timedelta(hours=2)
+        charger._expected_charge_state.last_change_asked = lockout_start
+        return home, charger, now
+
+    def test_hysteresis_locked_green_charger_not_boosted_above_bump(self):
+        tesla, now = self._setup_bump_tesla_off()
+        _, buzz, _ = self._setup_on_locked_charger(copy_command(CMD_AUTO_GREEN_ONLY))
+
+        cs_tesla = tesla.get_stable_dynamic_charge_status(now)
+        cs_buzz = buzz.get_stable_dynamic_charge_status(now)
+
+        assert 0 not in cs_buzz.possible_amps
+        assert cs_tesla.charge_score > cs_buzz.charge_score
+
+    def test_hysteresis_locked_green_cap_charger_not_boosted_above_bump(self):
+        tesla, now = self._setup_bump_tesla_off()
+        _, buzz, _ = self._setup_on_locked_charger(copy_command(CMD_AUTO_GREEN_CAP, power_consign=0))
+
+        cs_tesla = tesla.get_stable_dynamic_charge_status(now)
+        cs_buzz = buzz.get_stable_dynamic_charge_status(now)
+
+        assert cs_buzz.possible_amps == [buzz.min_charge]
+        assert cs_tesla.charge_score > cs_buzz.charge_score
+
+    @pytest.mark.parametrize("is_locked", [True, False], ids=["locked", "free"])
+    @pytest.mark.parametrize("command", [CMD_AUTO_FROM_CONSIGN, CMD_AUTO_PRICE], ids=["from_consign", "price"])
+    def test_forced_command_charger_keeps_boost(self, command, is_locked):
+        _, charger, now = self._setup_on_locked_charger(copy_command(command, power_consign=2000), is_locked)
+
+        cs = charger.get_stable_dynamic_charge_status(now)
+
+        assert cs.charge_score >= 1_000_000
+
+    @pytest.mark.parametrize("is_locked", [True, False], ids=["locked", "free"])
+    def test_green_consign_battery_discharge_keeps_boost_even_when_locked(self, is_locked):
+        home, charger, now = self._setup_on_locked_charger(
+            copy_command(CMD_AUTO_GREEN_CONSIGN, power_consign=2000), is_locked
+        )
+        home.battery = _make_battery(asked_charge=-500.0)
+        home.battery_can_discharge = MagicMock(return_value=True)
+
+        cs = charger.get_stable_dynamic_charge_status(now)
+
+        assert 0 not in cs.possible_amps
+        assert cs.charge_score >= 1_000_000
+
 
 # =============================================================================
 # check_load_activity_and_constraints  (real car, real push_live_constraint)
@@ -7457,6 +7522,179 @@ class TestAmpChangeCooldown:
 
         ch._reset_state_machine()
         assert ch._last_amp_change_time is None
+
+    def _setup_apply_budgets(self, *, charge_state, amperage, budgeted_amp, score=100.0):
+        """Real charger and status ready for a real apply_budgets."""
+        hass = _make_hass()
+        home = _make_home(battery=None, home_load_power=2000.0, max_production_power=12000.0)
+        now = datetime.now(pytz.UTC)
+
+        ch = _create_charger(hass, home, "ApplyCh", is_3p=True)
+        _init_charger_states(ch, charge_state=charge_state, amperage=amperage, num_phases=3)
+        ch._ensure_correct_state = AsyncMock(return_value=True)
+        ch._last_amp_change_time = None
+        group = _make_charger_group(home, [ch])
+
+        cs = QSChargerStatus(ch)
+        cs.current_real_max_charging_amp = amperage
+        cs.current_active_phase_number = 3
+        cs.budgeted_amp = budgeted_amp
+        cs.budgeted_num_phases = 3
+        cs.charge_score = score
+        return group, ch, cs, now
+
+    @pytest.mark.parametrize(
+        ("charge_state", "amperage"),
+        [(False, 0), (True, 8)],
+        ids=["staying_stopped", "being_stopped"],
+    )
+    async def test_apply_budgets_does_not_rearm_cooldown_for_charger_staying_stopped(self, charge_state, amperage):
+        """QS-448 RC-D: the idle 6 A applied to a stopped charger is bookkeeping, not a current change."""
+        group, ch, cs, now = self._setup_apply_budgets(charge_state=charge_state, amperage=amperage, budgeted_amp=0)
+
+        await group.apply_budgets([cs], [cs], now)
+
+        assert ch._last_amp_change_time is None
+
+    @pytest.mark.parametrize(
+        ("charge_state", "amperage", "budgeted_amp"),
+        [(False, 0, 6), (True, 6, 7)],
+        ids=["start_0_to_6", "change_6_to_7"],
+    )
+    async def test_apply_budgets_arms_cooldown_on_real_change(self, charge_state, amperage, budgeted_amp):
+        """QS-448 guard: Fix D's overshoot protection stays armed on a real current change."""
+        group, ch, cs, now = self._setup_apply_budgets(
+            charge_state=charge_state, amperage=amperage, budgeted_amp=budgeted_amp
+        )
+
+        await group.apply_budgets([cs], [cs], now)
+
+        assert ch._last_amp_change_time == now
+
+    async def test_dyn_handle_keeps_stopped_charger_in_budgeting_across_cycles(self):
+        """QS-448 RC-D: a charger staying stopped must stay listed on the next budgeting cycle."""
+        hass = _make_hass()
+        home = _make_home(battery=None, home_load_power=2000.0, max_production_power=12000.0)
+        now = datetime.now(pytz.UTC)
+        past = now - timedelta(hours=2)
+
+        chargers = []
+        for name, charge_state, amperage in (("StoppedCh", False, 0), ("RunningCh", True, 8)):
+            ch = _create_charger(hass, home, name, is_3p=True)
+            car = _make_real_car(hass, home, name=f"{name}Car", max_charge=32)
+            _init_charger_states(ch, charge_state=charge_state, amperage=amperage, num_phases=3)
+            _plug_car(ch, car, past)
+            ch.can_do_3_to_1_phase_switch = MagicMock(return_value=False)
+            ch._ensure_correct_state = AsyncMock(return_value=True)
+            ch._expected_charge_state.last_change_asked = past
+            ch._expected_charge_state._num_set = 5
+            ch._last_amp_change_time = None
+            chargers.append(ch)
+        stopped, running = chargers
+
+        group = _make_charger_group(home, chargers)
+        for ch in chargers:
+            ch.father_device.charger_group = group
+
+        def fresh_statuses():
+            # same score order on each cycle: the stopped one scores lower, or the reset branch would stop the other
+            statuses = []
+            for ch, score in ((running, 200.0), (stopped, 100.0)):
+                real_amps = ch._expected_amperage.value if ch._expected_charge_state.value else 0
+                cs = QSChargerStatus(ch)
+                cs.current_real_max_charging_amp = real_amps
+                cs.current_active_phase_number = 3
+                cs.budgeted_amp = real_amps
+                cs.budgeted_num_phases = 3
+                cs.possible_amps = [0, *range(6, 33)]
+                cs.possible_num_phases = [3]
+                cs.charge_score = score
+                cs.can_be_started_and_stopped = True
+                cs.command = copy_command(CMD_AUTO_GREEN_ONLY)
+                cs.is_before_battery = False
+                # the expected draw, or the phantom surplus turns the 300 W into a large decrease
+                cs.accurate_current_power = real_amps * 3 * 230.0
+                statuses.append(cs)
+            return statuses, now - timedelta(seconds=CHARGER_ADAPTATION_WINDOW_S + 10)
+
+        group.ensure_correct_state = AsyncMock(side_effect=lambda _time: fresh_statuses())
+        pv = [(now - timedelta(seconds=i), 300.0) for i in range(10)]
+        home.get_available_power_values = MagicMock(return_value=pv)
+        home.get_grid_consumption_power_values = MagicMock(return_value=pv)
+
+        spy = AsyncMock(wraps=group.budgeting_algorithm_minimize_diffs)
+        group.budgeting_algorithm_minimize_diffs = spy
+
+        await group.dyn_handle(now)
+
+        # 300 W is below one start step and below 1 A on 3 phases: nothing really changed on cycle 1
+        assert stopped._expected_charge_state.value is False
+        assert running._expected_amperage.value == 8
+        assert running._expected_charge_state.value is True
+        assert running._last_amp_change_time is None
+
+        now_2 = now + timedelta(seconds=7)
+        await group.dyn_handle(now_2)
+
+        assert spy.await_count == 2
+        second_call_chargers = spy.await_args_list[1].args[0]
+        assert stopped in [cs.charger for cs in second_call_chargers]
+
+
+class TestApplyBudgetsPhasesOfStoppedCharger:
+    """QS-448 review fix #01: a reset must not switch the phases of a car that stays stopped."""
+
+    async def _reset_pass_then_apply(self, *, charge_state, amperage, possible_amps, budget=None):
+        """Reset pass (minimum amps, minimum phases) on a switchable 3-phase wallbox, then a real apply."""
+        hass = _make_hass()
+        home = _make_home(battery=None)
+        now = datetime.now(pytz.UTC)
+
+        ch = _create_charger(hass, home, "SwitchableCh", is_3p=True)
+        _init_charger_states(ch, charge_state=charge_state, amperage=amperage, num_phases=3)
+        ch._ensure_correct_state = AsyncMock(return_value=True)
+        group = _make_charger_group(home, [ch])
+
+        cs = QSChargerStatus(ch)
+        cs.current_real_max_charging_amp = amperage if charge_state else 0
+        cs.current_active_phase_number = 3
+        cs.possible_amps = possible_amps
+        cs.possible_num_phases = [1, 3]
+        cs.charge_score = 100.0
+        cs.command = copy_command(CMD_AUTO_GREEN_ONLY)
+
+        await group._do_prepare_budgets_for_algo([cs], True)
+        assert cs.budgeted_num_phases == 1
+        if budget is not None:
+            cs.budgeted_amp = budget
+
+        await group.apply_budgets([cs], [cs], now)
+        return ch
+
+    @pytest.mark.parametrize(
+        "possible_amps",
+        [[0], [0, *range(6, 17)]],
+        ids=["locked", "free"],
+    )
+    async def test_reset_keeps_phases_of_charger_staying_stopped(self, possible_amps):
+        ch = await self._reset_pass_then_apply(charge_state=False, amperage=0, possible_amps=possible_amps)
+
+        assert ch._expected_charge_state.value is False
+        assert ch.expected_num_active_phases == 3
+
+    async def test_reset_starting_stopped_charger_on_one_phase_still_applies_phases(self):
+        ch = await self._reset_pass_then_apply(
+            charge_state=False, amperage=0, possible_amps=[0, *range(6, 17)], budget=6
+        )
+
+        assert ch._expected_charge_state.value is True
+        assert ch.expected_num_active_phases == 1
+
+    async def test_reset_stopping_running_charger_still_applies_phases(self):
+        ch = await self._reset_pass_then_apply(charge_state=True, amperage=8, possible_amps=[0, *range(6, 17)])
+
+        assert ch._expected_charge_state.value is False
+        assert ch.expected_num_active_phases == 1
 
 
 class TestGreenConsignSingleStepIncrease:

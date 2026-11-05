@@ -27,6 +27,8 @@ from custom_components.quiet_solar.const import (
     CONF_DYN_GROUP_MAX_PHASE_AMPS,
     CONF_IS_3P,
     CONF_MONO_PHASE,
+    CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+    CONSTRAINT_TYPE_FILLER_AUTO,
     DATA_HANDLER,
     DOMAIN,
 )
@@ -41,10 +43,14 @@ from custom_components.quiet_solar.ha_model.dynamic_group import QSDynamicGroup
 from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.home_model.commands import (
     CMD_AUTO_FROM_CONSIGN,
+    CMD_AUTO_GREEN_CAP,
     CMD_AUTO_GREEN_ONLY,
     CMD_IDLE,
     CMD_ON,
+    copy_command,
 )
+from custom_components.quiet_solar.home_model.constraints import DATETIME_MAX_UTC
+from tests.factories import create_constraint
 
 # =============================================================================
 # Shared fixtures
@@ -1425,6 +1431,300 @@ class TestPriorityInversion:
         assert cs2.budgeted_amp <= cs1.budgeted_amp, (
             f"Mid score (50) should be reduced before highest: c1={cs1.budgeted_amp}, c2={cs2.budgeted_amp}"
         )
+
+    # -------------------------------------------------------------------------
+    # QS-448: the after-battery ID.buzz charged instead of the bump Tesla
+    # -------------------------------------------------------------------------
+
+    def _setup_incident_env(self, battery_asked_charge: float | None = 1028.0):
+        """Two 3-phase wallboxes, with an optional battery asking for its share."""
+        _, home, _, cg, time, _, tesla, buzz, _ = self._setup_three_charger_env(max_group_amps=32)
+        if battery_asked_charge is None:
+            home.physical_battery = None
+        else:
+            battery = MagicMock()
+            battery.get_current_battery_asked_change_for_outside_production_system = MagicMock(
+                return_value=battery_asked_charge
+            )
+            home.physical_battery = battery
+            home.battery_can_discharge = MagicMock(return_value=True)
+            # the mock battery would otherwise break the production-cap check
+            home.get_home_max_available_production_power = MagicMock(return_value=None)
+            home.get_current_maximum_production_output_power = MagicMock(return_value=None)
+        return home, cg, time, tesla, buzz
+
+    @staticmethod
+    def _locked_off_tesla(tesla, *, bump_solar: bool = False, score: float = 72400) -> QSChargerStatus:
+        """Before-battery car in its OFF->ON lockout."""
+        return _make_charger_status(
+            tesla,
+            current_amp=0,
+            num_phases=3,
+            possible_amps=[0],
+            possible_num_phases=[3],
+            charge_score=score,
+            command=copy_command(CMD_AUTO_GREEN_ONLY),
+            is_before_battery=True,
+            bump_solar=bump_solar,
+        )
+
+    @staticmethod
+    def _after_battery_buzz(
+        buzz, *, current_amp: int = 0, possible_amps: list[int] | None = None, score: float = 400
+    ) -> QSChargerStatus:
+        return _make_charger_status(
+            buzz,
+            current_amp=current_amp,
+            num_phases=3,
+            possible_amps=possible_amps if possible_amps is not None else [0, *range(6, 17)],
+            possible_num_phases=[3],
+            charge_score=score,
+            command=copy_command(CMD_AUTO_GREEN_ONLY),
+            is_before_battery=False,
+        )
+
+    @staticmethod
+    def _prepare_real_status(charger, *, is_before_battery: bool, soc: float = 50.0) -> None:
+        """Mock only what the production scoring reads from HA, so the scores are computed."""
+        charger.is_not_plugged = MagicMock(return_value=False)
+        charger.is_charger_unavailable = MagicMock(return_value=False)
+        charger._probe_and_enforce_stopped_charge_command_state = MagicMock(return_value=False)
+        # no power reading keeps the phantom-surplus code out of the budget
+        charger.get_median_sensor = MagicMock(return_value=None)
+        charger.can_do_3_to_1_phase_switch = MagicMock(return_value=False)
+        constraint = create_constraint(
+            load=charger,
+            constraint_type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN if is_before_battery else CONSTRAINT_TYPE_FILLER_AUTO,
+            end_of_constraint=DATETIME_MAX_UTC,
+        )
+        charger.get_current_active_constraint = MagicMock(return_value=constraint)
+        charger.car.get_car_charge_percent = MagicMock(return_value=soc)
+
+    def _real_bump_tesla(self, tesla, time, *, amps: int) -> QSChargerStatus:
+        self._prepare_real_status(tesla, is_before_battery=True, soc=7.0)
+        tesla.car._qs_bump_solar_priority = True
+        tesla.current_command = copy_command(CMD_AUTO_GREEN_CAP, power_consign=0)
+        tesla._expected_charge_state.value = amps > 0
+        tesla._expected_amperage.value = amps
+        tesla._expected_charge_state._num_set = 5
+        tesla._expected_charge_state.last_change_asked = time - timedelta(hours=2)
+        return tesla.get_stable_dynamic_charge_status(time)
+
+    def _real_on_locked_buzz(self, buzz, time, *, amps: int) -> QSChargerStatus:
+        self._prepare_real_status(buzz, is_before_battery=False, soc=37.0)
+        buzz.current_command = copy_command(CMD_AUTO_GREEN_ONLY)
+        buzz._expected_charge_state.value = True
+        buzz._expected_amperage.value = amps
+        buzz._expected_charge_state._num_set = 5
+        buzz._expected_charge_state.last_change_asked = time - timedelta(minutes=11)
+        return buzz.get_stable_dynamic_charge_status(time)
+
+    @pytest.mark.integration
+    async def test_after_battery_charger_cannot_start_on_battery_share_in_mixed_group(self):
+        """RC-B, the 10:15:58 figures: a listed before-battery car must not open the battery's share."""
+        _, cg, time, tesla, buzz = self._setup_incident_env()
+        cs_tesla = self._locked_off_tesla(tesla)
+        cs_buzz = self._after_battery_buzz(buzz)
+
+        await cg.budgeting_algorithm_minimize_diffs([cs_tesla, cs_buzz], 4289, 0, False, time)
+
+        assert cs_buzz.budgeted_amp == 0
+
+    @pytest.mark.integration
+    async def test_after_battery_charger_cannot_grow_on_battery_share_in_mixed_group(self):
+        """RC-B: same reservation for a running after-battery car asking for +1 A."""
+        _, cg, time, tesla, buzz = self._setup_incident_env()
+        cs_tesla = self._locked_off_tesla(tesla)
+        cs_buzz = self._after_battery_buzz(buzz, current_amp=6, possible_amps=list(range(6, 17)))
+
+        await cg.budgeting_algorithm_minimize_diffs([cs_tesla, cs_buzz], 1000, 0, False, time)
+
+        assert cs_buzz.budgeted_amp == 6
+
+    @pytest.mark.integration
+    async def test_bump_car_reclaims_budget_from_hysteresis_locked_charger(self):
+        """End to end with real scoring: the free bump car resets the locked green car away."""
+        _, cg, time, tesla, buzz = self._setup_incident_env(battery_asked_charge=None)
+        cs_tesla = self._real_bump_tesla(tesla, time, amps=0)
+        cs_buzz = self._real_on_locked_buzz(buzz, time, amps=6)
+
+        _, should_do_reset_allocation, _ = await cg.budgeting_algorithm_minimize_diffs(
+            [cs_buzz, cs_tesla], 4300, 0, True, time
+        )
+
+        assert should_do_reset_allocation is True
+        assert cs_tesla.budgeted_amp > 0
+        assert cs_buzz.budgeted_amp == 0
+
+    @pytest.mark.integration
+    async def test_dip_reduces_locked_after_battery_charger_before_bump_car(self):
+        """A dip takes amps from the locked after-battery car, not from the bump car."""
+        _, cg, time, tesla, buzz = self._setup_incident_env(battery_asked_charge=None)
+        cs_tesla = self._real_bump_tesla(tesla, time, amps=8)
+        cs_buzz = self._real_on_locked_buzz(buzz, time, amps=9)
+
+        await cg.budgeting_algorithm_minimize_diffs([cs_tesla, cs_buzz], -1000, -1000, False, time)
+
+        assert cs_buzz.budgeted_amp == 7
+        assert cs_tesla.budgeted_amp == 8
+
+    @pytest.mark.integration
+    @pytest.mark.parametrize("battery_asked_charge", [1028.0, 0.0], ids=["ask_1028", "ask_0"])
+    async def test_after_battery_charger_cannot_start_while_bump_car_is_locked_off(self, battery_asked_charge):
+        """Start block, the 10:19:00 figure: it must not hold its own lockout against the bump car."""
+        _, cg, time, tesla, buzz = self._setup_incident_env(battery_asked_charge)
+        cs_tesla = self._locked_off_tesla(tesla, bump_solar=True)
+        cs_buzz = self._after_battery_buzz(buzz)
+
+        await cg.budgeting_algorithm_minimize_diffs([cs_tesla, cs_buzz], 5590, 0, False, time)
+
+        assert cs_buzz.budgeted_amp == 0
+
+    @pytest.mark.integration
+    async def test_before_battery_charger_may_use_battery_share_in_mixed_group(self):
+        """Guard: only the after-battery chargers lose the battery's share."""
+        _, cg, time, tesla, buzz = self._setup_incident_env()
+        cs_tesla = _make_charger_status(
+            tesla,
+            current_amp=0,
+            num_phases=3,
+            possible_amps=[0, *range(6, 17)],
+            possible_num_phases=[3],
+            charge_score=72400,
+            command=copy_command(CMD_AUTO_GREEN_ONLY),
+            is_before_battery=True,
+        )
+        cs_buzz = self._after_battery_buzz(buzz)
+
+        await cg.budgeting_algorithm_minimize_diffs([cs_tesla, cs_buzz], 4289, 0, False, time)
+
+        assert cs_tesla.budgeted_amp == 6
+        assert cs_buzz.budgeted_amp == 0
+
+    @pytest.mark.integration
+    async def test_all_after_group_does_not_reserve_battery_share_twice(self):
+        """Guard: an all-after budget already excludes the ask, the gate must not subtract it again."""
+        _, cg, time, first, second = self._setup_incident_env()
+        cs_first = self._after_battery_buzz(first, score=500)
+        cs_second = self._after_battery_buzz(second)
+
+        await cg.budgeting_algorithm_minimize_diffs([cs_first, cs_second], 5300, 0, False, time)
+
+        assert cs_first.budgeted_amp == 6
+
+    @pytest.mark.integration
+    async def test_mixed_group_without_battery_ask_is_not_gated(self):
+        _, cg, time, tesla, buzz = self._setup_incident_env(battery_asked_charge=0.0)
+        cs_tesla = self._locked_off_tesla(tesla)
+        cs_buzz = self._after_battery_buzz(buzz)
+
+        await cg.budgeting_algorithm_minimize_diffs([cs_tesla, cs_buzz], 4289, 0, False, time)
+
+        assert cs_buzz.budgeted_amp == 6
+
+    @pytest.mark.integration
+    async def test_after_battery_charger_may_start_beyond_battery_share(self):
+        """Guard: the gate only reserves the battery's share."""
+        _, cg, time, tesla, buzz = self._setup_incident_env()
+        cs_tesla = self._locked_off_tesla(tesla)
+        cs_buzz = self._after_battery_buzz(buzz)
+
+        await cg.budgeting_algorithm_minimize_diffs([cs_tesla, cs_buzz], 5500, 0, False, time)
+
+        assert cs_buzz.budgeted_amp == 6
+
+    @pytest.mark.integration
+    async def test_start_block_limit_free_bump_car_that_cannot_afford_its_start(self):
+        """A free bump car blocks nothing: this pins `possible_amps == [0]`."""
+        _, cg, time, tesla, buzz = self._setup_incident_env()
+        cs_tesla = self._locked_off_tesla(tesla, bump_solar=True)
+        cs_tesla.possible_amps = [0, *range(8, 17)]
+        cs_buzz = self._after_battery_buzz(buzz)
+
+        await cg.budgeting_algorithm_minimize_diffs([cs_tesla, cs_buzz], 5300, 0, False, time)
+
+        assert cs_tesla.budgeted_amp == 0
+        assert cs_buzz.budgeted_amp == 6
+
+    @pytest.mark.integration
+    async def test_start_block_limit_higher_scoring_after_battery_car(self):
+        """A mandatory car on GREEN_CAP stays free to start: this pins the score test."""
+        _, cg, time, tesla, buzz = self._setup_incident_env(battery_asked_charge=0.0)
+        cs_tesla = self._locked_off_tesla(tesla, bump_solar=True)
+        cs_buzz = self._after_battery_buzz(buzz, score=96400)
+
+        await cg.budgeting_algorithm_minimize_diffs([cs_tesla, cs_buzz], 5590, 0, False, time)
+
+        assert cs_buzz.budgeted_amp == 6
+
+    @pytest.mark.integration
+    async def test_start_block_limit_lower_scoring_before_battery_car(self):
+        """Residual R5: this pins `is_before_battery is False`."""
+        _, cg, time, tesla, buzz = self._setup_incident_env(battery_asked_charge=0.0)
+        cs_tesla = self._locked_off_tesla(tesla, bump_solar=True)
+        cs_buzz = self._after_battery_buzz(buzz, score=24400)
+        cs_buzz.is_before_battery = True
+
+        await cg.budgeting_algorithm_minimize_diffs([cs_tesla, cs_buzz], 5590, 0, False, time)
+
+        assert cs_buzz.budgeted_amp == 6
+
+    @pytest.mark.integration
+    async def test_start_block_limit_after_battery_car_with_floor_above_zero(self):
+        """A car already budgeted at its floor may grow: this pins `cs.budgeted_amp == 0`."""
+        _, cg, time, tesla, buzz = self._setup_incident_env(battery_asked_charge=0.0)
+        cs_tesla = self._locked_off_tesla(tesla, bump_solar=True)
+        cs_buzz = self._after_battery_buzz(buzz, possible_amps=list(range(6, 17)))
+
+        await cg.budgeting_algorithm_minimize_diffs([cs_tesla, cs_buzz], 5000, 0, False, time)
+
+        assert cs_buzz.budgeted_amp == 7
+
+    @pytest.mark.integration
+    async def test_start_block_limit_reset_pass_with_running_after_battery_car(self):
+        """A reset drops the budget to 0: this pins `cs.current_real_max_charging_amp == 0`."""
+        home, cg, time, tesla, buzz = self._setup_incident_env(battery_asked_charge=None)
+        home.get_device_power_values = MagicMock(
+            return_value=[
+                (time - timedelta(seconds=30), 4000.0, {}),
+                (time - timedelta(seconds=15), 4000.0, {}),
+                (time, 4000.0, {}),
+            ]
+        )
+        home.get_home_max_available_production_power = MagicMock(return_value=8000.0)
+        home.get_current_maximum_production_output_power = MagicMock(return_value=8000.0)
+        cs_tesla = self._locked_off_tesla(tesla, bump_solar=True)
+        cs_buzz = self._after_battery_buzz(buzz, current_amp=6)
+
+        _, should_do_reset_allocation, _ = await cg.budgeting_algorithm_minimize_diffs(
+            [cs_tesla, cs_buzz], 5000, 0, True, time
+        )
+
+        assert should_do_reset_allocation is True
+        assert cs_buzz.budgeted_amp >= 6
+
+    @pytest.mark.integration
+    async def test_reset_pass_gate_stops_running_after_battery_car_in_mixed_group(self):
+        """Accepted: on a reset, the battery reservation can take a running after-battery car to 0 A."""
+        home, cg, time, tesla, buzz = self._setup_incident_env(battery_asked_charge=5000.0)
+        home.get_device_power_values = MagicMock(
+            return_value=[
+                (time - timedelta(seconds=30), 4000.0, {}),
+                (time - timedelta(seconds=15), 4000.0, {}),
+                (time, 4000.0, {}),
+            ]
+        )
+        home.get_home_max_available_production_power = MagicMock(return_value=8000.0)
+        home.get_current_maximum_production_output_power = MagicMock(return_value=8000.0)
+        cs_tesla = self._locked_off_tesla(tesla)
+        cs_buzz = self._after_battery_buzz(buzz, current_amp=6)
+
+        _, should_do_reset_allocation, _ = await cg.budgeting_algorithm_minimize_diffs(
+            [cs_tesla, cs_buzz], 5000, 0, True, time
+        )
+
+        assert should_do_reset_allocation is True
+        assert cs_buzz.budgeted_amp == 0
 
 
 # =============================================================================

@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-10-27
+last_verified: 2026-11-05
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -59,13 +59,35 @@ The budgeting algorithm (`budgeting_algorithm_minimize_diffs`):
 1. **Priority check**: if the highest-priority charger isn't charging
    but a lower one is, trigger a reset allocation.
 2. **Prepare budgets**: either keep current amps (minimise
-   transitions) or reset to minimum (rebalance).
+   transitions) or reset to minimum (rebalance). A reset also budgets
+   the minimum phase count. `apply_budgets` does not apply that count to
+   a charger that stays stopped (QS-448): it draws nothing, and switching
+   a stopped car from 3 phases to 1 would block the group during the
+   switch, then hold it on one phase for the 30-min
+   `TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES` spacing. A charger that starts
+   or is stopped still gets its budgeted phase count.
 3. **Shave mandatory**: if the minimum amps still exceed the group
    limit, stop the lowest-score chargers first.
 4. **Shave current**: try phase switching (1P→3P) for lower-score
    chargers before reducing amps.
 5. **Smart allocation loop**: iteratively adjust each charger's
    budget toward the power target while respecting all constraints.
+   Two rules apply to increases only, and never stop a running car on a
+   normal pass (QS-448):
+   - **Battery reservation in a mixed group**: while the battery asks for
+     charge (`battery_asked_charge > 0`), an after-battery charger may
+     only start or grow on the surplus beyond that ask. Before-battery
+     chargers keep the full budget. On a normal pass a running
+     after-battery charger is not shrunk to give the battery its share;
+     a reset does shrink it, down to 0 A when the surplus beyond the ask
+     does not cover its minimum, because it rebuilds budgets through the
+     increase branch.
+   - **Start block while the bump car is locked off**: an after-battery
+     car that is really not charging may not start while a higher-score
+     bump car is in its OFF→ON lockout (`possible_amps == [0]`), or it
+     would hold its own lockout against the bump car. This has no battery
+     or group condition, and it needs the bump car to stay listed (see the
+     cooldown step in the lifecycle below).
 
 Then `apply_budget_strategy()`:
 
@@ -85,7 +107,23 @@ Then `apply_budget_strategy()`:
 - `QSChargerStatus` — per-charger state (amps, phases, real power,
   adaptation state).
 - `charge_score` — per-charger priority. Higher = wins budget
-  conflicts first.
+  conflicts first. It has a +1 000 000 command-forced tier for chargers
+  that cannot go below a minimum because of their command. A green charger
+  that only cannot stop yet because of its ON→OFF hysteresis is **not**
+  command-forced and ranks by its real priority; the one exception is a
+  green consign with battery discharge, which keeps the tier even while
+  locked (QS-448). "Forced" has the same meaning in the non-converging
+  members section below.
+- **before battery / after battery** — `QSChargerStatus.is_before_battery`,
+  from `compute_is_before_battery`. A before-battery charger may use the
+  power the solver planned for the battery. An after-battery charger may
+  not. After battery does not mean lower priority: a before-battery
+  constraint on `GREEN_CAP` counts as after battery, so a mandatory car can
+  be after battery and still outrank a bump car.
+- **mixed group** — a budgeting list holding at least one before-battery
+  charger. The group's budget is then the full surplus, battery share
+  included (`all_after is False`), even if that charger is stopped and
+  locked. Only an all-after list has the ask subtracted from its budget.
 - `CHARGER_ADAPTATION_WINDOW_S = 45` — stability requirement before
   rebalancing.
 - `CHARGER_STATE_REFRESH_INTERVAL_S = 14` — state-polling cadence.
@@ -396,7 +434,8 @@ block the whole group forever. Three pieces now contain it:
   is settled in the same call. The charger rejoins as an idle member; a
   new start comes only from `apply_budgets` (`set(True)` resets the retry
   counter). For green commands this waits for the usual 10 min off→on
-  spacing. A forced command (consign / `CMD_ON` / price) never offers 0 A,
+  spacing. A forced command (consign / `CMD_ON` / price, and a green consign
+  with battery discharge) never offers 0 A,
   so its next budget pass restarts it: ~20:20 rounds instead of ~30:20.
   In both cases ~5:20 of a round blocks the group (the launch window plus
   the adaptation window).
@@ -651,6 +690,10 @@ Detect transitions (single charger change → record power delta)
   ↓
 Budget reset opportunity? (20-min timeout or HP charger waiting)
   ↓
+Fix D cooldown: skip chargers within 45s of their last amp change
+  (only a real current change on a charging charger arms the 45-s cooldown;
+  a charger stopped or being stopped never does, so it stays listed)
+  ↓
 budgeting_algorithm_minimize_diffs()
   → priority check → prepare budgets → shave mandatory → shave current
   → smart allocation loop (iterative, phase limits)
@@ -672,7 +715,9 @@ apply_budget_strategy()
   turn out to overshoot per-phase limits in transient. Apply
   staging whenever the change crosses a phase boundary.
 - Treating `charge_score` as a tiebreaker. It's the primary ranking
-  for budget conflicts.
+  for budget conflicts. It does not beat pass order though: on a normal
+  pass, `allow_state_changes = [False, True]` lets a running car's +1 A win
+  before any start, whatever the score, and only a reset overrides that.
 - Expecting amps commands to run out of retries. Amps changes have no
   retry limit (`_expected_amperage` is never counted), by design: a
   set-point change does not wear the charger. Only on/off and
