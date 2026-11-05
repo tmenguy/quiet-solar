@@ -59,21 +59,28 @@ The budgeting algorithm (`budgeting_algorithm_minimize_diffs`):
 1. **Priority check**: if the highest-priority charger isn't charging
    but a lower one is, trigger a reset allocation.
 2. **Prepare budgets**: either keep current amps (minimise
-   transitions) or reset to minimum (rebalance).
+   transitions) or reset to minimum (rebalance). A reset also budgets
+   the minimum phase count. `apply_budgets` does not apply that count to
+   a charger that stays stopped (QS-448): it draws nothing, and switching
+   a stopped car from 3 phases to 1 would block the group during the
+   switch, then hold it on one phase for the 30-min
+   `TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES` spacing. A charger that starts
+   or is stopped still gets its budgeted phase count.
 3. **Shave mandatory**: if the minimum amps still exceed the group
    limit, stop the lowest-score chargers first.
 4. **Shave current**: try phase switching (1P→3P) for lower-score
    chargers before reducing amps.
 5. **Smart allocation loop**: iteratively adjust each charger's
    budget toward the power target while respecting all constraints.
-   Two rules apply to increases only, and never stop a running car
-   (QS-448):
+   Two rules apply to increases only, and never stop a running car on a
+   normal pass (QS-448):
    - **Battery reservation in a mixed group**: while the battery asks for
      charge (`battery_asked_charge > 0`), an after-battery charger may
      only start or grow on the surplus beyond that ask. Before-battery
      chargers keep the full budget. On a normal pass a running
      after-battery charger is not shrunk to give the battery its share;
-     a reset does shrink it, because it rebuilds budgets through the
+     a reset does shrink it, down to 0 A when the surplus beyond the ask
+     does not cover its minimum, because it rebuilds budgets through the
      increase branch.
    - **Start block while the bump car is locked off**: an after-battery
      car that is really not charging may not start while a higher-score

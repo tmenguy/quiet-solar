@@ -27,6 +27,8 @@ from custom_components.quiet_solar.const import (
     CONF_DYN_GROUP_MAX_PHASE_AMPS,
     CONF_IS_3P,
     CONF_MONO_PHASE,
+    CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+    CONSTRAINT_TYPE_FILLER_AUTO,
     DATA_HANDLER,
     DOMAIN,
 )
@@ -48,6 +50,7 @@ from custom_components.quiet_solar.home_model.commands import (
     copy_command,
 )
 from custom_components.quiet_solar.home_model.constraints import DATETIME_MAX_UTC
+from tests.factories import create_constraint
 
 # =============================================================================
 # Shared fixtures
@@ -1489,11 +1492,11 @@ class TestPriorityInversion:
         # no power reading keeps the phantom-surplus code out of the budget
         charger.get_median_sensor = MagicMock(return_value=None)
         charger.can_do_3_to_1_phase_switch = MagicMock(return_value=False)
-        constraint = MagicMock()
-        constraint.is_before_battery = is_before_battery
-        constraint.as_fast_as_possible = False
-        constraint.end_of_constraint = DATETIME_MAX_UTC
-        constraint.is_mandatory = False
+        constraint = create_constraint(
+            load=charger,
+            constraint_type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN if is_before_battery else CONSTRAINT_TYPE_FILLER_AUTO,
+            end_of_constraint=DATETIME_MAX_UTC,
+        )
         charger.get_current_active_constraint = MagicMock(return_value=constraint)
         charger.car.get_car_charge_percent = MagicMock(return_value=soc)
 
@@ -1699,6 +1702,29 @@ class TestPriorityInversion:
 
         assert should_do_reset_allocation is True
         assert cs_buzz.budgeted_amp >= 6
+
+    @pytest.mark.integration
+    async def test_reset_pass_gate_stops_running_after_battery_car_in_mixed_group(self):
+        """Accepted: on a reset, the battery reservation can take a running after-battery car to 0 A."""
+        home, cg, time, tesla, buzz = self._setup_incident_env(battery_asked_charge=5000.0)
+        home.get_device_power_values = MagicMock(
+            return_value=[
+                (time - timedelta(seconds=30), 4000.0, {}),
+                (time - timedelta(seconds=15), 4000.0, {}),
+                (time, 4000.0, {}),
+            ]
+        )
+        home.get_home_max_available_production_power = MagicMock(return_value=8000.0)
+        home.get_current_maximum_production_output_power = MagicMock(return_value=8000.0)
+        cs_tesla = self._locked_off_tesla(tesla)
+        cs_buzz = self._after_battery_buzz(buzz, current_amp=6)
+
+        _, should_do_reset_allocation, _ = await cg.budgeting_algorithm_minimize_diffs(
+            [cs_tesla, cs_buzz], 5000, 0, True, time
+        )
+
+        assert should_do_reset_allocation is True
+        assert cs_buzz.budgeted_amp == 0
 
 
 # =============================================================================

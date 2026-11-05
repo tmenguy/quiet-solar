@@ -7641,6 +7641,62 @@ class TestAmpChangeCooldown:
         assert stopped in [cs.charger for cs in second_call_chargers]
 
 
+class TestApplyBudgetsPhasesOfStoppedCharger:
+    """QS-448 review fix #01: a reset must not switch the phases of a car that stays stopped."""
+
+    async def _reset_pass_then_apply(self, *, charge_state, amperage, possible_amps, budget=None):
+        """Reset pass (minimum amps, minimum phases) on a switchable 3-phase wallbox, then a real apply."""
+        hass = _make_hass()
+        home = _make_home(battery=None)
+        now = datetime.now(pytz.UTC)
+
+        ch = _create_charger(hass, home, "SwitchableCh", is_3p=True)
+        _init_charger_states(ch, charge_state=charge_state, amperage=amperage, num_phases=3)
+        ch._ensure_correct_state = AsyncMock(return_value=True)
+        group = _make_charger_group(home, [ch])
+
+        cs = QSChargerStatus(ch)
+        cs.current_real_max_charging_amp = amperage if charge_state else 0
+        cs.current_active_phase_number = 3
+        cs.possible_amps = possible_amps
+        cs.possible_num_phases = [1, 3]
+        cs.charge_score = 100.0
+        cs.command = copy_command(CMD_AUTO_GREEN_ONLY)
+
+        await group._do_prepare_budgets_for_algo([cs], True)
+        assert cs.budgeted_num_phases == 1
+        if budget is not None:
+            cs.budgeted_amp = budget
+
+        await group.apply_budgets([cs], [cs], now)
+        return ch
+
+    @pytest.mark.parametrize(
+        "possible_amps",
+        [[0], [0, *range(6, 17)]],
+        ids=["locked", "free"],
+    )
+    async def test_reset_keeps_phases_of_charger_staying_stopped(self, possible_amps):
+        ch = await self._reset_pass_then_apply(charge_state=False, amperage=0, possible_amps=possible_amps)
+
+        assert ch._expected_charge_state.value is False
+        assert ch.expected_num_active_phases == 3
+
+    async def test_reset_starting_stopped_charger_on_one_phase_still_applies_phases(self):
+        ch = await self._reset_pass_then_apply(
+            charge_state=False, amperage=0, possible_amps=[0, *range(6, 17)], budget=6
+        )
+
+        assert ch._expected_charge_state.value is True
+        assert ch.expected_num_active_phases == 1
+
+    async def test_reset_stopping_running_charger_still_applies_phases(self):
+        ch = await self._reset_pass_then_apply(charge_state=True, amperage=8, possible_amps=[0, *range(6, 17)])
+
+        assert ch._expected_charge_state.value is False
+        assert ch.expected_num_active_phases == 1
+
+
 class TestGreenConsignSingleStepIncrease:
     """Fix B: green consign increases by at most 1 amp step per budget cycle."""
 

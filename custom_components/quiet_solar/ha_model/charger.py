@@ -2468,7 +2468,12 @@ class QSChargerGroup(LogOnChangeMixin):
                     cs.charger._last_amp_change_time = time
                 cs.charger._expected_amperage.set(int(new_amp), time)
 
-            if new_num_phases is not None and new_num_phases != cs.charger.expected_num_active_phases:
+            if (
+                new_num_phases is not None
+                and new_num_phases != cs.charger.expected_num_active_phases
+                # a car that stays stopped draws nothing: a reset's minimum phases must not switch it
+                and (new_state or init_state is True)
+            ):
                 # QS-381 fix #03: gate the phase request on the LIVE expected count (the public
                 # expected_num_active_phases accessor), not the frozen snapshot init_phase_num. If
                 # the expected count changed underneath since the snapshot (e.g. the idle probe
