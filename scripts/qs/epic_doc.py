@@ -42,10 +42,10 @@ JSON refusal, never a traceback. No side effects at import.
 
 Usage::
 
-    python scripts/qs/epic_doc.py status --issue 369 --sync
-    python scripts/qs/epic_doc.py land --issue 369 --message "..." --dry-run
-    python scripts/qs/epic_doc.py sync-issue --issue 369
-    python scripts/qs/epic_doc.py sync-issue --issue 369 --rewrite-from - <<'QS_EPIC_BODY'
+    python scripts/qs/epic_doc.py status --issue 321 --sync
+    python scripts/qs/epic_doc.py land --issue 321 --message "..." --dry-run
+    python scripts/qs/epic_doc.py sync-issue --issue 321
+    python scripts/qs/epic_doc.py sync-issue --issue 321 --rewrite-from - <<'QS_EPIC_BODY'
     ...the full new body...
     QS_EPIC_BODY
 """
@@ -1144,7 +1144,7 @@ def cmd_sync_issue(issue: int, *, rewrite_from: str | None = None) -> dict:
     link = None
     # A rewrite text is agent-written: a prose mention of the path is not the
     # link, so there only a link target (``](…doc``, whatever the link text —
-    # #369's is `` [`docs/epics/QS-369.md`](…) ``) or a URL containing the doc
+    # e.g. `` [`docs/epics/QS-<N>.md`](…) ``) or a URL containing the doc
     # (bare, ``<autolink>``, reference definition) counts.
     if rewrite_from is None:
         has_link = doc in base

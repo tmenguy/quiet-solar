@@ -345,13 +345,6 @@ you are already on the CLI. Caveats:
   the loop above does not depend on it.
 - Persona survival was **observed once (n=1)** under controlled
   conditions — treat it as evidence, not as an established contract.
-- **A node's hooks do not survive an interactive reopen** (checked
-  live, a `fail`: the DB `sqlite3` call was allowed — the terminal
-  `--resume` on 2.1.312, `/desktop` on the app's 2.1.309, 2026-10-29,
-  #437: see #444). A Control Plane node session (spawned `--bg`, its
-  hooks only in `--settings`) reopened from a terminal with
-  `claude --resume <id>` ran with no node hook; the same session moved
-  into the app with `/desktop` still had none.
 
 Verified 2026-07-31 against `claude` 2.1.220 and `Claude.app`
 (`com.anthropic.claudefordesktop`) 1.24012.9.
@@ -378,17 +371,6 @@ Claude Code re-reads `.claude/agents/` within seconds for directories
 present at session start (always true — every session is opened by a
 handoff that rendered first).
 
-**The second pipeline's agents** (`render_agents.SECOND_PIPELINE` —
-`qs-orchestrator`, `qs-node`, `qs-global-review`, `qs-cross-run-review`,
-`qs-final-review`; epic #369, QS-405) render at **every** render site
-above, but **without task facts**: no Task facts, no lane protocol, no
-Reference map, a GENERATED line reading `lane=none issue=none`, and a
-model resolved with no lane — so the file is byte-identical on `main`, in
-a deliverable and in an item worktree. Their task facts travel in the
-launch prompt and the Control Plane instead. An **integration scratch**
-(`worktree-setup.sh --integration`) renders nothing: it has the tracked
-`.claude/settings.json` and `.claude/commands/`, but no `agents/`.
-
 ### Model policy
 
 Which model — and how much thinking effort — each agent runs on is
@@ -403,33 +385,10 @@ hand-sets a model.
   general reasoner — planning conversation, review consolidation,
   judgment reviewers), `light` (checklists — delta-auditor, setup-task),
   `fast` (mechanical — finish, the CodeRabbit wrapper, release). `_FLAT`
-  maps each agent to a class; only the two planning orchestrators and
-  the second pipeline's `qs-node` depend on the lane (`bug-*` → `deep`,
-  other lanes → `frontier`, no lane → `deep`). Reviewers are deliberately
-  spread across classes so one fan-out does not share one set of blind
-  spots.
-- **The second pipeline's roles** (QS-405; a starting point the
-  maintainer may retune, one `models.py` row each):
-
-  | role | class |
-  |---|---|
-  | `qs-orchestrator` | `frontier` |
-  | `qs-node` | by lane: `bug-*` → `deep`, other lanes → `frontier`, no lane → `deep` |
-  | `qs-global-review` | `frontier` |
-  | `qs-cross-run-review` | `deep` |
-  | `qs-final-review` | `frontier` |
-
-  The rule for later rows (the node's sub-agents): besides the planning
-  orchestrators, a row may depend on the lane **only** for a stem a
-  Control Plane tool launches; every other new row is flat. The intent is
-  that a no-model `tool spawn` passes the policy's `--model` and an
-  `effortLevel` (through `--settings`) to the `--bg` node session,
-  overriding its frontmatter (`models.spawn_policy`). `effortLevel`
-  through `--settings` **does** take effect on a `--bg` session:
-  checked live on 2026-10-18 (#424 L6, Claude Code 2.1.302 — the
-  session's banner showed the effort sent). On a real node it was
-  confirmed live on 2026-10-29 (Claude Code 2.1.312, #437): the node
-  ran at the policy's effort, at spawn and after `tool resume`.
+  maps each agent to a class; only the two planning orchestrators depend
+  on the lane (`bug-*` → `deep`, other lanes → `frontier`, no lane →
+  `deep`). Reviewers are deliberately spread across classes so one
+  fan-out does not share one set of blind spots.
 - **One complete row per harness** in `HARNESS_MODELS`, in that
   harness's own vocabulary, **both in exact versions**:
 
@@ -450,13 +409,8 @@ hand-sets a model.
   Astra because the `github-copilot` provider offers no Claude Fable —
   one `HARNESS_MODELS` cell to revert when it does. **Effort is
   Claude-only** (OpenCode documents no per-agent effort): Claude
-  sub-agents get frontmatter `effort:`, the GUI main session gets the
-  pin's `effortLevel`; a `--bg` node gets the spawn's `--settings`
-  `effortLevel`, or none for a caller model or a `fast` row, in which
-  case it inherits the worktree's pin; `fast` (`claude-haiku-5-5`) sets none.
-  A bare `claude --bg --resume` of an ended node keeps the model and
-  the effort it was spawned with, with every other launch option
-  (#424 L7), so `tool resume` passes no flag.
+  sub-agents get frontmatter `effort:`, the Claude main session gets
+  the pin's `effortLevel`; `fast` (`claude-haiku-5-5`) sets none.
 - **Why full IDs, and no repo-wide alias pin.** The documented settings
   `env` pins (`ANTHROPIC_DEFAULT_OPUS_MODEL`, …) are **not applied** to
   the process (observed on 2.1.278), so aliases float to the provider
