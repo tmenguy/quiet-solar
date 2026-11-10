@@ -1694,11 +1694,8 @@ def test_svg_pattern_matches_only_the_epics_own_flat_svgs() -> None:
 # ---------------------------------------------------------------------------
 
 
-# The live doc evolves: every child filed through ``epic_doc.py land``
-# (which runs no pytest) rewrites its ``not filed`` cell with the new
-# number. So the live-file test asserts only invariants that never change
-# — filed numbers stay filed — and the exact shape is frozen on the inline
-# fixture below, copied from the current table (M2).
+# The decomposition-table shape of a real epic document (QS-369's, the
+# first one written as a table), frozen on an inline fixture (M2).
 _369_TABLE_FIXTURE = (
     "# Epic\n\n## Decomposition\n\n"
     "### Shared (lane-agnostic)\n\n"
@@ -1712,16 +1709,8 @@ _369_TABLE_FIXTURE = (
 )
 
 
-def test_the_real_qs369_doc_parses_as_is() -> None:
-    """The live doc parses; assert only invariants (filed numbers never change)."""
-    rows = epic_doc.parse_decomposition((REPO_ROOT / "docs/epics/QS-369.md").read_text())
-    assert rows, "the live doc's Decomposition section must be non-empty"
-    assert all(r.child for r in rows), "every row must carry a non-empty child cell"
-    assert {371, 372} <= {r.issue for r in rows if r.issue is not None}
-
-
 def test_369_table_fixture_parses_to_the_expected_shape() -> None:
-    """Exact-shape assertion is frozen on the inline fixture, not the live file."""
+    """Exact-shape assertion on the inline fixture."""
     rows = epic_doc.parse_decomposition(_369_TABLE_FIXTURE)
     assert len(rows) == 3
     assert [r.issue for r in rows] == [371, 372, None]

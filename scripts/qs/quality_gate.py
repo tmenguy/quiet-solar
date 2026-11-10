@@ -92,18 +92,10 @@ from typing import Any, NamedTuple
 # classification + the declaration truth table); the gate only wires it.
 import targets
 
-# QS-400: the one task-branch grammar (`QS_<N>` / `QS_<N>_<k>`), shared with
-# the other scripts. `utils` imports only the stdlib — no cycle.
-from utils import parse_task_branch
-
 # Resolve paths relative to repo root
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
 SRC_DIR = REPO_ROOT / "custom_components" / "quiet_solar"
-# QS-399: the Control Plane package and its entry shim are gated like the
-# product package — measured (100% coverage), linted and type-checked.
-CP_DIR = SCRIPT_DIR / "control_plane"
-CP_ENTRY = SCRIPT_DIR / "cp.py"
 TESTS_DIR = REPO_ROOT / "tests"
 VENV_BIN = REPO_ROOT / "venv" / "bin"
 STRINGS_JSON = SRC_DIR / "strings.json"
@@ -426,20 +418,8 @@ def _get_changed_files() -> list[str]:
     return sorted(files)
 
 
-def _is_control_plane_path(filepath: str) -> bool:
-    """True for the Control Plane package and its entry shim (QS-399)."""
-    return filepath.startswith("scripts/qs/control_plane/") or filepath == "scripts/qs/cp.py"
-
-
 def _is_dev_only(filepath: str) -> bool:
-    """Check if a file path is dev-only (not production source code).
-
-    QS-399: the Control Plane (`scripts/qs/control_plane/**`,
-    `scripts/qs/cp.py`) is gated code, never dev-only, although it lives
-    under `scripts/`.
-    """
-    if _is_control_plane_path(filepath):
-        return False
+    """Check if a file path is dev-only (not production source code)."""
     for pat in _DEV_ONLY_PATTERNS:
         if filepath.startswith(pat):
             return True
@@ -983,7 +963,6 @@ def check_pytest() -> dict:
         "pytest",
         str(TESTS_DIR),
         f"--cov={SRC_DIR}",
-        f"--cov={CP_DIR}",
         # S1: clear inherited --cov-report defaults from pytest.ini FIRST,
         # then add our explicit term-missing report. Reversing this order
         # lets the trailing empty value wipe term-missing — pytest-cov treats
@@ -1054,15 +1033,10 @@ def check_pytest_files(test_files: list[str]) -> dict:
     return _stream_pytest(cmd, total_tests=count if count is not None else _LEARN_FROM_STREAM)
 
 
-def _cheap_tool_targets() -> list[str]:
-    """The ruff / mypy targets: the package plus the Control Plane (QS-399)."""
-    return [str(SRC_DIR), str(CP_DIR), str(CP_ENTRY)]
-
-
 def check_ruff_lint(fix: bool = False) -> dict:
     """Run ruff check."""
     _emit("ruff_lint", "running")
-    cmd = [_venv_tool("ruff"), "check", *_cheap_tool_targets()]
+    cmd = [_venv_tool("ruff"), "check", str(SRC_DIR)]
     if fix:
         cmd.append("--fix")
     result = _run(cmd)
@@ -1081,9 +1055,9 @@ def check_ruff_format(fix: bool = False) -> dict:
     """Run ruff format check."""
     _emit("ruff_format", "running")
     if fix:
-        cmd = [_venv_tool("ruff"), "format", *_cheap_tool_targets()]
+        cmd = [_venv_tool("ruff"), "format", str(SRC_DIR)]
     else:
-        cmd = [_venv_tool("ruff"), "format", "--check", *_cheap_tool_targets()]
+        cmd = [_venv_tool("ruff"), "format", "--check", str(SRC_DIR)]
     result = _run(cmd)
     passed = result.returncode == 0
     _emit("ruff_format", "PASS" if passed else "FAIL")
@@ -1099,7 +1073,7 @@ def check_ruff_format(fix: bool = False) -> dict:
 def check_mypy() -> dict:
     """Run mypy."""
     _emit("mypy", "running")
-    cmd = [VENV_PYTHON, "-m", "mypy", *_cheap_tool_targets()]
+    cmd = [VENV_PYTHON, "-m", "mypy", str(SRC_DIR)]
     result = _run(cmd)
     passed = result.returncode == 0
     _emit("mypy", "PASS" if passed else "FAIL")
@@ -1180,12 +1154,9 @@ _CHEAP_GATE_ORDER = ("ruff_format", "ruff_lint", "mypy", "translations")
 # a failing cheap gate. `translations` has none — its `detail` already says
 # what to do.
 _CHEAP_GATE_HINTS: dict[str, str] = {
-    "ruff_format": "fix: venv/bin/ruff format custom_components/quiet_solar/ scripts/qs/control_plane/ scripts/qs/cp.py",
-    "ruff_lint": (
-        "rerun: venv/bin/ruff check custom_components/quiet_solar/ scripts/qs/control_plane/ scripts/qs/cp.py"
-        " (add --fix to auto-fix)"
-    ),
-    "mypy": "rerun: venv/bin/python -m mypy custom_components/quiet_solar/ scripts/qs/control_plane/ scripts/qs/cp.py",
+    "ruff_format": "fix: venv/bin/ruff format custom_components/quiet_solar/",
+    "ruff_lint": "rerun: venv/bin/ruff check custom_components/quiet_solar/ (add --fix to auto-fix)",
+    "mypy": "rerun: venv/bin/python -m mypy custom_components/quiet_solar/",
 }
 
 
@@ -1791,10 +1762,6 @@ def _path_moves_tool_verdict(p: str) -> bool:
     # (a) any `.py` / `.pyi` under the package (a stub overrides its module).
     if p.startswith(_CHEAP_PACKAGE_PREFIX) and (p.endswith(".py") or p.endswith(".pyi")):
         return True
-    # (a') QS-399: any `.py` / `.pyi` of the Control Plane, its entry shim, or
-    # `scripts/qs/__init__.py` (it fixes mypy's module name for the package).
-    if (p.startswith(_CHEAP_CP_PREFIX) and (p.endswith(".py") or p.endswith(".pyi"))) or p in _CHEAP_CP_PATHS:
-        return True
     # (b) the package's parent __init__ / its stub (import-path shape).
     if p in {"custom_components/__init__.py", "custom_components/__init__.pyi"}:
         return True
@@ -1805,16 +1772,8 @@ def _path_moves_tool_verdict(p: str) -> bool:
     # repo root (no `/`) or anywhere under `custom_components/`. Ruff/mypy pick
     # the closest config walking up from the target, so a config anywhere in
     # `custom_components/` (not just the package dir) can flip CI's verdict.
-    # QS-399: likewise any config the Control Plane's targets walk up through:
-    # `scripts/`, `scripts/qs/`, and anywhere under `scripts/qs/control_plane/`.
     basename = p.rsplit("/", 1)[-1]
-    parent = p.rsplit("/", 1)[0] if "/" in p else ""
-    if basename in _CHEAP_TOOL_CONFIG_BASENAMES and (
-        "/" not in p
-        or p.startswith(_CHEAP_COMPONENTS_PREFIX)
-        or p.startswith(_CHEAP_CP_PREFIX)
-        or parent in {"scripts", "scripts/qs"}
-    ):
+    if basename in _CHEAP_TOOL_CONFIG_BASENAMES and ("/" not in p or p.startswith(_CHEAP_COMPONENTS_PREFIX)):
         return True
     return False
 
@@ -1835,11 +1794,6 @@ _CHEAP_PACKAGE_PREFIX = "custom_components/quiet_solar/"
 # ruff/mypy config anywhere under it — not just the package dir — flips CI's
 # verdict, because the tools walk up from the target to the closest config.
 _CHEAP_COMPONENTS_PREFIX = "custom_components/"
-# QS-399: the Control Plane is a second ruff / mypy target.
-_CHEAP_CP_PREFIX = "scripts/qs/control_plane/"
-_CHEAP_CP_PATHS = frozenset(
-    {"scripts/qs/cp.py", "scripts/qs/cp.pyi", "scripts/qs/__init__.py", "scripts/qs/__init__.pyi"}
-)
 
 
 def _impacted_cheap_gate_names(paths: list[str] | None) -> list[str]:
@@ -2028,14 +1982,12 @@ def _resolve_lane_issue(branch_override: str | None = None) -> tuple[int, str] |
     if not branch and _is_ci() and branch_override:
         branch = branch_override.strip()
     # Pure digits only (review-fix #01): `int()` accepts underscore
-    # digit-grouping, so `QS_332_2` once parsed as issue #3322. QS-400:
-    # `QS_<N>_<k>` is a work item and names its deliverable `N`, so the
-    # item is checked against the deliverable's declaration; every other
-    # form (`QS_1_000`, `QS_`, `QS_x2`) still skips the check.
-    parsed = parse_task_branch(branch)
-    if parsed is None:
+    # digit-grouping, so `QS_332_2` (a plausible "second attempt" branch)
+    # parsed as issue #3322 and the gate enforced the WRONG issue's
+    # declaration. `isdigit()` also rejects the empty suffix.
+    if not branch.startswith("QS_") or not branch[3:].isdigit():
         return None
-    return parsed[0], branch
+    return int(branch[3:]), branch
 
 
 def _read_lane_label_cache(issue: int, branch: str) -> list[str] | None:
@@ -2445,8 +2397,6 @@ def _build_testmon_cmd() -> list[str]:
         # verdict is unaffected) and leaves every domain test selectable.
         f"--ignore={TESTS_DIR / 'test_quality_gate.py'}",
         f"--cov={SRC_DIR}",
-        # QS-399: the Control Plane is a second measured source.
-        f"--cov={CP_DIR}",
         # QS-278: accumulate coverage across inner-loop runs. testmon
         # reselects 0 tests for a no-op re-run and only an edit's subset for
         # an incremental change; `--cov-append` keeps the prior runs'
@@ -2674,9 +2624,8 @@ def check_impacted() -> int:
     code is folded with the cheap-check verdict by `_with_cheap`.
 
     **CI-mirrored cheap checks (QS-371).** CI runs `ruff check`,
-    `ruff format --check`, `mypy` on `custom_components/quiet_solar/` plus the
-    Control Plane (`scripts/qs/control_plane/`, `scripts/qs/cp.py`; QS-399) and
-    the translations value-check on every PR; `--impacted` runs the SAME check
+    `ruff format --check`, `mypy` on `custom_components/quiet_solar/` and the
+    translations value-check on every PR; `--impacted` runs the SAME check
     functions as the full gate (same command, target and pinned versions) on
     the whole package, but only on a change set that can move their verdict.
     Trigger rules (`_impacted_cheap_gate_names`, over the
@@ -2684,17 +2633,13 @@ def check_impacted() -> int:
     refer here):
 
     - `ruff_format`, `ruff_lint`, `mypy` iff any path (a) is a `.py`/`.pyi`
-      under `custom_components/quiet_solar/`, or (a') is a `.py`/`.pyi` under
-      `scripts/qs/control_plane/`, or `scripts/qs/cp.py`, or
-      `scripts/qs/__init__.py` (it fixes mypy's module name), or (b) is
+      under `custom_components/quiet_solar/`, or (b) is
       `custom_components/__init__.py` or `custom_components/__init__.pyi`, or
       (c) is exactly `pyproject.toml`, `requirements.txt` or
       `requirements_test.txt`, or (d) has a basename in
       `{pyproject.toml, ruff.toml, .ruff.toml, mypy.ini, .mypy.ini, setup.cfg}`
-      at the repo root, anywhere under `custom_components/` or
-      `scripts/qs/control_plane/`, or directly in `scripts/` or `scripts/qs/`
-      — such a file would OVERRIDE the root ruff/mypy config (none exists
-      today).
+      at the repo root or anywhere under `custom_components/` — such a file
+      would OVERRIDE the root ruff/mypy config (none exists today).
       Deliberately NOT
       `.github/workflows/pr-quality.yml` or `scripts/qs/quality_gate.py`:
       neither can change the package verdict (changes to the gate's own

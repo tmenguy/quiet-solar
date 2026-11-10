@@ -8,14 +8,6 @@ module renders them into the gitignored harness output directories
 (``.claude/agents/`` and ``.opencode/agents/``) with the task facts and
 the lane protocol inlined into the lane-aware orchestrators.
 
-The second pipeline's agents (:data:`SECOND_PIPELINE`, QS-405) render
-with no task facts at all: their base context is
-:data:`_TASK_AGNOSTIC_FACTS`, and their model is resolved with no lane, so
-each file is byte-identical at every render site (worktree birth, the
-handoff, the post-merge render on ``main``) — absent an explicit
-``model=`` override, which no production render site passes. The facts reach those agents
-through the launch prompt and the Control Plane instead.
-
 Public API:
 
 - :func:`build_render_context` — resolve every render variable for a
@@ -44,8 +36,6 @@ import context as context_mod  # type: ignore[import-not-found]
 import jinja2
 import models  # type: ignore[import-not-found]
 import targets  # type: ignore[import-not-found]
-from control_plane.node_policy import CI_WAIT_MAX_S, CR_WAIT_S, ROTATE_ROUNDS  # type: ignore[import-not-found]
-from control_plane.schema_ledger import CATEGORIES, SEVERITIES  # type: ignore[import-not-found]
 from launchers.phases import PHASE_TO_AGENT  # type: ignore[import-not-found]
 
 from utils import get_issue_from_branch, run_git  # type: ignore[import-not-found]
@@ -104,51 +94,6 @@ SUBAGENTS: frozenset[str] = frozenset(
         "qs-review-regression-proof",
     }
 )
-
-# The second pipeline's agents (epic #369, QS-405 D1): disjoint from the
-# frozen sets above and absent from ``PHASE_TO_AGENT``. #425 (child 6b-2) adds
-# the node's ten sub-agents. A stem may have its policy row before its template
-# exists — ``render_all`` iterates over the discovered templates. They
-# render with NO task facts (``_TASK_AGNOSTIC_FACTS``), so the file is the
-# same at every render site (absent an explicit ``model=`` override).
-SECOND_PIPELINE: frozenset[str] = frozenset(
-    {
-        "qs-orchestrator",
-        "qs-node",
-        "qs-global-review",
-        "qs-cross-run-review",
-        "qs-final-review",
-        # #425 D1 — the node's sub-agents (launched by the node, not by the Control Plane).
-        "qs-node-plan-writer",
-        "qs-node-plan-critic",
-        "qs-node-plan-concrete",
-        "qs-node-plan-devproxy",
-        "qs-node-plan-scope",
-        "qs-node-plan-delta",
-        "qs-node-implementer",
-        "qs-node-blind-hunter",
-        "qs-node-edge-case",
-        "qs-node-acceptance",
-    }
-)
-
-# The base context a second-pipeline stem renders with (QS-405 D2): an
-# ALLOWLIST — every key ``build_render_context`` returns except ``model``,
-# set to its unbound value. ``render_all`` REPLACES the caller's context
-# with it (plus ``model``), so nothing task-bound can leak in; a key a later
-# child adds to the context fails the key-set test until it is decided here.
-_TASK_AGNOSTIC_FACTS: dict[str, str | None] = {
-    "branch": None,
-    "issue": None,
-    "title": None,
-    "labels": None,
-    "lane": None,
-    "worktree": None,
-    "story_file": None,
-    "lane_protocol": None,
-    "lane_protocol_state": "no_lane",
-    "facts_state": "unbound",
-}
 
 _HARNESSES = ("claude", "opencode")
 _HARNESS_DIR = {"claude": ".claude", "opencode": ".opencode"}
@@ -306,7 +251,7 @@ def build_render_context(
 
 
 def _make_env(templates_dir: Path) -> jinja2.Environment:
-    env = jinja2.Environment(
+    return jinja2.Environment(
         loader=jinja2.FileSystemLoader(str(templates_dir)),
         undefined=jinja2.StrictUndefined,
         trim_blocks=True,
@@ -318,15 +263,6 @@ def _make_env(templates_dir: Path) -> jinja2.Environment:
         block_start_string="[%",
         block_end_string="%]",
     )
-    # #423: `finding open`'s vocabulary, from the ledger's own constants (env globals, not render-context keys:
-    # task-agnostic, so the second-pipeline agents stay byte-identical at every render site).
-    env.globals["finding_severities"] = SEVERITIES
-    env.globals["finding_categories"] = CATEGORIES
-    # #425 D7: the node's constants, from the leaf module `control_plane.node_policy` (never `coderabbit.py`).
-    env.globals["cr_wait_s"] = CR_WAIT_S
-    env.globals["rotate_rounds"] = ROTATE_ROUNDS
-    env.globals["ci_wait_max_s"] = CI_WAIT_MAX_S
-    return env
 
 
 def _discover_stems(templates_dir: Path) -> list[str]:
@@ -446,10 +382,8 @@ def render_all(
     spec_for: dict[str, str] = {}
     for stem in stems:
         if model_spec is None:
-            # A second-pipeline stem never sees the worktree's lane (QS-405 D2).
-            lane = None if stem in SECOND_PIPELINE else context.get("lane")
             try:
-                spec_for[stem] = models.resolve(lane, stem)
+                spec_for[stem] = models.resolve(context.get("lane"), stem)
             except models.ModelPolicyError as exc:
                 raise RenderError(
                     f"no model policy row for agent {stem!r}; add it to scripts/qs/models.py"
@@ -476,15 +410,9 @@ def render_all(
         value = spec_for[stem]
         cls = models.class_of(value)
         effort = models.effort_for(cls) if cls else None
-        # QS-405 D2: a replacement, not a merge — only ``model`` survives.
-        base = (
-            {**_TASK_AGNOSTIC_FACTS, "model": context.get("model")}
-            if stem in SECOND_PIPELINE
-            else context
-        )
         for harness in _HARNESSES:
             render_ctx = {
-                **base,
+                **context,
                 "harness": harness,
                 "stem": stem,
                 "template": f"{stem}.md.j2",

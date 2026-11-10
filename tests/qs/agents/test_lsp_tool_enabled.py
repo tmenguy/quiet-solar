@@ -60,12 +60,6 @@ LSP_INCLUDE_AGENTS: tuple[str, ...] = (
     "qs-verify-task",
     "qs-diag-root-cause-skeptic",
     "qs-decompose-epic",
-    # #425: the node's sub-agents that navigate code.
-    "qs-node-plan-writer",
-    "qs-node-plan-concrete",
-    "qs-node-implementer",
-    "qs-node-edge-case",
-    "qs-node-acceptance",
 )
 
 # Context-starved (blind) reviewers, merge/release agents, and
@@ -82,15 +76,6 @@ LSP_EXCLUDE_AGENTS: tuple[str, ...] = (
     "qs-release",
     "qs-diag-fix-minimalist",
     "qs-review-regression-proof",
-    "qs-global-review",  # #407: reads code only through `cp.py review read`, at fixed shas
-    "qs-cross-run-review",
-    # #425: the node orchestrates (it reads no code), and its text-only / diff-only reviewers.
-    "qs-node",
-    "qs-node-plan-critic",
-    "qs-node-plan-devproxy",
-    "qs-node-plan-scope",
-    "qs-node-plan-delta",
-    "qs-node-blind-hunter",
 )
 
 PYRIGHT_PLUGIN_ID = "pyright-lsp@claude-plugins-official"

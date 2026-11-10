@@ -37,8 +37,8 @@ nodes ``id["…"]`` (box), ``id(["…"])`` (stadium), ``id[("…")]``
 
 Usage::
 
-    python scripts/qs/mermaid_svg.py render docs/epics/QS-369.md
-    python scripts/qs/mermaid_svg.py render --check docs/epics/QS-369.md
+    python scripts/qs/mermaid_svg.py render docs/epics/QS-<N>.md
+    python scripts/qs/mermaid_svg.py render --check docs/epics/QS-<N>.md
 
 Contract: JSON on stdout; exit 0 when every SVG was written (``render``)
 or is up to date (``--check``), exit 1 on a stale SVG or a refused block.

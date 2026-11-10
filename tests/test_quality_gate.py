@@ -1060,29 +1060,6 @@ class TestCiWorkflowConfig:
         env = pytest_step.get("env", {})
         assert env.get("COVERAGE_CORE") == "sysmon"
 
-    def test_shards_measure_the_control_plane(self) -> None:
-        """QS-399: every shard measures both sources; the combined report enforces 100% on both."""
-        data = self._load_workflow()
-        [step] = [s for s in data["jobs"]["test-shard"]["steps"] if s.get("name", "").startswith("Run shard")]
-        assert "--cov=custom_components/quiet_solar" in step["run"]
-        assert "--cov=scripts/qs/control_plane" in step["run"]
-        combine = [s for s in data["jobs"]["test"]["steps"] if s.get("name") == "Combine coverage and enforce 100%"]
-        assert combine and "--fail-under=100" in combine[0]["run"]
-
-    def test_lint_covers_the_control_plane(self) -> None:
-        """QS-399: ruff check and ruff format --check include the Control Plane paths."""
-        data = self._load_workflow()
-        runs = {s.get("name"): s.get("run", "") for s in data["jobs"]["lint"]["steps"]}
-        targets = "custom_components/quiet_solar/ scripts/qs/control_plane/ scripts/qs/cp.py"
-        assert runs["Ruff lint"] == f"ruff check {targets}"
-        assert runs["Ruff format check"] == f"ruff format --check {targets}"
-
-    def test_typecheck_covers_the_control_plane(self) -> None:
-        """QS-399: mypy runs on the Control Plane paths too (the pinned invocation of story §1)."""
-        data = self._load_workflow()
-        runs = {s.get("name"): s.get("run", "") for s in data["jobs"]["typecheck"]["steps"]}
-        assert runs["MyPy type check"] == "mypy custom_components/quiet_solar/ scripts/qs/control_plane/ scripts/qs/cp.py"
-
     def test_required_check_name_is_pinned(self) -> None:
         """The aggregation job's name is the LITERAL required status check.
 
@@ -1831,10 +1808,6 @@ class TestHtmlcovNotWritten:
         monkeypatch.setattr(quality_gate, "TESTS_DIR", tests)
         monkeypatch.setattr(quality_gate, "SRC_DIR", src)
         monkeypatch.setattr(quality_gate, "REPO_ROOT", tmp_path)
-        # QS-399: an empty Control Plane dir, else the real one is measured at 0%.
-        cp_dir = tmp_path / "cp_empty"
-        cp_dir.mkdir()
-        monkeypatch.setattr(quality_gate, "CP_DIR", cp_dir)
 
         result = quality_gate.check_pytest()
 
@@ -3171,12 +3144,6 @@ class TestDetectScopeReasonPluralization:
         assert info["scope"] == "dev-only"
         assert info["reason"] == "only dev/test files changed (2 files)"
 
-    def test_control_plane_is_gated_full(self) -> None:
-        """QS-399: a Control Plane change is not dev-only."""
-        assert quality_gate._detect_scope(["scripts/qs/control_plane/db.py"])["scope"] == "full"
-        assert quality_gate._detect_scope(["scripts/qs/cp.py"])["scope"] == "full"
-        assert quality_gate._detect_scope(["scripts/qs/foo.py"])["scope"] == "dev-only"
-
     def test_ui_only_singular(self) -> None:
         info = quality_gate._detect_scope(["custom_components/quiet_solar/ui/a.j2"])
         assert info["scope"] == "ui-only"
@@ -4170,7 +4137,6 @@ class TestBuildImpactedCmds:
         cmd = quality_gate._build_testmon_cmd()
         assert cmd[:4] == [quality_gate.VENV_PYTHON, "-m", "pytest", "--testmon"]
         assert f"--cov={quality_gate.SRC_DIR}" in cmd
-        assert f"--cov={quality_gate.CP_DIR}" in cmd  # QS-399: the Control Plane too
         # QS-278: coverage accumulates across inner-loop runs so a 0/partial
         # testmon reselection still covers every line changed vs origin/main.
         assert "--cov-append" in cmd
@@ -5254,13 +5220,6 @@ class TestImpactedCheapChecks:
             (["scripts/qs/foo.py"], []),
             (["tests/test_x.py"], []),
             (["custom_components/quiet_solar/ui/resources/x.js"], []),
-            # QS-399: the Control Plane is linted / type-checked like the package.
-            (["scripts/qs/control_plane/db.py"], TOOLS),
-            (["scripts/qs/cp.py"], TOOLS),
-            (["scripts/qs/__init__.py"], TOOLS),
-            (["scripts/qs/control_plane/mypy.ini"], TOOLS),
-            (["scripts/ruff.toml"], TOOLS),
-            (["scripts/qs/launchers/ruff.toml"], []),
             ([], []),
             (None, ALL),
             (
@@ -5276,25 +5235,12 @@ class TestImpactedCheapChecks:
             "package-parent-init-pyi", "docs-ruff-toml",
             "pr-quality-yml", "quality-gate-py", "strings-json", "translations-dir",
             "ha-strings", "generator-py", "generator-sh", "docs", "other-scripts-py",
-            "tests", "ui-asset",
-            "cp-module", "cp-entry", "scripts-qs-init", "cp-mypy-ini", "scripts-ruff-toml", "launchers-ruff-toml",
-            "empty", "unknown-fails-closed", "py-and-strings-ordered",
+            "tests", "ui-asset", "empty", "unknown-fails-closed", "py-and-strings-ordered",
         ],
     )
     def test_trigger_table(self, paths: list[str] | None, expected: list[str]) -> None:
         """AC6 / AC7 / AC8."""
         assert quality_gate._impacted_cheap_gate_names(paths) == expected
-
-    def test_cheap_gate_hints_are_exact(self) -> None:
-        """QS-399: the hints name every cheap-tool target, exactly."""
-        assert quality_gate._CHEAP_GATE_HINTS == {
-            "ruff_format": "fix: venv/bin/ruff format custom_components/quiet_solar/"
-            " scripts/qs/control_plane/ scripts/qs/cp.py",
-            "ruff_lint": "rerun: venv/bin/ruff check custom_components/quiet_solar/"
-            " scripts/qs/control_plane/ scripts/qs/cp.py (add --fix to auto-fix)",
-            "mypy": "rerun: venv/bin/python -m mypy custom_components/quiet_solar/"
-            " scripts/qs/control_plane/ scripts/qs/cp.py",
-        }
 
     def test_cheap_gate_order_is_pinned(self) -> None:
         """The canonical cheap-gate order is the single source both the full
@@ -5342,10 +5288,7 @@ class TestImpactedCheapChecks:
         assert "[ruff_format] Would reformat: a.py" in err
         assert "[ruff_format] Would reformat: b.py" in err
         assert "[ruff_format] warn: x" in err
-        assert (
-            "[ruff_format] fix: venv/bin/ruff format custom_components/quiet_solar/"
-            " scripts/qs/control_plane/ scripts/qs/cp.py" in err
-        )
+        assert "[ruff_format] fix: venv/bin/ruff format custom_components/quiet_solar/" in err
         assert "[cheap-checks] FAIL (ruff_format)" in err
 
     def test_stderr_only_failure_is_shown(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -5356,20 +5299,14 @@ class TestImpactedCheapChecks:
             assert _REAL_IMPACTED_CHEAP_CHECKS(["pyproject.toml"]) == ["mypy"]
         err = capsys.readouterr().err
         assert "[mypy] pyproject.toml: invalid" in err
-        assert (
-            "[mypy] rerun: venv/bin/python -m mypy custom_components/quiet_solar/"
-            " scripts/qs/control_plane/ scripts/qs/cp.py" in err
-        )
+        assert "[mypy] rerun: venv/bin/python -m mypy custom_components/quiet_solar/" in err
 
     def test_synthesized_exception_prints_its_stderr(self, capsys: pytest.CaptureFixture[str]) -> None:
         with self._checks(ruff_lint=RuntimeError("boom")):
             assert _REAL_IMPACTED_CHEAP_CHECKS(["pyproject.toml"]) == ["ruff_lint"]
         err = capsys.readouterr().err
         assert "[ruff_lint] <exception>: boom" in err
-        assert (
-            "[ruff_lint] rerun: venv/bin/ruff check custom_components/quiet_solar/"
-            " scripts/qs/control_plane/ scripts/qs/cp.py (add --fix to auto-fix)" in err
-        )
+        assert "[ruff_lint] rerun: venv/bin/ruff check custom_components/quiet_solar/ (add --fix to auto-fix)" in err
 
     def test_translations_failure_prints_detail_and_no_hint(self, capsys: pytest.CaptureFixture[str]) -> None:
         bad = {"name": "translations", "passed": False, "detail": "en.json was outdated"}
@@ -9020,12 +8957,7 @@ class TestLaneCheckSubcommand:
 class TestResolveLaneIssueUnderscore:
     """Review-fix #01: `int()` accepts underscore digit-grouping, so a
     branch `QS_332_2` parsed as issue #3322 and the gate enforced the
-    wrong issue's declaration.
-
-    QS-400: `QS_<N>_<k>` is now a work-item branch that names its
-    deliverable, so it resolves to `N` (one regex, `utils.parse_task_branch`)
-    — the item is checked against its deliverable's declaration. The forms
-    that are not items (`QS_1_000`, `QS_`, `QS_x2`) still resolve to None."""
+    wrong issue's declaration."""
 
     def _patch_branch(self, branch: str):
         def fake_run(cmd, **kwargs):
@@ -9034,26 +8966,14 @@ class TestResolveLaneIssueUnderscore:
 
         return patch.object(quality_gate, "_run", side_effect=fake_run)
 
-    @pytest.mark.parametrize("branch", ["QS_1_000", "QS_", "QS_x2"])
+    @pytest.mark.parametrize("branch", ["QS_332_2", "QS_1_000", "QS_", "QS_x2"])
     def test_non_pure_digit_suffix_resolves_to_none(self, branch: str) -> None:
         with self._patch_branch(branch):
             assert _REAL_RESOLVE_LANE_ISSUE(None) is None
 
-    @pytest.mark.parametrize(
-        ("branch", "expected"),
-        [("QS_332_2", (332, "QS_332_2")), ("QS_45_2", (45, "QS_45_2")), ("QS_45", (45, "QS_45"))],
-    )
-    def test_item_branch_resolves_to_its_deliverable(self, branch: str, expected: tuple[int, str]) -> None:
-        with self._patch_branch(branch):
-            assert _REAL_RESOLVE_LANE_ISSUE(None) == expected
-
     def test_ci_override_with_underscore_grouping_is_rejected_too(self) -> None:
         with self._patch_branch(""), patch.object(quality_gate, "_is_ci", return_value=True):
-            assert _REAL_RESOLVE_LANE_ISSUE("QS_1_000") is None
-
-    def test_ci_override_item_branch_resolves_to_its_deliverable(self) -> None:
-        with self._patch_branch(""), patch.object(quality_gate, "_is_ci", return_value=True):
-            assert _REAL_RESOLVE_LANE_ISSUE("QS_332_2") == (332, "QS_332_2")
+            assert _REAL_RESOLVE_LANE_ISSUE("QS_332_2") is None
 
 
 class TestFetchLaneLabelsTimeout:
@@ -9254,33 +9174,3 @@ class TestFetchLaneLabelsNonDictJson:
             patch.object(quality_gate, "_run", side_effect=fake_run),
         ):
             assert quality_gate._fetch_lane_labels(332, "QS_332") is None
-
-
-# --- QS-399: the Control Plane is measured, linted and type-checked ---
-
-
-def test_check_pytest_covers_cp_dir() -> None:
-    with patch.object(quality_gate, "_stream_pytest", return_value={"passed": True}) as mock_stream:
-        quality_gate.check_pytest()
-    cmd = mock_stream.call_args.args[0]
-    assert f"--cov={quality_gate.SRC_DIR}" in cmd
-    assert f"--cov={quality_gate.CP_DIR}" in cmd
-
-
-def test_cheap_tool_targets_include_control_plane() -> None:
-    done = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-    calls = []
-    for fn, kwargs in (
-        (quality_gate.check_ruff_lint, {}),
-        (quality_gate.check_ruff_lint, {"fix": True}),
-        (quality_gate.check_ruff_format, {}),
-        (quality_gate.check_ruff_format, {"fix": True}),
-        (quality_gate.check_mypy, {}),
-    ):
-        with patch.object(quality_gate, "_run", return_value=done) as mock_run:
-            fn(**kwargs)
-        calls.append(mock_run.call_args.args[0])
-    for argv in calls:
-        assert str(quality_gate.SRC_DIR) in argv
-        assert str(quality_gate.CP_DIR) in argv
-        assert str(quality_gate.CP_ENTRY) in argv
