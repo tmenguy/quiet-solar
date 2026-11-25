@@ -192,8 +192,10 @@ the review ledger"):
    reviewer. Unverified fallback if it fails.
 5. Record findings in the ledger (`review_ledger.py add`).
 6. **Zero-blocking fast path** (verified rounds only): if every open
-   finding is dropped by the verifier or nice-to-have, reject them with
-   their defaults, commit the ledger, and emit the launcher payload
+   finding lands in the `Dropped by verifier` or `Nice-to-have` bucket
+   of step 7 — bucket precedence first, so a reopened or FLIP-FLOP
+   finding never takes this path — reject them with their defaults,
+   commit the ledger, and emit the launcher payload
    (preferred, `claude --agent qs-finish-task`) plus the slash-command
    fallback (`/finish-task`).
 7. Interactive triage in buckets (`FLIP-FLOP`, `Reopened`,
@@ -209,7 +211,9 @@ the review ledger"):
    rule as `/create-plan`)
    plus the matching slash-command fallback (`/implement-task` or
    `/implement-setup-task`) for the user to apply the fix plan; the
-   ledger and the fix plan are committed together.
+   ledger and the fix plan are committed together. If every decision is
+   "skip", there is no fix plan: commit the ledger alone and emit the
+   finish-task launcher payload (as in step 6).
 9. When fixes pushed, the user re-runs `claude --agent qs-review-task`
    (or `/review-task` as fallback) — loop back to step 1 until clean.
 

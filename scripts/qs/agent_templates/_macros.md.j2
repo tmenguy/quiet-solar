@@ -201,12 +201,13 @@ error. A round is *finished* once the ledger is committed; a dirty
 ledger is an unfinished round.
 [%- endmacro -%]
 [%- macro review_open_round() -%]
+Sync the heads first:
+
 ```bash
-gh pr view {{pr_number}}
-gh pr diff {{pr_number}}
 git fetch origin {{branch}}
 gh pr view {{pr_number}} --json headRefOid --jq .headRefOid
 git log -1 --format=%H
+git status --porcelain
 ```
 
 Compare the PR head (`headRefOid`) with the local head
@@ -217,6 +218,19 @@ Compare the PR head (`headRefOid`) with the local head
   {{branch}}`, then re-read the PR head;
 - local behind the PR head → STOP: "pull first" (`git pull --ff-only`);
 - diverged → STOP and ask the user.
+
+The worktree must equal that head: the repo-reading reviewers and the
+finding verifier read it. If `git status --porcelain` lists anything
+besides `docs/stories/QS-{{issue}}.review_ledger.json` and
+`docs/stories/QS-{{issue}}.story_review_fix_*`, STOP and ask the user to
+commit or stash it first.
+
+Only then read the PR and its diff — on the synced head:
+
+```bash
+gh pr view {{pr_number}}
+gh pr diff {{pr_number}}
+```
 
 Then open the round on that head (`<head>` below):
 
@@ -230,13 +244,17 @@ JSON:
 - `discarded: true` → tell the user "round N was not finished — redoing
   it".
 - `stale_fix_plans` non-empty → ask the user whether to delete them
-  (uncommitted fix plans of an unfinished round).
+  (fix plans of an unfinished round, never committed: untracked, or
+  staged by a commit that failed — unstage those with
+  `git rm -q --cached -- <path>` before deleting the file).
 - `mode: full` with a non-null `reason` → report the reason.
 - exit 1 `"round N committed unfinished"` (the ledger was committed
   with `open` findings) → STOP and show the listed IDs. The user decides
   each one with `review_ledger.py set` (it works on that committed
   round), then `check-round`, commit the ledger with the ledger-only
-  fence of step 8, and restart at step 1.
+  fence of step 8, and restart at step 1. Recovery decisions already
+  recorded but not committed are kept (the error then says
+  "recovery decisions are not committed yet") — finish and commit them.
 - `status: no-change` → say nothing changed since round N and offer a
   forced full re-review (`--force-full`); otherwise stop.
 - otherwise keep `round` (`{{round}}` below), `mode` and `base`. If the
@@ -303,10 +321,12 @@ Fallback findings are never refuted, and accepted ledger findings stay
 `accepted` (unchecked this round).
 [%- endmacro -%]
 [%- macro review_record() -%]
-Paste the block's **inner** JSON (without the fence) into `add`:
+Paste the block's **inner** JSON (without the fence) into `add`, and
+pass every consolidated key with `--keys` — `add` rejects an object that
+drops or invents a finding:
 
 ```bash
-python scripts/qs/review_ledger.py add --issue {{issue}} <<'QS_LEDGER'
+python scripts/qs/review_ledger.py add --issue {{issue}} --keys <C-1,C-2,…> <<'QS_LEDGER'
 <the JSON object>
 QS_LEDGER
 ```
@@ -380,7 +400,7 @@ fixed only when the user picks it; a `Dropped by verifier` default can
 be overridden). Collect all decisions, then ask "confirm decisions?".
 [%- endmacro -%]
 [%- macro review_decisions() -%]
-Record every decision:
+Record every decision — `FLIP-FLOP` decisions first:
 
 ```bash
 python scripts/qs/review_ledger.py set --issue {{issue}} --id <F-x> --to accepted
@@ -390,7 +410,11 @@ python scripts/qs/review_ledger.py set --issue {{issue}} --id <F-x> --to rejecte
 `--by user` for the user's explicit skips; `--by verifier` /
 `--by default-skip` for the `Dropped by verifier` / `Nice-to-have`
 defaults kept as-is. Accepting a `FLIP-FLOP` finding supersedes the one
-it undoes (`superseded` in the output). Then:
+it undoes (`superseded` in the output) — even when that one was reopened
+this round, so a later `set` on it is refused because it is
+`superseded`: that is expected, and it drops out of the fix plan (never
+"fix A" and "undo A" together). The fix plan lists exactly the findings
+`show` reports `accepted` with this round as `decided_round`. Then:
 
 ```bash
 python scripts/qs/review_ledger.py check-round --issue {{issue}}

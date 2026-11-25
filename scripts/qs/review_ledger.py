@@ -179,6 +179,31 @@ def _note(fid_round: int, state: str | None, to: str, note: str) -> dict[str, An
 # --- start-round --------------------------------------------------------------
 
 
+def _stale_fix_plans(ctx: _Ctx) -> list[str]:
+    """Fix plans absent from ``HEAD``: untracked, or staged by a commit that failed (fix #02 F-028)."""
+    untracked = _git(ctx.root, "ls-files", "--others", "--exclude-standard", "--", ctx.fix_glob).stdout.splitlines()
+    staged = _git(
+        ctx.root, "diff", "--cached", "--name-only", "--diff-filter=A", "--", ctx.fix_glob
+    ).stdout.splitlines()
+    return sorted(set(untracked) | set(staged))
+
+
+def _head_committed_unfinished(ctx: _Ctx) -> bool:
+    """Whether the ledger committed at ``HEAD`` is a committed-unfinished round (fix #02 F-029)."""
+    proc = _git(ctx.root, "show", f"HEAD:{ctx.rel}")
+    if proc.returncode != 0:
+        return False
+    try:
+        data = json.loads(proc.stdout)
+    except ValueError:
+        return False
+    return (
+        isinstance(data, dict)
+        and isinstance(data.get("rounds"), list)
+        and bool(isinstance(data.get("findings"), list) and _committed_unfinished(data))
+    )
+
+
 def _commit_sha(ctx: _Ctx, rev: str) -> str:
     """Full SHA of ``rev`` — exit 1 on an unknown commit (never passed raw to git diff)."""
     proc = _git(ctx.root, "rev-parse", "--verify", "--quiet", "--end-of-options", f"{rev}^{{commit}}")
@@ -190,6 +215,16 @@ def _commit_sha(ctx: _Ctx, rev: str) -> str:
 def cmd_start_round(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
     head = _commit_sha(ctx, args.head)
     discarded = False
+    if _dirty(ctx) and _head_committed_unfinished(ctx):
+        working = load(ctx.path)
+        _fail(
+            f"round {working['rounds'][-1]['n']} committed unfinished; recovery decisions are not committed yet",
+            open=[f["id"] for f in working["findings"] if f["state"] == "open"],
+            hint="finish the recovery with `review_ledger.py set`, run check-round, commit the ledger, "
+            "then start-round again",
+            discarded=False,
+            stale_fix_plans=_stale_fix_plans(ctx),
+        )
     if _dirty(ctx):
         if _git(ctx.root, "cat-file", "-e", f"HEAD:{ctx.rel}").returncode == 0:
             restore = _git(ctx.root, "checkout", "HEAD", "--", ctx.rel)
@@ -200,7 +235,7 @@ def cmd_start_round(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
         if restore.returncode != 0 or _dirty(ctx):
             _fail("could not discard the unfinished round", stderr=restore.stderr.strip())
         discarded = True
-    stale = _git(ctx.root, "ls-files", "--others", "--exclude-standard", "--", ctx.fix_glob).stdout.splitlines()
+    stale = _stale_fix_plans(ctx)
     data = load(ctx.path)
     rounds = data["rounds"]
     common = {"discarded": discarded, "stale_fix_plans": stale}
@@ -278,13 +313,15 @@ def _text(value: Any, where: str, key: str, nullable: bool = False) -> None:
         _fail(f"{where}: {key} must be a non-empty string", key=key)
 
 
-def _validate(obj: Any, snapshot: dict[str, dict[str, Any]]) -> None:
+def _validate(obj: Any, snapshot: dict[str, dict[str, Any]], keys: list[str]) -> None:
     _keys(obj, _TOP_KEYS, "object")
     mode = obj["mode"]
     _enum(mode, MODES, "object", "mode")
     for key in ("checks", "findings"):
         if not isinstance(obj[key], list):
             _fail(f"object: {key} must be a list", key=key)
+    if mode == "fallback" and obj["checks"]:
+        _fail("object: a fallback round checks nothing (checks must be [])", key="checks")
     accepted = {fid for fid, f in snapshot.items() if f["state"] == "accepted"}
     seen_refs: set[str] = set()
     for i, check in enumerate(obj["checks"]):
@@ -333,11 +370,22 @@ def _validate(obj: Any, snapshot: dict[str, dict[str, Any]]) -> None:
             _fail(f"{where}: demote on a nice-to-have", key="severity_action")
         if mode == "fallback" and verified:
             _fail(f"{where}: fallback findings are never verified", key="verdict")
+        if mode == "fallback" and (action != "keep" or rel["kind"] != "NEW"):
+            _fail(f"{where}: fallback findings are keep + NEW only", key="severity_action")
+        if f["verdict"] == "REFUTED" and rel["kind"] in ("REOPENS", "FLIP-FLOP"):
+            _fail(f"{where}: a REFUTED finding can only relate NEW or DUPLICATE", key="relation")
         if mode == "verified" and sev != "nice-to-have":
             if not verified and f["source"] != DOC_MAINTENANCE:
                 _fail(f"{where}: a must/should finding needs a verdict", key="verdict")
             if verified and f["source"] not in SCENARIO_EXEMPT and f["reproduces_when"] is None and action != "demote":
                 _fail(f"{where}: verified finding without reproduces_when must be demoted", key="severity_action")
+    if seen_keys != set(keys):
+        _fail(
+            "findings must cover every consolidated key exactly once",
+            key="keys",
+            missing=sorted(set(keys) - seen_keys),
+            extra=sorted(seen_keys - set(keys)),
+        )
 
 
 # --- add: reconciliation ------------------------------------------------------
@@ -524,7 +572,10 @@ def cmd_add(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
     except ValueError as exc:
         raise LedgerError(1, f"not JSON: {exc}") from exc
     snapshot = copy.deepcopy({f["id"]: f for f in data["findings"]})
-    _validate(obj, snapshot)
+    keys = [k.strip() for k in args.keys.split(",") if k.strip()]
+    if len(set(keys)) != len(keys):
+        _fail("--keys lists a key twice", key="keys")
+    _validate(obj, snapshot, keys)
     result = _reconcile(data, obj, snapshot, rnd["n"])
     rnd["added"] = True
     save(ctx.path, data)
@@ -568,6 +619,8 @@ def cmd_set(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_check_round(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
     data = load(ctx.path)
+    if data["rounds"] and not data["rounds"][-1].get("added"):
+        _fail(f"round {data['rounds'][-1]['n']} has no findings recorded (run add first)")
     open_ids = [f["id"] for f in data["findings"] if f["state"] == "open"]
     if open_ids:
         _fail("open findings remain", open=open_ids)
@@ -653,7 +706,8 @@ def build_parser() -> argparse.ArgumentParser:
     sr = common("start-round")
     sr.add_argument("--head", required=True)
     sr.add_argument("--force-full", action="store_true")
-    common("add")
+    ad = common("add")
+    ad.add_argument("--keys", required=True, help="comma-separated consolidated finding keys (C-1,C-2,…)")
     st = common("set")
     st.add_argument("--id", required=True)
     st.add_argument("--to", required=True, choices=("accepted", "rejected"))

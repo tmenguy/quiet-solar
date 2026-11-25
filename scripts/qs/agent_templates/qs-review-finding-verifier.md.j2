@@ -95,6 +95,8 @@ readable from the worktree.
      A re-raise of a `default-skip` / `verifier` rejection is
      `DUPLICATE` (region unchanged) or `NEW` (changed) — never
      FLIP-FLOP;
+   - a `REFUTED` finding relates only `NEW` or `DUPLICATE` — refuting a
+     claim can never reopen or flip a ledger finding;
    - several matches → the most recent non-`superseded` F-x;
      `file_changed: null` means "unknown", never "unchanged".
 4. `note` — one line shown at triage (why you refuted, demoted,
@@ -131,7 +133,8 @@ Literal example:
                "relation": {"kind": "NEW", "ref": null}, "note": null}]}
 ```
 
-Every consolidated finding appears exactly once in `findings`, and
+Every consolidated finding appears exactly once in `findings` (the
+orchestrator passes the consolidated keys to `add --keys`), and
 `checks` has one entry per `accepted` ledger finding. `review_ledger.py
 add` rejects the object otherwise; the orchestrator then re-asks you
 once with the error before falling back to an unverified round.

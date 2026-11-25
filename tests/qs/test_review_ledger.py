@@ -123,6 +123,14 @@ def _obj(
     return {"mode": mode, "checks": checks or [], "findings": findings or []}
 
 
+def _keys_of(stdin: Any) -> list[str]:
+    """The consolidated keys an ``add`` object carries — what the orchestrator passes as ``--keys``."""
+    findings = stdin.get("findings") if isinstance(stdin, dict) else None
+    if not isinstance(findings, list):
+        return []
+    return [f["key"] for f in findings if isinstance(f, dict) and isinstance(f.get("key"), str)]
+
+
 class Ledger:
     """In-process driver for ``review_ledger.main`` against one repo."""
 
@@ -139,6 +147,8 @@ class Ledger:
         if stdin is not None:
             text = stdin if isinstance(stdin, str) else json.dumps(stdin)
             self.monkeypatch.setattr(sys, "stdin", io.StringIO(text))
+        if cmd == "add" and not any(a.startswith("--keys") for a in args):
+            args = (*args, f"--keys={','.join(_keys_of(stdin))}")
         self.capsys.readouterr()
         code = self.mod.main([cmd, "--issue", str(ISSUE), "--root", str(self.repo), *args])
         out = self.capsys.readouterr().out
@@ -449,6 +459,31 @@ _VALIDATION_CASES: dict[str, Any] = {
     "check_not_object": _obj([], ["F-001"]),  # type: ignore[list-item]
     "promote_without_scenario": _obj([_bad(severity="nice-to-have", severity_action="promote", reproduces_when=None)]),
     "promote_refuted": _obj([_bad(severity="nice-to-have", severity_action="promote", verdict="REFUTED")]),
+    # Fix #02 F-021: a fallback round verifies nothing — no checks, keep, NEW only.
+    "fallback_with_checks": _obj([], [_check("F-001")], mode="fallback"),
+    "fallback_demote": _obj([_unverified(severity_action="demote")], mode="fallback"),
+    "fallback_relation_duplicate": _obj([_unverified(kind="DUPLICATE", ref="F-001")], mode="fallback"),
+    # Fix #02 F-022: a refuted finding cannot reopen or flip anything.
+    "refuted_reopens": _obj(
+        [
+            _bad(
+                verdict="REFUTED",
+                reproduces_when=None,
+                severity_action="demote",
+                relation={"kind": "REOPENS", "ref": "F-001"},
+            )
+        ]
+    ),
+    "refuted_flipflop": _obj(
+        [
+            _bad(
+                verdict="REFUTED",
+                reproduces_when=None,
+                severity_action="demote",
+                relation={"kind": "FLIP-FLOP", "ref": "F-001"},
+            )
+        ]
+    ),
 }
 
 
@@ -1099,7 +1134,8 @@ def test_root_defaults_to_cwd_repo_and_is_normalised(
     assert mod.main(["start-round", "--issue", str(ISSUE), "--head", "HEAD"]) == 0
     assert (_repo / LEDGER_REL).exists()
     capsys.readouterr()
-    assert mod.main(["check-round", "--issue", str(ISSUE), "--root", str(sub)]) == 0
+    assert mod.main(["show", "--issue", str(ISSUE), "--root", str(sub)]) == 0
+    assert json.loads(capsys.readouterr().out)["rounds"][0]["n"] == 1
 
 
 def test_script_main_entry(_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1322,3 +1358,60 @@ def test_fix01_f008_show_unknown_head_exits_1(led: Ledger, tmp_path: Path, injec
     head = f"--output={target}" if inject else "deadbeef"
     assert led.fail("show", f"--head={head}")["head"] == head
     assert not target.exists()  # never reaches git diff as an option
+
+
+# ---------------------------------------------------------------------------
+# Review fix #02 (QS-453 round 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("keys", "missing", "extra"), [("C-1,C-2", ["C-2"], []), ("", [], ["C-1"])])
+def test_fix02_f015_add_rejects_a_findings_key_set_mismatch(
+    led: Ledger, keys: str, missing: list[str], extra: list[str]
+) -> None:
+    led.start()
+    err = led.fail("add", f"--keys={keys}", stdin=_obj([_finding("C-1")]))
+    assert (err["missing"], err["extra"]) == (missing, extra)
+    assert led.data()["rounds"][-1]["added"] is False
+
+
+def test_fix02_f015_add_requires_keys_and_rejects_duplicates(led: Ledger, mod: ModuleType) -> None:
+    led.start()
+    assert mod.main(["add", "--issue", str(ISSUE), "--root", str(led.repo)]) == 1
+    led.fail("add", "--keys=C-1,C-1", stdin=_obj([_finding("C-1")]))
+
+
+def test_fix02_f015_add_accepts_matching_keys_in_any_order(led: Ledger) -> None:
+    led.start()
+    out = led.ok("add", "--keys= C-2 , C-1 ", stdin=_obj([_finding("C-1"), _finding("C-2")]))
+    assert set(out["findings"]) == {"C-1", "C-2"}
+
+
+def test_fix02_f028_stale_fix_plans_include_staged_uncommitted(led: Ledger) -> None:
+    led.round(_obj())
+    _commit(led.repo, "a.py", "two\n")
+    led.start()
+    led.add(_obj())
+    plan = f"docs/stories/QS-{ISSUE}.story_review_fix_#01.md"
+    (led.repo / plan).write_text("plan\n")
+    _git(led.repo, "add", "--", LEDGER_REL, plan)  # step 8 staged, then the commit failed
+    out = led.start()
+    assert out["discarded"] is True
+    assert out["stale_fix_plans"] == [plan]
+
+
+def test_fix02_f029_start_round_keeps_uncommitted_recovery_decisions(led: Ledger) -> None:
+    led.start()
+    led.add(_obj([_finding(), _finding("C-2")]))
+    led.commit_ledger()  # committed unfinished: F-001 and F-002 open
+    led.set("F-001", "accepted")  # recovery decision, not committed yet
+    err = led.fail("start-round", "--head", _head(led.repo))
+    assert err["open"] == ["F-002"]
+    assert err["discarded"] is False
+    assert led.finding("F-001")["state"] == "accepted"  # kept
+
+
+def test_fix02_f030_check_round_fails_before_add(led: Ledger) -> None:
+    led.start()
+    err = led.fail("check-round")
+    assert "add" in err["error"]

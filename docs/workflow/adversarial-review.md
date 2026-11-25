@@ -190,7 +190,8 @@ and a state history: `open` → `accepted` / `rejected` (by `user`,
 `default-skip` or `verifier`); `accepted` → `resolved` (check) or back
 to `open` (still present / reopened); `rejected` by the user → `open`
 when a reviewer challenges it in changed code; `accepted` / `resolved`
-→ `superseded` when a FLIP-FLOP that undoes it is accepted. Repeats of
+(or `open`, when reopened in the same round) → `superseded` when a
+FLIP-FLOP that undoes it is accepted. Repeats of
 decided findings are suppressed as duplicates, and **flip-flops** — a
 round asking to undo an earlier fix, or re-raising what the user
 rejected — are surfaced for an explicit decision. The round lifecycle is

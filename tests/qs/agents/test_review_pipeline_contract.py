@@ -160,6 +160,14 @@ def test_orchestrator_uses_every_ledger_subcommand(harness: str, filename: str) 
     for sub in ("start-round", "add", "set", "check-round", "show"):
         assert f"review_ledger.py {sub}" in body, sub
     assert "<<'QS_LEDGER'" in body
+    # Fix #02 F-015: add is told which consolidated keys must come back.
+    assert "review_ledger.py add --issue {{issue}} --keys" in body
+    # Fix #02 F-016 / F-019: clean worktree checked and heads synced before the diff is fetched.
+    step1 = _section(body, "### 1. Fetch the PR diff and open the round")
+    assert "git status --porcelain" in step1
+    assert step1.index("git fetch origin {{branch}}") < step1.index("gh pr diff {{pr_number}}")
+    # Fix #02 F-027: a set refused after an in-round supersede is expected.
+    assert "is `superseded`" in _norm(_section(body, "### 8. Record decisions, fix plan, commit"))
     # Fix #01 F-003: a committed-unfinished round is recovered through the CLI.
     unfinished = _norm(body)[_norm(body).index('"round N committed unfinished"') :][:400]
     assert "review_ledger.py set" in unfinished

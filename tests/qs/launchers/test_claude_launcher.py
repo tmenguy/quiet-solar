@@ -1450,6 +1450,26 @@ def test_payload_names_phase_model(
     assert payload["phase_model"] == expected
 
 
+@pytest.mark.parametrize(
+    ("lane", "cls"),
+    [("feature-factory", "frontier"), ("epic-factory", "frontier"), ("bug-product", "deep"), (None, "deep")],
+)
+def test_payload_phase_model_follows_lane_class_even_when_rows_coincide(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lane: str | None, cls: str,
+) -> None:
+    """QS-453 fix #02 F-023: while Claude ``frontier`` == ``deep`` the rows above
+    cannot tell a lane-aware render from the no-lane fallback, so pin each class
+    to a distinct sentinel and check ``create-plan`` resolves through the lane."""
+    import models  # type: ignore[import-not-found]
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    row = {**models.HARNESS_MODELS["claude"], "frontier": "sentinel-frontier", "deep": "sentinel-deep"}
+    monkeypatch.setitem(models.HARNESS_MODELS, "claude", row)
+    work_dir = _fake_worktree(tmp_path)
+    payload = claude_launcher.build_payload(str(work_dir), 367, "Title", next_cmd="create-plan", lane=lane)
+    assert payload["phase_model"] == f"sentinel-{cls}"
+
+
 # QS-367 N4: `phase_model` must be emitted regardless of whether the GUI pin
 # succeeded — the model handoff does not depend on the settings write. One
 # case with the agent file present (pinned True), one with it absent
