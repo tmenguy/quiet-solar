@@ -214,7 +214,7 @@ explaining why the docs are unaffected. See
 Once the gate is green, proceed **without asking**:
 
 ```bash
-git add custom_components/quiet_solar/ tests/ docs/stories/
+git add custom_components/quiet_solar/ tests/ docs/stories/ ':(exclude)docs/stories/*.review_ledger.json'
 git commit -m "QS-{{issue}}: {{short summary}}"
 git push origin {{branch}}
 

@@ -56,9 +56,15 @@ You see only the PR diff. Catch issues visible from the diff alone.
 
 ## Input
 
-The PR number, passed in your invocation prompt.
+The PR number, passed in your invocation prompt. In a **delta round**
+the orchestrator also pastes the delta diff text (the changes since the
+last reviewed head): review that text instead of running `gh pr diff` —
+still diff-only. Ignore `docs/stories/QS-<N>.review_ledger.json` and
+`docs/stories/QS-<N>.story_review_fix_*` (review bookkeeping, not code).
 
 ## What to do
+
+Full round:
 
 ```bash
 gh pr diff {{pr_number}}
@@ -69,12 +75,13 @@ That's your only input. Look for:
 - **Obvious bugs** — off-by-one, swapped args, wrong operators,
   inverted conditions.
 - **Dead code / unreachable branches** within the diff.
-- **Suspicious comments** — TODO / FIXME / HACK left in code.
 - **Broken string literals** — bad f-string interpolation, missing
   closing brace.
 - **Missing error handling** on obvious failure paths.
 - **Security smells** — hardcoded secrets, shell injection, eval.
-- **Style/lint violations** the linter would flag.
+
+Not your job: TODO/FIXME comments and style/lint — ruff and mypy own
+those.
 
 ## Output format
 
@@ -83,15 +90,15 @@ That's your only input. Look for:
 
 #### must-fix
 - [file.py:42] <finding> + 1-line justification.
+  Reproduces when: <concrete input or state that triggers it>
 
 #### should-fix
 - [file.py:99] ...
-
-#### nice-to-have
-- ...
+  Reproduces when: ...
 ```
 
-(or `"No findings."` if the diff is clean.)
+(or `"No findings."` if the diff is clean.) Only `must-fix` and
+`should-fix` — you report no nice-to-have / polish findings.
 
 ## Hard rules
 
@@ -105,8 +112,12 @@ That's your only input. Look for:
   as a backdoor to load surrounding source.
 [% endif %]
 - NEVER fetch the issue body, story file, or any reference material.
-- Stick to issues visible from the diff alone. When uncertain whether
-  something is a bug without repo context, flag it as `should-fix`
-  with the caveat "assumed without repo context".
-- Keep findings tight: one bullet per finding, ≤2 lines each.
+- Stick to issues visible from the diff alone. Every finding needs a
+  `Reproduces when:` line — the concrete scenario that triggers it. No
+  scenario → don't report it.
+- When a finding has a scenario but you are uncertain it is a bug
+  without repo context, flag it as `should-fix` with the caveat
+  "assumed without repo context".
+- Keep findings tight: one bullet per finding, ≤3 lines each including
+  the `Reproduces when:` line.
 [% endblock %]

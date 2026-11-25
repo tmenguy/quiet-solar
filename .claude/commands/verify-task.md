@@ -21,7 +21,11 @@ Expected outcome:
 - 3 reviewer subagents spawned in parallel (edge-case-hunter,
   coderabbit, regression-proof). `qs-review-blind-hunter` and
   `qs-review-acceptance-auditor` do NOT run in this lane.
-- Findings consolidated and triaged interactively with the user.
+- The consolidated findings verified by `qs-review-finding-verifier`
+  (one sequential post-pass) and recorded in the review ledger
+  `docs/stories/QS-<N>.review_ledger.json` (via
+  `scripts/qs/review_ledger.py`), then triaged interactively in
+  buckets with the user.
 - If findings remain, a fix plan written to
   `docs/stories/QS-<N>.story_review_fix_#NN.md`, plus the launcher form
   (`claude --agent qs-implement-task`) and the matching slash-command

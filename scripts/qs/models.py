@@ -104,6 +104,7 @@ _FLAT: dict[str, str] = {
     "qs-review-acceptance-auditor": "frontier",
     "qs-review-regression-proof": "frontier",
     "qs-review-coderabbit": "fast",
+    "qs-review-finding-verifier": "deep",  # QS-453: sequential post-pass, code-grounded
     "qs-finish-task": "fast",
     "qs-setup-task": "light",
     "qs-release": "fast",

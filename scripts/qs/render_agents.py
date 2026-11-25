@@ -75,7 +75,7 @@ LANE_AWARE: frozenset[str] = frozenset(
     }
 )
 
-# The 12 hidden reviewer / helper sub-agents. They get nothing extra —
+# The 13 hidden reviewer / helper sub-agents. They get nothing extra —
 # no Task facts, no lane protocol, no Reference map — so their isolation
 # contracts ("plan text only", "diff only") hold.
 SUBAGENTS: frozenset[str] = frozenset(
@@ -92,6 +92,7 @@ SUBAGENTS: frozenset[str] = frozenset(
         "qs-review-acceptance-auditor",
         "qs-review-coderabbit",
         "qs-review-regression-proof",
+        "qs-review-finding-verifier",
     }
 )
 

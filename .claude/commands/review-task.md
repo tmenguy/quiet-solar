@@ -19,7 +19,11 @@ discovers PR + story file from the branch name.
 Expected outcome:
 - 4 reviewer subagents spawned in parallel (blind-hunter,
   edge-case-hunter, acceptance-auditor, coderabbit).
-- Findings consolidated and triaged interactively with the user.
+- The consolidated findings verified by `qs-review-finding-verifier`
+  (one sequential post-pass) and recorded in the review ledger
+  `docs/stories/QS-<N>.review_ledger.json` (via
+  `scripts/qs/review_ledger.py`), then triaged interactively in
+  buckets with the user.
 - If findings remain, a fix plan written to
   `docs/stories/QS-<N>.story_review_fix_#NN.md`, plus THREE
   presentation options: (a) the launcher form (`claude --agent

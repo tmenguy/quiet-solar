@@ -180,7 +180,10 @@ with the **red-test protocol** below.
 **Runs on**: worktree.
 **Inputs**: PR number (resolved from branch).
 **Side effects**: writes fix-plan files under
-`docs/stories/QS-<N>.story_review_fix_#NN.md` (if fixes are needed).
+`docs/stories/QS-<N>.story_review_fix_#NN.md` (if fixes are needed) and
+records every round in the review ledger
+`docs/stories/QS-<N>.review_ledger.json` (via
+`scripts/qs/review_ledger.py`, committed at the end of the round).
 **Output**: triaged findings; either "ready for finish-task" or a fix
 plan. `qs-review-task` does **not** run in this lane.
 **Next phase**: `finish-task` (clean), or `implement-task` then re-run
@@ -188,10 +191,17 @@ plan. `qs-review-task` does **not** run in this lane.
 
 Orchestrator — spawns the **fix-verification roster** in parallel (one
 message): `qs-review-edge-case-hunter` (regression is the dominant
-risk) + `qs-review-coderabbit` + `qs-review-regression-proof`. Consolidate
-into must-fix / should-fix / nice-to-have / invalid, drive interactive
-triage, and either fast-path to `finish-task` (zero findings) or write a
-fix plan and loop through `implement-task`.
+risk) + `qs-review-coderabbit` + `qs-review-regression-proof`, after
+opening the round (`review_ledger.py start-round`: rounds 1–2 full, then
+delta rounds — only the edge-case-hunter sees the delta). Consolidate,
+then run the **finding verifier** (`qs-review-finding-verifier`) once — a
+sequential post-pass after the parallel fan-out — record the findings in
+the ledger, drive bucketed triage (QS-453 — see
+[adversarial-review.md](../adversarial-review.md) "Finding verification
+and the review ledger"), and either fast-path to `finish-task` (zero
+blocking findings; nice-to-haves still posted as a PR comment) or write a
+fix plan and loop through `implement-task`. The ledger is written only
+through `scripts/qs/review_ledger.py`.
 
 `qs-review-blind-hunter` and `qs-review-acceptance-auditor` do **not**
 run in this lane — for a bug, acceptance *is* the red test, which
@@ -223,4 +233,5 @@ See [adversarial-review.md](../adversarial-review.md). This lane runs
 (`qs-diag-root-cause-skeptic`, `qs-diag-fix-minimalist`; round 2+ adds
 `qs-plan-delta-auditor`) at diagnose time, and 3 fix-verification
 reviewers (`qs-review-edge-case-hunter`, `qs-review-coderabbit`,
-`qs-review-regression-proof`) at verify time.
+`qs-review-regression-proof`) at verify time, followed by the
+`qs-review-finding-verifier` post-pass.

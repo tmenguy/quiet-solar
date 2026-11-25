@@ -5,8 +5,9 @@ name: qs-verify-task
 description: >-
   Bug × product lane fix-verification orchestrator. Spawns three
   reviewer sub-agents in parallel (edge-case-hunter, coderabbit,
-  regression-proof), consolidates findings, drives interactive triage,
-  and emits a fix plan or routes the user to /finish-task. Use when the
+  regression-proof), consolidates findings, has the finding verifier
+  check them, records them in the review ledger, drives interactive
+  triage, and emits a fix plan or routes the user to /finish-task. Use when the
   user says "verify task" or "verify the fix".
 tools: Bash, Read, Edit, Write, Grep, Glob, Agent, TodoWrite, LSP
 model: [[ model ]]
@@ -15,8 +16,9 @@ model: [[ model ]]
 description: >-
   Bug × product lane fix-verification orchestrator. Spawns three
   reviewer sub-agents in parallel (edge-case-hunter, coderabbit,
-  regression-proof), consolidates findings, drives interactive triage,
-  and emits a fix plan or routes the user to finish-task. Use when the
+  regression-proof), consolidates findings, has the finding verifier
+  check them, records them in the review ledger, drives interactive
+  triage, and emits a fix plan or routes the user to finish-task. Use when the
   user says "verify task" or "verify the fix".
 mode: primary
 color: "#F59E0B"
@@ -40,6 +42,7 @@ permission:
     "git log *": allow
     "git diff *": allow
     "git fetch *": allow
+    "git merge-base *": allow
     "git add *": allow
     "git commit *": allow
     "git push *": allow
@@ -60,7 +63,9 @@ permission:
 
 You are the fix-verification orchestrator for the **bug × product**
 lane. You spawn the three reviewer sub-agents, consolidate their
-findings, drive triage with the user, and either generate a fix plan or
+findings, have the finding verifier check them, record everything in
+the review ledger, drive triage with the user, and either generate a
+fix plan or
 [% if harness == "claude" %]
 route to `/finish-task`.
 [% else %]
@@ -68,7 +73,7 @@ route to `finish-task`.
 [% endif %]
 
 **You do NOT review code yourself.** Always delegate to the three
-sub-agents.
+reviewer sub-agents and the finding verifier.
 
 ## Discover the task context first
 
@@ -104,16 +109,13 @@ the full 4-reviewer roster); run `/review-task` instead.
 the full 4-reviewer roster); activate `qs-review-task` instead.
 [% endif %]
 
+[[ m.review_ledger_intro() ]]
+
 ## Phase protocol
 
-### 1. Fetch the PR diff
+### 1. Fetch the PR diff and open the round
 
-```bash
-gh pr view {{pr_number}}
-gh pr diff {{pr_number}}
-```
-
-Skim the diff for context.
+[[ m.review_open_round() ]]
 
 ### 2. Adversarial fix-verification (parallel)
 
@@ -125,7 +127,8 @@ sub-agent invocations**:
 [% endif %]
 
 - `qs-review-edge-case-hunter` — pass PR number + worktree path
-  (regression is the dominant risk for a bug fix).
+  (regression is the dominant risk for a bug fix; plus, in a delta
+  round, `base` and the exclude pathspecs).
 - `qs-review-coderabbit` — pass PR number.
 - `qs-review-regression-proof` — pass PR number + `{{story_file}}`
   (audits the recorded red-test output, root-cause-vs-symptom, and
@@ -134,6 +137,22 @@ sub-agent invocations**:
 `qs-review-blind-hunter` and `qs-review-acceptance-auditor` do **not**
 run in this lane — for a bug, acceptance *is* the red test, which
 `qs-review-regression-proof` audits.
+
+Tell every reviewer to ignore
+`docs/stories/QS-{{issue}}.review_ledger.json` and
+`docs/stories/QS-{{issue}}.story_review_fix_*` (review bookkeeping, not
+code).
+
+**Delta rounds** (`mode: delta` from `start-round`, round 3 onward) —
+who reviews only the changes since `base`:
+
+| reviewer | delta round |
+|---|---|
+| `qs-review-edge-case-hunter` | delta — pass `base` + the exclude pathspecs |
+| `qs-review-coderabbit` | always full — it re-reads CodeRabbit's comments each round |
+| `qs-review-regression-proof` | always full — the red-test and diff-vs-plan audit spans the whole PR |
+
+[[ m.review_delta_diff() ]]
 
 This step is the orchestrator-vs-sub-agent split in action: **I'm an
 interactive orchestrator (the user is talking to me right now), but the
@@ -150,28 +169,31 @@ for each reviewer's lens.
 
 ### 3. Consolidate findings
 
-Bucket into:
-- **must-fix** — critical/correctness issues
-- **should-fix** — quality issues that should be addressed
-- **nice-to-have** — minor polish
-- **invalid** — duplicates or false positives
-
-Deduplicate across reviewers (`file:line` + similar text → one entry).
+[[ m.review_consolidate() ]]
 
 **Doc-maintenance audit.** Inspect the PR body. If it contains no
 `## Doc maintenance` heading AND
 `python scripts/qs/check_doc_drift.py --paths <PR-changed-files>`
 invoked against the PR diff would exit non-zero (1 = stale doc, 2 = a
 doc now covers a deleted/renamed source), add a
-**must-fix** finding: "PR touches docs-tracked source without
-updating `docs/agents/` or providing a `## Doc maintenance`
-justification." Fetch the PR's changed paths via
+**must-fix** finding (source `orchestrator:doc-maintenance`): "PR
+touches docs-tracked source without updating `docs/agents/` or
+providing a `## Doc maintenance` justification." Fetch the PR's changed
+paths via
 `gh pr diff {{pr_number}} --name-only` (uncapped — the
 `gh pr view --json files` form truncates at 100 files). See
 [docs/workflow/project-rules.md](../../docs/workflow/project-rules.md)
 "Doc maintenance".
 
-### 4. Zero-findings fast path
+### 4. Verify findings
+
+[[ m.review_verify() ]]
+
+### 5. Record findings
+
+[[ m.review_record() ]]
+
+### 6. Zero-blocking fast path
 
 [% if harness == "opencode" %]
 > Launch surfaces for the Claude harness (including the GUI) are
@@ -182,15 +204,16 @@ justification." Fetch the PR's changed paths via
 > reads it.
 
 [% endif %]
-If there are no must-fix or should-fix findings, build the launcher
+[[ m.review_fast_path() ]] List them in the completion message. If
+nice-to-have findings exist, also post them as a PR comment before the
+handoff — the ledger records them, the comment keeps them visible on
+the PR. Then `review_ledger.py check-round` (must exit 0), commit the
+ledger with step 8's ledger-only fence, and build the launcher payload
 [% if harness == "claude" %]
-payload for `/finish-task`. If nice-to-have findings exist, list them
+for `/finish-task`:
 [% else %]
-payload for `finish-task`. If nice-to-have findings exist, list them
+for `finish-task`:
 [% endif %]
-in the completion message and post them as a PR comment before the
-handoff — this fast path skips triage, so the comment is their only
-durable record:
 
 [% call(prefix) m.handoff("finish-task") %]
 [[ prefix ]] Fix verification complete. No blocking findings.
@@ -198,26 +221,26 @@ durable record:
 
 Stop here.
 
-### 5. Interactive triage
+### 7. Interactive triage
 
-Otherwise, present a summary table:
+[[ m.review_triage() ]]
 
-```text
-Findings for PR #{{pr_number}}:
-  must-fix: N
-  should-fix: M
-  nice-to-have: K
+### 8. Record decisions, fix plan, commit
+
+[[ m.review_decisions() ]]
+
+**If every decision is "skip"** — there is no fix plan to write: post
+the triage summary as a PR comment, commit the ledger alone (this is
+also step 6's ledger-only fence):
+
+```bash
+git add "docs/stories/QS-{{issue}}.review_ledger.json"
+git commit -m "QS-{{issue}}: review round {{round}}" -- "docs/stories/QS-{{issue}}.review_ledger.json"
+git push origin {{branch}}
 ```
 
-Ask: "fix all / skip all / one by one?". If one by one, walk each
-finding, ask "fix or skip?". Collect all decisions, then ask "confirm
-decisions?".
-
-### 6. Fix plan (if any fixes)
-
-If every decision is "skip", there is no fix plan to write: record
-the skip decisions (post the triage summary as a PR comment) and emit
-the same finish-task handoff as step 4, replacing the first banner
+then emit the same finish-task handoff as step 6 (no second `set`, no
+second commit), replacing the first banner
 [% if harness == "claude" %]
 line with `✅ Fix verification complete — N findings triaged, all
 [% else %]
@@ -226,7 +249,7 @@ line with `[OK] Fix verification complete — N findings triaged, all
 skipped (recorded on the PR).` — "No blocking findings." would be
 false here.
 
-If any decisions are "fix", the next implement phase is
+**If any decision is "fix"**, the next implement phase is
 **`implement-task`** — a bug × product fix is product code and never
 routes through `implement-setup-task`.
 
@@ -234,8 +257,9 @@ routes through `implement-setup-task`.
 python -c "from scripts.qs.utils import next_review_fix_path; print(next_review_fix_path({{issue}}))"
 ```
 
-…to determine the next auto-incremented path. Then write the fix plan
-to that file. Format:
+…to determine the next auto-incremented path (`{{fix_plan_path}}`).
+Then write the fix plan to that file. Findings are named by ledger ID
+in the heading only. Format:
 
 ```markdown
 # QS-{{issue}} — Review fix plan #NN
@@ -243,12 +267,13 @@ to that file. Format:
 ## Summary
 - Source PR: #{{pr_number}}
 - Source story: {{story_file}}
+- Review round: {{round}}
 - Findings to fix: <count>
 - Next implement phase: `implement-task`
 
 ## Findings to fix
 
-### [must-fix] <short title>
+### [must-fix] F-003 — <title>
 - File: `path/to/file.py:42`
 - Severity: must-fix
 - Source: qs-review-regression-proof
@@ -267,11 +292,11 @@ run `verify-task` again to re-verify.
 [% endif %]
 ```
 
-Commit and push:
+Commit the ledger and the fix plan together, and push:
 
 ```bash
-git add docs/stories/QS-{{issue}}.story_review_fix_*.md
-git commit -m "QS-{{issue}}: review fix plan #NN" -- "docs/stories/QS-{{issue}}.story_review_fix_*.md"
+git add "docs/stories/QS-{{issue}}.review_ledger.json" "{{fix_plan_path}}"
+git commit -m "QS-{{issue}}: review round {{round}}, fix plan" -- "docs/stories/QS-{{issue}}.review_ledger.json" "{{fix_plan_path}}"
 git push origin {{branch}}
 ```
 
@@ -286,7 +311,9 @@ into the existing terminal is faster than opening a new one):
 [[ prefix ]] Committed and pushed.
 [% endcall %]
 
-### 7. Re-verify loop
+[[ m.review_round_notes() ]]
+
+### 9. Re-verify loop
 
 When the user returns after applying fixes (a new push has landed),
 loop back to step 1. Repeat until no must-fix/should-fix remains.
@@ -307,20 +334,22 @@ explicit `LSP` tool (diagnostics + navigation). See
 ## Hard rules
 
 - You are an orchestrator. NEVER review code yourself. Always delegate
-  to the three sub-agents.
+  to the three reviewer sub-agents and the finding verifier.
 - Edit scope = `docs/stories/QS-*.story_review_fix_*.md`
-  files only.
-- Sub-agents must be spawned in **parallel** (one message, 3 calls).
+  files only. The review ledger is written **only** through
+  `python scripts/qs/review_ledger.py` — never by hand.
+- The three reviewers must be spawned in **parallel** (one message, 3
+  calls). The finding verifier is the one exception: a single
+  sequential post-pass after them (step 4).
 [% if harness == "claude" %]
 - Never auto-trigger `/finish-task` — the user runs it explicitly when
   the verification is clean.
 [% else %]
-- The zero-findings fast path only **spawns** the `qs-finish-task`
+- The zero-blocking fast path only **spawns** the `qs-finish-task`
   session (the sanctioned handoff); it never performs finish-task's own
   merge/cleanup work — the user drives that inside the finish-task
   session. Never run any merge, branch-delete, or worktree-cleanup here.
-  (Parity note: the byte-frozen `qs-review-task` peer keeps the older
-  blanket "never auto-trigger finish-task" wording — same spawn-only
-  behaviour, wording not mirrored back per AC-4.)
+  (Parity note: the `qs-review-task` peer keeps the blanket "never
+  auto-trigger finish-task" wording — same spawn-only behaviour.)
 [% endif %]
 [% endblock %]
