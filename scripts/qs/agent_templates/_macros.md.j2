@@ -232,8 +232,11 @@ JSON:
 - `stale_fix_plans` non-empty → ask the user whether to delete them
   (uncommitted fix plans of an unfinished round).
 - `mode: full` with a non-null `reason` → report the reason.
-- exit 1 `"round N committed unfinished"` → STOP and show the listed
-  IDs; the user resolves it.
+- exit 1 `"round N committed unfinished"` (the ledger was committed
+  with `open` findings) → STOP and show the listed IDs. The user decides
+  each one with `review_ledger.py set` (it works on that committed
+  round), then `check-round`, commit the ledger with the ledger-only
+  fence of step 8, and restart at step 1.
 - `status: no-change` → say nothing changed since round N and offer a
   forced full re-review (`--force-full`); otherwise stop.
 - otherwise keep `round` (`{{round}}` below), `mode` and `base`. If the

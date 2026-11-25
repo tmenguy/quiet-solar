@@ -160,6 +160,9 @@ def test_orchestrator_uses_every_ledger_subcommand(harness: str, filename: str) 
     for sub in ("start-round", "add", "set", "check-round", "show"):
         assert f"review_ledger.py {sub}" in body, sub
     assert "<<'QS_LEDGER'" in body
+    # Fix #01 F-003: a committed-unfinished round is recovered through the CLI.
+    unfinished = _norm(body)[_norm(body).index('"round N committed unfinished"') :][:400]
+    assert "review_ledger.py set" in unfinished
 
 
 @pytest.mark.parametrize("harness", _HARNESSES)

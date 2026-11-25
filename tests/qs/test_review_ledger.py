@@ -445,6 +445,10 @@ _VALIDATION_CASES: dict[str, Any] = {
     "verified_without_scenario_not_demoted": _obj([_bad(reproduces_when=None)]),
     "fallback_with_verdict": _obj([_finding()], mode="fallback"),
     "check_ref_not_accepted": _obj([], [_check("F-001")]),
+    "check_ref_not_string": _obj([], [{"ref": ["F-001"], "status": "RESOLVED", "evidence": "a.py:1"}]),
+    "check_not_object": _obj([], ["F-001"]),  # type: ignore[list-item]
+    "promote_without_scenario": _obj([_bad(severity="nice-to-have", severity_action="promote", reproduces_when=None)]),
+    "promote_refuted": _obj([_bad(severity="nice-to-have", severity_action="promote", verdict="REFUTED")]),
 }
 
 
@@ -1194,3 +1198,127 @@ def test_scenario_6_flipflop_accept_supersedes_and_repost_redirects(led: Ledger)
     assert out["findings"]["C-1"] == {"id": "F-003", "effect": "flip-flop"}
     assert out["checks"] == {"F-002": "resolved"}
     assert led.finding("F-003")["relation"] == {"kind": "FLIP-FLOP", "ref": "F-002"}
+
+
+# ---------------------------------------------------------------------------
+# Review fix #01 (QS-453 round 1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("order", ["undo-first", "fix-first"])
+def test_fix01_f001_accepting_flipflop_supersedes_open_ref_in_either_order(led: Ledger, order: str) -> None:
+    """F-001: "fix A" and "undo A" can never both end up accepted."""
+    _accepted_round1(led)
+    led.start()
+    led.add(_obj([_finding(kind="FLIP-FLOP", ref="F-001")], [_check("F-001", "STILL-PRESENT")]))
+    assert led.finding("F-001")["state"] == "open"
+    if order == "undo-first":
+        assert led.set("F-002", "accepted")["superseded"] == "F-001"
+        assert led.finding("F-001")["history"][-1]["from"] == "open"
+        led.fail("set", "--id", "F-001", "--to", "accepted")  # no longer decidable
+    else:
+        led.set("F-001", "accepted")
+        assert led.set("F-002", "accepted")["superseded"] == "F-001"
+    assert led.finding("F-001")["state"] == "superseded"
+    assert led.ok("check-round") == {"accepted_unchecked": []}
+
+
+def test_fix01_f002_redirect_follows_supersede_chain(led: Ledger) -> None:
+    """F-002: fix A → undo A → redo A; a re-raise of A targets the live head of the chain."""
+    _scenario_superseded(led)  # F-002 supersedes F-001
+    led.round(
+        _obj([_finding(kind="FLIP-FLOP", ref="F-002", where="a.py:4")], [_check("F-002")]),
+        {"F-003": ("accepted", None)},
+    )
+    assert led.finding("F-002")["state"] == "superseded"
+    _commit(led.repo, "a.py", "four\n")
+    led.start()
+    out = led.add(_obj([_finding(kind="REOPENS", ref="F-001")], [_check("F-003")]))
+    assert out["findings"]["C-1"] == {"id": "F-004", "effect": "flip-flop"}
+    assert led.finding("F-004")["relation"] == {"kind": "FLIP-FLOP", "ref": "F-003"}
+
+
+def test_fix01_f002_chain_cycle_without_live_head_downgrades(led: Ledger) -> None:
+    head = _head(led.repo)
+    base = {
+        "round": 1,
+        "source": "s",
+        "reported_severity": "must-fix",
+        "severity_action": "keep",
+        "severity": "must-fix",
+        "where": "a.py:1",
+        "title": "t",
+        "note": None,
+        "verdict": None,
+        "evidence": None,
+        "reproduces_when": None,
+        "state": "superseded",
+        "rejected_by": None,
+        "decided_round": 1,
+        "history": [],
+    }
+    led.write(
+        {
+            "version": 1,
+            "rounds": [{"n": 1, "head": head, "added": False}],
+            "findings": [
+                {**base, "id": "F-001", "relation": {"kind": "FLIP-FLOP", "ref": "F-002"}},
+                {**base, "id": "F-002", "relation": {"kind": "FLIP-FLOP", "ref": "F-001"}},
+            ],
+        }
+    )
+    out = led.add(_obj([_finding(kind="REOPENS", ref="F-001")]))
+    assert out["findings"]["C-1"]["effect"] == "new-downgraded"
+
+
+def test_fix01_f003_set_recovers_committed_unfinished_round(led: Ledger) -> None:
+    led.start()
+    led.add(_obj([_finding(), _finding("C-2")]))
+    led.set("F-001", "accepted")
+    led.commit_ledger()  # committed outside the protocol: F-002 still open
+    _commit(led.repo, "a.py", "two\n")
+    err = led.fail("start-round", "--head", _head(led.repo))
+    assert err["open"] == ["F-002"]
+    assert "review_ledger.py set" in err["hint"]
+    led.fail("add", stdin=_obj())  # still no second add
+    led.set("F-002", "rejected", "user")
+    assert led.ok("check-round") == {"accepted_unchecked": []}
+    led.commit_ledger()
+    assert led.start()["round"] == 2
+
+
+def test_fix01_f003_set_on_clean_finished_ledger_still_fails(led: Ledger) -> None:
+    led.round(_obj([_finding()]), {"F-001": ("accepted", None)})
+    led.fail("set", "--id", "F-001", "--to", "accepted")
+
+
+@pytest.mark.parametrize("tracked", [True, False])
+def test_fix01_f004_discard_failure_exits_1(led: Ledger, tracked: bool) -> None:
+    if tracked:
+        led.round(_obj())
+        _commit(led.repo, "a.py", "two\n")
+    led.start()
+    lock = led.repo / ".git" / "index.lock"
+    lock.write_text("")
+    try:
+        err = led.fail("start-round", "--head", _head(led.repo))
+    finally:
+        lock.unlink()
+    assert err["error"] == "could not discard the unfinished round"
+    assert led.data()["rounds"][-1]["added"] is False  # untouched
+
+
+def test_fix01_f005_demoted_repeat_of_demoted_finding_stays_duplicate(led: Ledger) -> None:
+    led.round(_obj([_finding(reproduces_when=None, severity_action="demote")]), {"F-001": ("rejected", "verifier")})
+    led.start("--force-full")
+    out = led.add(_obj([_finding(reproduces_when=None, severity_action="demote", kind="DUPLICATE", ref="F-001")]))
+    assert out["findings"]["C-1"] == {"id": "F-001", "effect": "duplicate"}
+
+
+@pytest.mark.parametrize("inject", [False, True])
+def test_fix01_f008_show_unknown_head_exits_1(led: Ledger, tmp_path: Path, inject: bool) -> None:
+    led.round(_obj([_finding()]), {"F-001": ("accepted", None)})
+    target = tmp_path / "injected"
+    head = f"--output={target}" if inject else "deadbeef"
+    assert led.fail("show", f"--head={head}")["head"] == head
+    assert not target.exists()  # never reaches git diff as an option

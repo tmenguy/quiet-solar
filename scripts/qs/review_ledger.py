@@ -152,8 +152,18 @@ def _dirty(ctx: _Ctx) -> bool:
     return bool(_git(ctx.root, "status", "--porcelain", "--untracked-files=all", "--", ctx.rel).stdout.strip())
 
 
-def _require_started(ctx: _Ctx, data: dict[str, Any], *, added: bool) -> dict[str, Any]:
-    if not data["rounds"] or not _dirty(ctx):
+def _committed_unfinished(data: dict[str, Any]) -> list[str]:
+    """IDs still ``open`` in a ledger whose last round was added (QS-453 fix #01 F-003)."""
+    if not data["rounds"] or not data["rounds"][-1].get("added"):
+        return []
+    return [f["id"] for f in data["findings"] if f["state"] == "open"]
+
+
+def _require_started(ctx: _Ctx, data: dict[str, Any], *, added: bool, recover: bool = False) -> dict[str, Any]:
+    """The started round. ``recover`` (``set`` only) also accepts a *committed
+    unfinished* round — a clean ledger whose last round still has ``open``
+    findings — so the CLI itself can decide them (fix #01 F-003)."""
+    if not data["rounds"] or not (_dirty(ctx) or (recover and _committed_unfinished(data))):
         _fail("no started round (run start-round first)")
     last = data["rounds"][-1]
     if bool(last.get("added")) is not added:
@@ -169,18 +179,26 @@ def _note(fid_round: int, state: str | None, to: str, note: str) -> dict[str, An
 # --- start-round --------------------------------------------------------------
 
 
-def cmd_start_round(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
-    proc = _git(ctx.root, "rev-parse", "--verify", "--quiet", f"{args.head}^{{commit}}")
+def _commit_sha(ctx: _Ctx, rev: str) -> str:
+    """Full SHA of ``rev`` — exit 1 on an unknown commit (never passed raw to git diff)."""
+    proc = _git(ctx.root, "rev-parse", "--verify", "--quiet", "--end-of-options", f"{rev}^{{commit}}")
     if proc.returncode != 0:
-        _fail("unknown commit", head=args.head)
-    head = proc.stdout.strip()
+        _fail("unknown commit", head=rev)
+    return proc.stdout.strip()
+
+
+def cmd_start_round(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
+    head = _commit_sha(ctx, args.head)
     discarded = False
     if _dirty(ctx):
         if _git(ctx.root, "cat-file", "-e", f"HEAD:{ctx.rel}").returncode == 0:
-            _git(ctx.root, "checkout", "HEAD", "--", ctx.rel)
+            restore = _git(ctx.root, "checkout", "HEAD", "--", ctx.rel)
         else:
-            _git(ctx.root, "rm", "-q", "--cached", "--ignore-unmatch", "--", ctx.rel)
-            ctx.path.unlink(missing_ok=True)
+            restore = _git(ctx.root, "rm", "-q", "--cached", "--ignore-unmatch", "--", ctx.rel)
+            if restore.returncode == 0:
+                ctx.path.unlink(missing_ok=True)
+        if restore.returncode != 0 or _dirty(ctx):
+            _fail("could not discard the unfinished round", stderr=restore.stderr.strip())
         discarded = True
     stale = _git(ctx.root, "ls-files", "--others", "--exclude-standard", "--", ctx.fix_glob).stdout.splitlines()
     data = load(ctx.path)
@@ -189,7 +207,13 @@ def cmd_start_round(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
     if rounds:
         open_ids = [f["id"] for f in data["findings"] if f["state"] == "open"]
         if open_ids:
-            _fail(f"round {rounds[-1]['n']} committed unfinished", open=open_ids, **common)
+            _fail(
+                f"round {rounds[-1]['n']} committed unfinished",
+                open=open_ids,
+                hint="decide each open ID with `review_ledger.py set`, run check-round, commit the ledger, "
+                "then start-round again",
+                **common,
+            )
     if not rounds:
         rounds.append({"n": 1, "head": head, "added": False})
         save(ctx.path, data)
@@ -266,6 +290,7 @@ def _validate(obj: Any, snapshot: dict[str, dict[str, Any]]) -> None:
     for i, check in enumerate(obj["checks"]):
         where = f"checks[{i}]"
         _keys(check, _CHECK_KEYS, where)
+        _text(check["ref"], where, "ref")
         if check["ref"] not in accepted:
             _fail(f"{where}: ref is not an accepted finding", key="ref", id=check["ref"])
         if check["ref"] in seen_refs:
@@ -298,8 +323,12 @@ def _validate(obj: Any, snapshot: dict[str, dict[str, Any]]) -> None:
         if verified != (f["evidence"] is not None):
             _fail(f"{where}: evidence must be non-null iff verdict is non-null", key="evidence")
         action, sev = f["severity_action"], f["severity"]
-        if action == "promote" and (sev != "nice-to-have" or not verified):
-            _fail(f"{where}: promote needs a verified nice-to-have", key="severity_action")
+        if action == "promote" and (
+            sev != "nice-to-have" or f["verdict"] in (None, "REFUTED") or f["reproduces_when"] is None
+        ):
+            _fail(
+                f"{where}: promote needs a verified (not refuted) nice-to-have with a scenario", key="severity_action"
+            )
         if action == "demote" and sev == "nice-to-have":
             _fail(f"{where}: demote on a nice-to-have", key="severity_action")
         if mode == "fallback" and verified:
@@ -323,15 +352,31 @@ def _id_num(fid: str) -> int:
 
 
 def _superseder(fid: str, snapshot: dict[str, dict[str, Any]]) -> str | None:
-    cands = [
-        f["id"]
-        for f in snapshot.values()
-        if f.get("relation")
-        and f["relation"]["kind"] == "FLIP-FLOP"
-        and f["relation"]["ref"] == fid
-        and f["state"] in _LIVE
-    ]
-    return max(cands, key=_id_num) if cands else None
+    """The live head of ``fid``'s supersede chain, or ``None`` (fix #01 F-002).
+
+    Each hop is the newest FLIP-FLOP finding that refs the current one and
+    was accepted (live or itself superseded since); the walk stops at the
+    first live one. A cycle or a dead end yields ``None``.
+    """
+    seen = {fid}
+    current = fid
+    while True:
+        cands = [
+            f["id"]
+            for f in snapshot.values()
+            if f.get("relation")
+            and f["relation"]["kind"] == "FLIP-FLOP"
+            and f["relation"]["ref"] == current
+            and f["state"] in (*_LIVE, "superseded")
+        ]
+        if not cands:
+            return None
+        current = max(cands, key=_id_num)
+        if current in seen:
+            return None
+        if snapshot[current]["state"] in _LIVE:
+            return current
+        seen.add(current)
 
 
 def _resolve(el: dict[str, Any], snapshot: dict[str, dict[str, Any]]) -> tuple[Any, ...]:
@@ -350,7 +395,7 @@ def _resolve(el: dict[str, Any], snapshot: dict[str, dict[str, Any]]) -> tuple[A
     if kind == "DUPLICATE":
         if state == "open":
             return down("ref is open")
-        if _SEV_RANK[el["severity"]] > _SEV_RANK[target["severity"]]:
+        if _SEV_RANK[_effective(el)] > _SEV_RANK[target["severity"]]:
             return down("severity escalated")
         return ("duplicate", ref)
     if state == "superseded":
@@ -491,7 +536,7 @@ def cmd_add(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
 
 def cmd_set(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
     data = load(ctx.path)
-    rnd = _require_started(ctx, data, added=True)
+    rnd = _require_started(ctx, data, added=True, recover=True)
     live = {f["id"]: f for f in data["findings"]}
     f = live.get(args.id)
     if f is None:
@@ -511,7 +556,9 @@ def cmd_set(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
     rel = f.get("relation")
     if args.to == "accepted" and rel and rel["kind"] == "FLIP-FLOP":
         fx = live.get(rel["ref"])
-        if fx is not None and fx["state"] in _LIVE:
+        # ``open`` too (fix #01 F-001): F-x reopened this round must not stay
+        # decidable once its undo is accepted — order-independent.
+        if fx is not None and fx["state"] in (*_LIVE, "open"):
             fx["history"].append(_note(n, fx["state"], "superseded", f"superseded by {args.id}"))
             fx["state"] = "superseded"
             superseded = fx["id"]
@@ -574,12 +621,13 @@ def cmd_show(ctx: _Ctx, args: argparse.Namespace) -> Any:
     if args.format == "md":
         return _md(data)
     if args.head:
+        head = _commit_sha(ctx, args.head)
         heads = {r["n"]: r["head"] for r in data["rounds"]}
         for f in data["findings"]:
             if f.get("decided_round") is None:
                 continue
             f["file_changed"], f["diff_since_decision"] = _file_changed(
-                ctx.root, f["where"], heads.get(f["decided_round"]), args.head
+                ctx.root, f["where"], heads.get(f["decided_round"]), head
             )
     return data
 

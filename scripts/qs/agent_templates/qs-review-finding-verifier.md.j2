@@ -71,7 +71,8 @@ readable from the worktree.
      or `null` when there is none.
    - `nice-to-have`: `verdict: null`, `evidence: null` — unless its text
      describes a concrete runtime scenario that you verify; only then
-     give it a verdict and `severity_action: promote` (→ should-fix).
+     give it a verdict (`CONFIRMED` / `PLAUSIBLE`, never `REFUTED`), its
+     `reproduces_when`, and `severity_action: promote` (→ should-fix).
    - `orchestrator:doc-maintenance` is deterministic: never verify it
      (`verdict: null`, `evidence: null`, `severity_action: keep`).
    - `severity_action: demote` (must/should → nice-to-have) is
