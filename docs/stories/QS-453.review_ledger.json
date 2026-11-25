@@ -1,0 +1,460 @@
+{
+  "version": 1,
+  "rounds": [
+    {
+      "n": 1,
+      "head": "d2287ba2e27128b52ab2ae78e513ec53e5e229d7",
+      "added": true
+    }
+  ],
+  "findings": [
+    {
+      "id": "F-001",
+      "round": 1,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "must-fix",
+      "severity_action": "keep",
+      "severity": "must-fix",
+      "where": "scripts/qs/review_ledger.py:510",
+      "title": "cmd_set supersede depends on decision order",
+      "note": "Traced: line 514 only supersedes when the ref is accepted/resolved at set time; the code follows the D2 transition table (story.md:241) literally, so the gap is in the spec. The opposite order supersedes correctly.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:514",
+      "reproduces_when": "round 2 add with checks STILL-PRESENT F-001 + element FLIP-FLOP F-001 (F-001 -> open, F-002 created); set F-002 accepted (F-001 is open, not in _LIVE, nothing superseded) then set F-001 accepted; check-round passes with both accepted",
+      "relation": null,
+      "state": "accepted",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        }
+      ]
+    },
+    {
+      "id": "F-002",
+      "round": 1,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:325",
+      "title": "_superseder follows only one step of a supersede chain",
+      "note": "Downgrade path confirmed. The correct target is debatable: F-003 restates A, so re-raising A agrees with F-003 and is not a flip-flop. The verifier's 'most recent non-superseded' rule should also cite F-003, not F-001.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:332",
+      "reproduces_when": "F-001 accepted; F-002 = FLIP-FLOP F-001 accepted (F-001 superseded); F-003 = FLIP-FLOP F-002 accepted (F-002 superseded); round 4 sends REOPENS F-001 -> _superseder finds no live F-y -> new-downgraded (line 358-359)",
+      "relation": null,
+      "state": "accepted",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        }
+      ]
+    },
+    {
+      "id": "F-003",
+      "round": 1,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:155",
+      "title": "No CLI recovery from a committed-unfinished ledger",
+      "note": "Designed behaviour: D4 step 1 (story.md:354) says STOP and the user resolves it. Reachable only when the ledger is committed outside the protocol, which commits only after check-round passes.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:192",
+      "reproduces_when": "ledger committed (clean vs HEAD) with a finding in state open: start-round exits 1 at line 192 and set/add exit 1 at line 157",
+      "relation": null,
+      "state": "accepted",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        }
+      ]
+    },
+    {
+      "id": "F-004",
+      "round": 1,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:178",
+      "title": "start-round discard ignores git checkout/rm return codes",
+      "note": null,
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:180",
+      "reproduces_when": "dirty ledger present and the worktree index.lock exists: git checkout HEAD -- <ledger> fails silently, discarded:true is reported, load() at line 186 reads the dirty round (false 'committed unfinished' or a new round stacked on it)",
+      "relation": null,
+      "state": "accepted",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        }
+      ]
+    },
+    {
+      "id": "F-005",
+      "round": 1,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:353",
+      "title": "DUPLICATE escalation compares reported vs effective severity",
+      "note": "The code matches D2's literal wording (story.md:295-297), so the fix needs a spec change too. Each new F-ID lands in Dropped-by-verifier: churn, not a wrong fix.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:353",
+      "reproduces_when": "round 1 must-fix with demote (effective nice-to-have) rejected --by verifier; round 2 same must-fix + demote with DUPLICATE F-001 -> rank 2 > 0 -> new-downgraded, a new F-ID every round",
+      "relation": null,
+      "state": "accepted",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        }
+      ]
+    },
+    {
+      "id": "F-006",
+      "round": 1,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:269",
+      "title": "Non-string checks[].ref raises an uncaught TypeError",
+      "note": null,
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:269",
+      "reproduces_when": "add with checks: [{\"ref\": [\"F-001\"], \"status\": \"RESOLVED\", \"evidence\": \"x:1\"}] -> unhashable list in set membership -> traceback, no {\"error\"} JSON (main catches only LedgerError, line 635)",
+      "relation": null,
+      "state": "accepted",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        }
+      ]
+    },
+    {
+      "id": "F-007",
+      "round": 1,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:301",
+      "title": "promote accepted with REFUTED verdict or without reproduces_when",
+      "note": "Line 301 matches D2's validation list (story.md:282-283), which does not require a scenario for promote; REFUTED+promote is harmless at triage (the Dropped bucket wins). Only the null-scenario case matters.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:307",
+      "reproduces_when": "verified-mode nice-to-have with verdict CONFIRMED, reproduces_when null, severity_action promote -> passes validation (line 307 checks only the reported severity) and becomes a should-fix Blocking row without a scenario",
+      "relation": null,
+      "state": "accepted",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        }
+      ]
+    },
+    {
+      "id": "F-008",
+      "round": 1,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:539",
+      "title": "show --head is never validated",
+      "note": "Low impact: the only caller is the orchestrator, which passes the head start-round already validated, and null means unknown per the spec. Option injection needs a caller that already has a shell.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:576",
+      "reproduces_when": "show --head deadbeef (every decided finding gets file_changed null via git exit 128), or --head=--output=/tmp/x passed as a git diff argument before '--' at lines 539/544",
+      "relation": null,
+      "state": "accepted",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        }
+      ]
+    },
+    {
+      "id": "F-009",
+      "round": 1,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "demote",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/agent_templates/qs-review-task.md.j2:45",
+      "title": "OpenCode bash allow-list lacks review_ledger.py",
+      "note": "Already covered by the existing \"python scripts/qs/*\": allow rule (qs-review-task.md.j2:56, qs-verify-task.md.j2:57).",
+      "verdict": "REFUTED",
+      "evidence": "scripts/qs/agent_templates/qs-review-task.md.j2:56",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "verifier",
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "rejected",
+          "note": "verifier: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-010",
+      "round": 1,
+      "source": "qs-review-acceptance-auditor",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:537",
+      "title": "file_changed cat-file pre-check not stated in D2",
+      "note": "The deviation protects against a false 'unchanged' that would wrongly turn a re-raise into a DUPLICATE. Documenting it in D2 is the cheaper resolution.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:537",
+      "reproduces_when": "a decided finding whose where path exists at neither revision (e.g. a bare 'charger.py:2471'): the code returns null, while D2 (story.md:324-325) maps git diff exit 0 to false",
+      "relation": null,
+      "state": "accepted",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        }
+      ]
+    },
+    {
+      "id": "F-011",
+      "round": 1,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/review_ledger.py:129",
+      "title": "load validates only the top-level shape",
+      "note": null,
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-012",
+      "round": 1,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/review_ledger.py:568",
+      "title": "_md does not escape newlines in cells",
+      "note": null,
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-013",
+      "round": 1,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/review_ledger.py:395",
+      "title": "duplicate history note records pre-reconcile state",
+      "note": "The note is appended before the later transition note in the same add, so the history stays in order; not stale.",
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-014",
+      "round": 1,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/review_ledger.py:474",
+      "title": "no lock or atomic write; concurrent set calls lose a decision",
+      "note": "Not promoted: a lost set leaves its finding open, and check-round (step 8) catches that and sends it back to triage.",
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    }
+  ]
+}
