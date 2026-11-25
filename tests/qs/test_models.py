@@ -51,7 +51,7 @@ _FLAT_TABLE = [
 _ROW_LITERALS = [
     ("claude", "build", "claude-opus-5-5"),
     ("claude", "deep", "claude-opus-5-5"),
-    ("claude", "frontier", "claude-fable-5-1"),
+    ("claude", "frontier", "claude-opus-5-5"),
     ("claude", "light", "claude-sonnet-5"),
     ("claude", "fast", "claude-haiku-5-5"),
     ("opencode", "build", "github-copilot/claude-opus-5.5"),

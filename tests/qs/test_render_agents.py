@@ -412,7 +412,7 @@ def test_render_policy_path_translates_per_harness(tmp_path: Path) -> None:
     assert (agents_o / "qs-finish-task.md").read_text() == (
         "model=github-copilot/claude-haiku-4.5 effort=None\n"
     )
-    assert (agents_c / "qs-create-plan.md").read_text() == "model=claude-fable-5-1 effort=high\n"
+    assert (agents_c / "qs-create-plan.md").read_text() == "model=claude-opus-5-5 effort=high\n"
     assert (agents_o / "qs-create-plan.md").read_text() == (
         "model=github-copilot/gpt-6-astra effort=high\n"
     )
@@ -675,9 +675,9 @@ def test_claude_frontmatter_contract(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("labels", "stem", "expected"),
     [
-        (["kind:feature", "target:factory", "scale:task"], "qs-create-plan", "claude-fable-5-1"),
+        (["kind:feature", "target:factory", "scale:task"], "qs-create-plan", "claude-opus-5-5"),
         (["kind:bug", "target:product", "scale:task"], "qs-diagnose-task", "claude-opus-5-5"),
-        (["target:factory", "scale:epic"], "qs-create-plan", "claude-fable-5-1"),
+        (["target:factory", "scale:epic"], "qs-create-plan", "claude-opus-5-5"),
     ],
 )
 def test_claude_frontmatter_model_by_lane(

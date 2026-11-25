@@ -1429,11 +1429,11 @@ def test_fast_phase_without_prior_effort_level(tmp_path: Path) -> None:
         # QS-367 N4: the second ``build`` phase (implement-task) was
         # uncovered, and no row exercised an ``epic-*`` lane.
         ("implement-task", None, "claude-opus-5-5"),
-        ("create-plan", "feature-factory", "claude-fable-5-1"),
-        ("create-plan", "epic-factory", "claude-fable-5-1"),
+        ("create-plan", "feature-factory", "claude-opus-5-5"),
+        ("create-plan", "epic-factory", "claude-opus-5-5"),
         ("create-plan", "bug-product", "claude-opus-5-5"),
         ("create-plan", None, "claude-opus-5-5"),
-        ("review-task", None, "claude-fable-5-1"),
+        ("review-task", None, "claude-opus-5-5"),
         ("finish-task", None, "claude-haiku-5-5"),
     ],
 )
@@ -1463,7 +1463,7 @@ def test_phase_model_emitted_when_pin_succeeds(tmp_path: Path) -> None:
         str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
     )
     assert payload["phase_agent_pinned"] is True
-    assert payload["phase_model"] == "claude-fable-5-1"
+    assert payload["phase_model"] == "claude-opus-5-5"
 
 
 def test_phase_model_emitted_when_pin_skipped(tmp_path: Path) -> None:
@@ -1698,7 +1698,7 @@ def test_build_payload_warns_on_old_cli(
     assert recorded["encoding"] == "utf-8"
     assert recorded["errors"] == "replace"
     # Payload is intact — the guard neither blocks nor alters it.
-    assert payload["phase_model"] == "claude-fable-5-1"
+    assert payload["phase_model"] == "claude-opus-5-5"
     assert payload["agent"] == "qs-create-plan"
     assert payload["phase_agent_pinned"] is True
 
@@ -1718,7 +1718,7 @@ def test_build_payload_silent_when_cli_missing(
         str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
     )
     assert capsys.readouterr().err == ""
-    assert payload["phase_model"] == "claude-fable-5-1"
+    assert payload["phase_model"] == "claude-opus-5-5"
     # N5: prove the silence is the real guard swallowing the error, not the
     # guard being a no-op — it must have spawned ``claude --version`` once.
     assert recorded["calls"] == 1
@@ -1743,7 +1743,7 @@ def test_build_payload_silent_on_cli_timeout(
         str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
     )
     assert capsys.readouterr().err == ""
-    assert payload["phase_model"] == "claude-fable-5-1"
+    assert payload["phase_model"] == "claude-opus-5-5"
     # N5: the guard really ran and swallowed the timeout (not a silent no-op).
     assert recorded["calls"] == 1
 
@@ -1772,7 +1772,7 @@ def test_build_payload_silent_on_unicode_decode_error(
         str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
     )
     assert capsys.readouterr().err == ""
-    assert payload["phase_model"] == "claude-fable-5-1"
+    assert payload["phase_model"] == "claude-opus-5-5"
     # N5: the guard really ran and swallowed the decode error (not a no-op).
     assert recorded["calls"] == 1
 
@@ -1801,7 +1801,7 @@ def test_build_payload_silent_on_unhelpful_cli(
         str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
     )
     assert capsys.readouterr().err == ""
-    assert payload["phase_model"] == "claude-fable-5-1"
+    assert payload["phase_model"] == "claude-opus-5-5"
     # N5: each unhelpful case still runs the real guard exactly once.
     assert recorded["calls"] == 1
 
