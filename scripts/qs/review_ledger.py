@@ -188,20 +188,29 @@ def _stale_fix_plans(ctx: _Ctx) -> list[str]:
     return sorted(set(untracked) | set(staged))
 
 
-def _head_committed_unfinished(ctx: _Ctx) -> bool:
-    """Whether the ledger committed at ``HEAD`` is a committed-unfinished round (fix #02 F-029)."""
+def _recovery_copy(ctx: _Ctx) -> dict[str, Any] | None:
+    """The dirty working ledger when it holds uncommitted recovery decisions, else ``None``.
+
+    Recovery (fix #02 F-029): the ledger at ``HEAD`` is a committed-unfinished
+    round and the working copy is that same round with ``set`` decisions on
+    top — it loads and its ``rounds`` equal the committed ones (``set``
+    changes findings only). Anything else — deleted, corrupt, or another
+    shape — is an ordinary unfinished copy and is discarded (fix #03
+    F-035 / F-036).
+    """
     proc = _git(ctx.root, "show", f"HEAD:{ctx.rel}")
     if proc.returncode != 0:
-        return False
+        return None
     try:
-        data = json.loads(proc.stdout)
-    except ValueError:
-        return False
-    return (
-        isinstance(data, dict)
-        and isinstance(data.get("rounds"), list)
-        and bool(isinstance(data.get("findings"), list) and _committed_unfinished(data))
-    )
+        committed = json.loads(proc.stdout)
+        working = load(ctx.path)
+    except ValueError, LedgerError:
+        return None
+    if not isinstance(committed, dict) or not isinstance(committed.get("findings"), list):
+        return None
+    if committed.get("rounds") != working["rounds"] or not _committed_unfinished(committed):
+        return None
+    return working
 
 
 def _commit_sha(ctx: _Ctx, rev: str) -> str:
@@ -215,8 +224,8 @@ def _commit_sha(ctx: _Ctx, rev: str) -> str:
 def cmd_start_round(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
     head = _commit_sha(ctx, args.head)
     discarded = False
-    if _dirty(ctx) and _head_committed_unfinished(ctx):
-        working = load(ctx.path)
+    working = _recovery_copy(ctx) if _dirty(ctx) else None
+    if working is not None:
         _fail(
             f"round {working['rounds'][-1]['n']} committed unfinished; recovery decisions are not committed yet",
             open=[f["id"] for f in working["findings"] if f["state"] == "open"],

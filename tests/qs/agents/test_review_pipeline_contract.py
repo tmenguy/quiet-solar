@@ -59,6 +59,13 @@ def _norm(text: str) -> str:
     return " ".join(text.split())
 
 
+def unfinished_block(body: str) -> str:
+    """The step-1 bullet about a committed-unfinished round (normalised)."""
+    flat = _norm(body)
+    start = flat.index('"round N committed unfinished"')
+    return flat[start : start + 900]
+
+
 # --------------------------------------------------------------------------- #
 # AC-1 — the verifier sub-agent
 # --------------------------------------------------------------------------- #
@@ -162,6 +169,10 @@ def test_orchestrator_uses_every_ledger_subcommand(harness: str, filename: str) 
     assert "<<'QS_LEDGER'" in body
     # Fix #02 F-015: add is told which consolidated keys must come back.
     assert "review_ledger.py add --issue {{issue}} --keys" in body
+    # Fix #03 F-032: the empty-key case is spelled out.
+    assert '--keys ""' in body
+    # Fix #03 F-037: recovery-accepted findings are routed to a fix plan.
+    assert "recovery" in unfinished_block(body) and "fix plan" in unfinished_block(body)
     # Fix #02 F-016 / F-019: clean worktree checked and heads synced before the diff is fetched.
     step1 = _section(body, "### 1. Fetch the PR diff and open the round")
     assert "git status --porcelain" in step1

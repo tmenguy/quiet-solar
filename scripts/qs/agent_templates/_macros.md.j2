@@ -251,10 +251,14 @@ JSON:
 - exit 1 `"round N committed unfinished"` (the ledger was committed
   with `open` findings) → STOP and show the listed IDs. The user decides
   each one with `review_ledger.py set` (it works on that committed
-  round), then `check-round`, commit the ledger with the ledger-only
-  fence of step 8, and restart at step 1. Recovery decisions already
-  recorded but not committed are kept (the error then says
-  "recovery decisions are not committed yet") — finish and commit them.
+  round), then `check-round`, and finish that round exactly like step 8:
+  any recovery decision accepted → write the fix plan for the findings
+  accepted in that round, commit it with the ledger and hand off to
+  implement (a restart would only see "no-change" and drop the fix);
+  all skipped → commit the ledger with the ledger-only fence and restart
+  at step 1. Recovery decisions already recorded but not committed are
+  kept (the error then says "recovery decisions are not committed yet")
+  — finish and commit them.
 - `status: no-change` → say nothing changed since round N and offer a
   forced full re-review (`--force-full`); otherwise stop.
 - otherwise keep `round` (`{{round}}` below), `mode` and `base`. If the
@@ -323,7 +327,8 @@ Fallback findings are never refuted, and accepted ledger findings stay
 [%- macro review_record() -%]
 Paste the block's **inner** JSON (without the fence) into `add`, and
 pass every consolidated key with `--keys` — `add` rejects an object that
-drops or invents a finding:
+drops or invents a finding. With no consolidated findings, pass
+`--keys ""` (the round still records its checks):
 
 ```bash
 python scripts/qs/review_ledger.py add --issue {{issue}} --keys <C-1,C-2,…> <<'QS_LEDGER'

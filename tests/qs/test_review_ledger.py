@@ -128,7 +128,8 @@ def _keys_of(stdin: Any) -> list[str]:
     findings = stdin.get("findings") if isinstance(stdin, dict) else None
     if not isinstance(findings, list):
         return []
-    return [f["key"] for f in findings if isinstance(f, dict) and isinstance(f.get("key"), str)]
+    keys = [f["key"] for f in findings if isinstance(f, dict) and isinstance(f.get("key"), str)]
+    return list(dict.fromkeys(keys))  # deduped, so _validate's own duplicate-key branch is reached (fix #03 F-033)
 
 
 class Ledger:
@@ -1415,3 +1416,42 @@ def test_fix02_f030_check_round_fails_before_add(led: Ledger) -> None:
     led.start()
     err = led.fail("check-round")
     assert "add" in err["error"]
+
+
+# ---------------------------------------------------------------------------
+# Review fix #03 (QS-453 round 3)
+# ---------------------------------------------------------------------------
+
+
+def test_fix03_f033_duplicate_finding_key_reaches_validate(led: Ledger) -> None:
+    led.start()
+    err = led.fail("add", stdin=_VALIDATION_CASES["duplicate_finding_key"])
+    assert err["error"] == "findings[1]: duplicate finding key"
+
+
+def test_fix03_f032_empty_keys_records_a_checks_only_round(led: Ledger) -> None:
+    _accepted_round1(led)
+    led.start()
+    out = led.ok("add", "--keys", "", stdin=_obj([], [_check("F-001")]))
+    assert out == {"findings": {}, "checks": {"F-001": "resolved"}}
+
+
+def _committed_unfinished(led: Ledger) -> None:
+    led.start()
+    led.add(_obj([_finding(), _finding("C-2")]))
+    led.commit_ledger()  # committed with F-001 and F-002 open
+
+
+@pytest.mark.parametrize("working", ["deleted", "no-rounds", "corrupt"])
+def test_fix03_f035_f036_unusable_working_copy_is_restored_not_kept(led: Ledger, working: str) -> None:
+    _committed_unfinished(led)
+    if working == "deleted":
+        led.path.unlink()
+    elif working == "no-rounds":
+        led.write({"version": 1, "rounds": [], "findings": []})
+    else:
+        led.path.write_text("{truncated", encoding="utf-8")
+    err = led.fail("start-round", "--head", _head(led.repo))
+    assert err["error"] == "round 1 committed unfinished"  # the committed state, restored
+    assert err["discarded"] is True
+    assert err["open"] == ["F-001", "F-002"]
