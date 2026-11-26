@@ -1455,3 +1455,18 @@ def test_fix03_f035_f036_unusable_working_copy_is_restored_not_kept(led: Ledger,
     assert err["error"] == "round 1 committed unfinished"  # the committed state, restored
     assert err["discarded"] is True
     assert err["open"] == ["F-001", "F-002"]
+
+
+# ---------------------------------------------------------------------------
+# Review fix #04 (QS-453 round 4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("recovering", [False, True])
+def test_fix04_f043_committed_unfinished_error_carries_round(led: Ledger, recovering: bool) -> None:
+    _committed_unfinished(led)
+    if recovering:
+        led.set("F-001", "accepted")  # uncommitted recovery decision
+    else:
+        _commit(led.repo, "a.py", "two\n")
+    assert led.fail("start-round", "--head", _head(led.repo))["round"] == 1

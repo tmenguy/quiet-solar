@@ -251,12 +251,13 @@ JSON:
 - exit 1 `"round N committed unfinished"` (the ledger was committed
   with `open` findings) → STOP and show the listed IDs. The user decides
   each one with `review_ledger.py set` (it works on that committed
-  round), then `check-round`, and finish that round exactly like step 8:
-  any recovery decision accepted → write the fix plan for the findings
-  accepted in that round, commit it with the ledger and hand off to
+  round), then `check-round`, and finish that round exactly like step 8,
+  with `{{round}}` = the error's `round`: any finding `accepted` with that
+  round as `decided_round` (decided before or during the recovery) →
+  write the fix plan for them, commit it with the ledger and hand off to
   implement (a restart would only see "no-change" and drop the fix);
-  all skipped → commit the ledger with the ledger-only fence and restart
-  at step 1. Recovery decisions already recorded but not committed are
+  none → commit the ledger with the ledger-only fence and restart at
+  step 1. Recovery decisions already recorded but not committed are
   kept (the error then says "recovery decisions are not committed yet")
   — finish and commit them.
 - `status: no-change` → say nothing changed since round N and offer a

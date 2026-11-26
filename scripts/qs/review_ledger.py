@@ -228,6 +228,7 @@ def cmd_start_round(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
     if working is not None:
         _fail(
             f"round {working['rounds'][-1]['n']} committed unfinished; recovery decisions are not committed yet",
+            round=working["rounds"][-1]["n"],
             open=[f["id"] for f in working["findings"] if f["state"] == "open"],
             hint="finish the recovery with `review_ledger.py set`, run check-round, commit the ledger, "
             "then start-round again",
@@ -253,6 +254,7 @@ def cmd_start_round(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
         if open_ids:
             _fail(
                 f"round {rounds[-1]['n']} committed unfinished",
+                round=rounds[-1]["n"],
                 open=open_ids,
                 hint="decide each open ID with `review_ledger.py set`, run check-round, commit the ledger, "
                 "then start-round again",
