@@ -20,6 +20,11 @@
       "n": 4,
       "head": "300438c04c5eb169ffc80938033b8a3f9dcfad3c",
       "added": true
+    },
+    {
+      "n": 5,
+      "head": "9fdacb217d6bf1e48e674a5677286c022651e54e",
+      "added": true
     }
   ],
   "findings": [
@@ -272,6 +277,12 @@
           "from": "resolved",
           "to": "resolved",
           "note": "duplicate: qs-review-coderabbit (C-13)"
+        },
+        {
+          "round": 5,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-8)"
         }
       ]
     },
@@ -658,6 +669,12 @@
           "from": "resolved",
           "to": "resolved",
           "note": "duplicate: qs-review-coderabbit (C-9)"
+        },
+        {
+          "round": 5,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-5)"
         }
       ]
     },
@@ -746,6 +763,12 @@
           "from": "resolved",
           "to": "resolved",
           "note": "duplicate: qs-review-coderabbit (C-11)"
+        },
+        {
+          "round": 5,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-6)"
         }
       ]
     },
@@ -796,6 +819,12 @@
           "from": "resolved",
           "to": "resolved",
           "note": "duplicate: qs-review-coderabbit (C-12)"
+        },
+        {
+          "round": 5,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-7)"
         }
       ]
     },
@@ -840,6 +869,12 @@
           "from": "rejected",
           "to": "rejected",
           "note": "duplicate: qs-review-coderabbit (C-10)"
+        },
+        {
+          "round": 5,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-coderabbit (C-9)"
         }
       ]
     },
@@ -1645,7 +1680,7 @@
       "evidence": "scripts/qs/agent_templates/_macros.md.j2:264",
       "reproduces_when": "start-round exits 1 'round 3 committed unfinished'; the user accepts a recovery decision; the orchestrator reaches the step-8 fix-plan 'Review round' line and commit message using {{round}}, which only the success bullet binds",
       "relation": null,
-      "state": "accepted",
+      "state": "resolved",
       "rejected_by": null,
       "decided_round": 4,
       "history": [
@@ -1660,6 +1695,12 @@
           "from": "open",
           "to": "accepted",
           "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 5,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/agent_templates/_macros.md.j2:255"
         }
       ]
     },
@@ -1677,7 +1718,7 @@
       "evidence": "scripts/qs/agent_templates/_macros.md.j2:255-259",
       "reproduces_when": "step 8 sets F-004 accepted (decided_round N); a stray commit captures the ledger with F-005 open; recovery skips F-005, so the all-skipped branch runs: ledger-only commit, restart, no-change, and check-round does not list F-004 (decided_round == n), so F-004 never gets a fix plan",
       "relation": null,
-      "state": "accepted",
+      "state": "resolved",
       "rejected_by": null,
       "decided_round": 4,
       "history": [
@@ -1692,6 +1733,12 @@
           "from": "open",
           "to": "accepted",
           "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 5,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/agent_templates/_macros.md.j2:255-259"
         }
       ]
     },
@@ -1724,6 +1771,12 @@
           "from": "open",
           "to": "rejected",
           "note": "default-skip: skip"
+        },
+        {
+          "round": 5,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-edge-case-hunter (C-4)"
         }
       ]
     },
@@ -1805,7 +1858,7 @@
       "evidence": "docs/stories/QS-453.story.md:257-260",
       "reproduces_when": null,
       "relation": null,
-      "state": "accepted",
+      "state": "resolved",
       "rejected_by": null,
       "decided_round": 4,
       "history": [
@@ -1820,6 +1873,108 @@
           "from": "open",
           "to": "accepted",
           "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 5,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: docs/stories/QS-453.story.md:259-272"
+        }
+      ]
+    },
+    {
+      "id": "F-049",
+      "round": 5,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "demote",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:255",
+      "title": "{{round}} in a .j2 file may render empty or fail under StrictUndefined",
+      "note": "_make_env uses [[ ]] delimiters, so {{round}} is literal; it renders verbatim.",
+      "verdict": "REFUTED",
+      "evidence": "scripts/qs/render_agents.py:262",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "verifier",
+      "decided_round": 5,
+      "history": [
+        {
+          "round": 5,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 5,
+          "from": "open",
+          "to": "rejected",
+          "note": "verifier: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-050",
+      "round": 5,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:261",
+      "title": "Recovery 'none' branch: ledger-only commit + restart returns no-change, so the all-skip finish-task handoff is never given",
+      "note": "The none branch should emit step 8's all-skip finish-task handoff instead of restarting.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:268-270",
+      "reproduces_when": "round N head H; a stray commit captures only the dirty ledger with open findings; the user rejects every open ID, check-round, ledger-only commit L; start-round --head L returns no-change, so the orchestrator stops with no finish-task handoff",
+      "relation": null,
+      "state": "accepted",
+      "rejected_by": null,
+      "decided_round": 5,
+      "history": [
+        {
+          "round": 5,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 5,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        }
+      ]
+    },
+    {
+      "id": "F-051",
+      "round": 5,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:255",
+      "title": "Widened recovery criterion re-plans findings that already have a committed fix plan for round N",
+      "note": null,
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 5,
+      "history": [
+        {
+          "round": 5,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 5,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
         }
       ]
     }
