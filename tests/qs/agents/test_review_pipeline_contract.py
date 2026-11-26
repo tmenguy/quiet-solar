@@ -171,6 +171,9 @@ def test_orchestrator_uses_every_ledger_subcommand(harness: str, filename: str) 
     assert "review_ledger.py add --issue {{issue}} --keys" in body
     # Fix #03 F-032: the empty-key case is spelled out.
     assert '--keys ""' in body
+    # Fix #05 F-050: the recovery "none" branch hands off to finish-task, never restarts into no-change.
+    assert "restart at step 1" not in unfinished_block(body)
+    assert "finish-task handoff" in unfinished_block(body)
     # Fix #03 F-037: recovery-accepted findings are routed to a fix plan.
     assert "recovery" in unfinished_block(body) and "fix plan" in unfinished_block(body)
     # Fix #02 F-016 / F-019: clean worktree checked and heads synced before the diff is fetched.

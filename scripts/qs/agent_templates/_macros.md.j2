@@ -256,8 +256,10 @@ JSON:
   round as `decided_round` (decided before or during the recovery) →
   write the fix plan for them, commit it with the ledger and hand off to
   implement (a restart would only see "no-change" and drop the fix);
-  none → commit the ledger with the ledger-only fence and restart at
-  step 1. Recovery decisions already recorded but not committed are
+  none → commit the ledger with the ledger-only fence and emit step 6's
+  finish-task handoff, as step 8's all-skip path does (ask first if
+  `check-round` lists `accepted_unchecked`) — not a restart, which would
+  only see "no-change". Recovery decisions already recorded but not committed are
   kept (the error then says "recovery decisions are not committed yet")
   — finish and commit them.
 - `status: no-change` → say nothing changed since round N and offer a
