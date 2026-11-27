@@ -176,6 +176,8 @@ def test_orchestrator_uses_every_ledger_subcommand(harness: str, filename: str) 
     # Fix #06 F-050 / F-053: restart only when code changed; otherwise step 8's all-skip finish, named explicitly.
     assert "`changed_since_round`" in unfinished_block(body)
     assert "all skipped" in unfinished_block(body)
+    # Fix #07 F-055: a requested full review survives the recovery.
+    assert "`--force-full`" in unfinished_block(body)
     # Fix #03 F-037: recovery-accepted findings are routed to a fix plan.
     assert "recovery" in unfinished_block(body) and "fix plan" in unfinished_block(body)
     # Fix #02 F-016 / F-019: clean worktree checked and heads synced before the diff is fetched.

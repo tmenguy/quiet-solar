@@ -258,8 +258,9 @@ JSON:
   implement (a restart would only see "no-change" and drop the fix);
   none → commit the ledger with the ledger-only fence, then read the
   error's `changed_since_round`: `true` (code landed after that round's
-  head) → restart at step 1, so a new round reviews the new code;
-  `false` → finish exactly as step 8's all-skip path — its "N findings
+  head), or the user asked for a full review → restart at step 1 (with
+  `--force-full` when it was asked for), so a new round reviews the code;
+  otherwise → finish exactly as step 8's all-skip path — its "N findings
   triaged, all skipped" banner in place of step 6's "No blocking
   findings.", its PR comment where step 8 posts one, then step 6's
   finish-task handoff (ask first if `check-round` lists
