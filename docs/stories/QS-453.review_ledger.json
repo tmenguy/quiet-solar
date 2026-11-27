@@ -40,6 +40,11 @@
       "n": 8,
       "head": "7160fc662b2db93c0f44e4e17421e7dda4410e1c",
       "added": true
+    },
+    {
+      "n": 9,
+      "head": "04b3a652661a969e3eff35405eaf63050c71d396",
+      "added": true
     }
   ],
   "findings": [
@@ -646,6 +651,12 @@
           "from": "accepted",
           "to": "resolved",
           "note": "check RESOLVED: scripts/qs/review_ledger.py:382-388"
+        },
+        {
+          "round": 9,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-5)"
         }
       ]
     },
@@ -720,6 +731,12 @@
           "from": "resolved",
           "to": "resolved",
           "note": "duplicate: qs-review-coderabbit (C-4)"
+        },
+        {
+          "round": 9,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-1)"
         }
       ]
     },
@@ -758,6 +775,12 @@
           "from": "accepted",
           "to": "resolved",
           "note": "check RESOLVED: docs/workflow/phase-protocols.md:194-198"
+        },
+        {
+          "round": 9,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-2)"
         }
       ]
     },
@@ -826,6 +849,12 @@
           "from": "resolved",
           "to": "resolved",
           "note": "duplicate: qs-review-coderabbit (C-5)"
+        },
+        {
+          "round": 9,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-3)"
         }
       ]
     },
@@ -894,6 +923,12 @@
           "from": "resolved",
           "to": "resolved",
           "note": "duplicate: qs-review-coderabbit (C-6)"
+        },
+        {
+          "round": 9,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-4)"
         }
       ]
     },
@@ -959,6 +994,12 @@
         },
         {
           "round": 8,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-coderabbit (C-8)"
+        },
+        {
+          "round": 9,
           "from": "rejected",
           "to": "rejected",
           "note": "duplicate: qs-review-coderabbit (C-8)"
@@ -1826,6 +1867,12 @@
           "from": "accepted",
           "to": "resolved",
           "note": "check RESOLVED: scripts/qs/agent_templates/_macros.md.j2:255-259"
+        },
+        {
+          "round": 9,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-6)"
         }
       ]
     },
@@ -2200,6 +2247,12 @@
           "from": "accepted",
           "to": "resolved",
           "note": "check RESOLVED: scripts/qs/review_ledger.py:187-191"
+        },
+        {
+          "round": 9,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-7)"
         }
       ]
     },
@@ -2351,7 +2404,7 @@
       "evidence": "scripts/qs/review_ledger.py:187-191",
       "reproduces_when": "user asks for --force-full; start-round exits 1 committed unfinished with changed_since_round false and hint=_RECOVERY_HINT; user skips every open ID; an orchestrator following the hint goes to finish-task and the requested full round never starts",
       "relation": null,
-      "state": "accepted",
+      "state": "resolved",
       "rejected_by": null,
       "decided_round": 8,
       "history": [
@@ -2366,6 +2419,12 @@
           "from": "open",
           "to": "accepted",
           "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 9,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:189"
         }
       ]
     },
@@ -2415,7 +2474,7 @@
       "evidence": "tests/qs/test_review_ledger.py:395-396",
       "reproduces_when": null,
       "relation": null,
-      "state": "accepted",
+      "state": "resolved",
       "rejected_by": null,
       "decided_round": 8,
       "history": [
@@ -2436,6 +2495,12 @@
           "from": "open",
           "to": "accepted",
           "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 9,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: tests/qs/test_review_ledger.py:398"
         }
       ]
     }
