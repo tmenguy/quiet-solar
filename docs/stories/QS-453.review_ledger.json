@@ -25,6 +25,11 @@
       "n": 5,
       "head": "9fdacb217d6bf1e48e674a5677286c022651e54e",
       "added": true
+    },
+    {
+      "n": 6,
+      "head": "e075f9a721733cd6afe86b69b407de64fef68ae2",
+      "added": true
     }
   ],
   "findings": [
@@ -675,6 +680,12 @@
           "from": "resolved",
           "to": "resolved",
           "note": "duplicate: qs-review-coderabbit (C-5)"
+        },
+        {
+          "round": 6,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-6)"
         }
       ]
     },
@@ -875,6 +886,12 @@
           "from": "rejected",
           "to": "rejected",
           "note": "duplicate: qs-review-coderabbit (C-9)"
+        },
+        {
+          "round": 6,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-coderabbit (C-7)"
         }
       ]
     },
@@ -1841,6 +1858,12 @@
           "from": "open",
           "to": "rejected",
           "note": "default-skip: skip"
+        },
+        {
+          "round": 6,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-edge-case-hunter (C-4)"
         }
       ]
     },
@@ -1918,19 +1941,19 @@
       "id": "F-050",
       "round": 5,
       "source": "qs-review-edge-case-hunter",
-      "reported_severity": "should-fix",
+      "reported_severity": "must-fix",
       "severity_action": "keep",
-      "severity": "should-fix",
-      "where": "scripts/qs/agent_templates/_macros.md.j2:261",
+      "severity": "must-fix",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:259",
       "title": "Recovery 'none' branch: ledger-only commit + restart returns no-change, so the all-skip finish-task handoff is never given",
-      "note": "The none branch should emit step 8's all-skip finish-task handoff instead of restarting.",
+      "note": "Fix #05 fixed F-050's own case but routes every all-skip recovery to finish-task. Restart unless git diff --quiet <round head> <head> -- . <excludes> is clean.",
       "verdict": "CONFIRMED",
-      "evidence": "scripts/qs/review_ledger.py:268-270",
-      "reproduces_when": "round N head H; a stray commit captures only the dirty ledger with open findings; the user rejects every open ID, check-round, ledger-only commit L; start-round --head L returns no-change, so the orchestrator stops with no finish-task handoff",
+      "evidence": "scripts/qs/review_ledger.py:252-268",
+      "reproduces_when": "round N head H; a git commit -a captures the dirty round-N ledger (open findings) together with new code as H'; review-task on H' -> start-round exits 1 'committed unfinished' before the head diff; the user skips every open ID; ledger-only commit, then finish-task handoff; the code in H..H' is never reviewed",
       "relation": null,
       "state": "accepted",
       "rejected_by": null,
-      "decided_round": 5,
+      "decided_round": 6,
       "history": [
         {
           "round": 5,
@@ -1940,6 +1963,24 @@
         },
         {
           "round": 5,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 6,
+          "from": "accepted",
+          "to": "open",
+          "note": "reopened: qs-review-edge-case-hunter (C-2); previous: {\"reported_severity\": \"should-fix\", \"severity_action\": \"keep\", \"severity\": \"should-fix\", \"where\": \"scripts/qs/agent_templates/_macros.md.j2:261\", \"verdict\": \"CONFIRMED\", \"evidence\": \"scripts/qs/review_ledger.py:268-270\", \"reproduces_when\": \"round N head H; a stray commit captures only the dirty ledger with open findings; the user rejects every open ID, check-round, ledger-only commit L; start-round --head L returns no-change, so the orchestrator stops with no finish-task handoff\", \"note\": \"The none branch should emit step 8's all-skip finish-task handoff instead of restarting.\"}"
+        },
+        {
+          "round": 6,
+          "from": "open",
+          "to": "open",
+          "note": "merged: RESOLVED from check, REOPENS applied"
+        },
+        {
+          "round": 6,
           "from": "open",
           "to": "accepted",
           "note": "user: fix all (delegated)"
@@ -1975,6 +2016,102 @@
           "from": "open",
           "to": "rejected",
           "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-052",
+      "round": 6,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "demote",
+      "severity": "nice-to-have",
+      "where": "tests/qs/agents/test_review_pipeline_contract.py:175",
+      "title": "`restart at step 1` not-in assertion would have passed on the old text too",
+      "note": "unfinished_block() normalises whitespace (_norm), so the old split phrase became 'restart at step 1' and the assertion would have failed on it.",
+      "verdict": "REFUTED",
+      "evidence": "tests/qs/agents/test_review_pipeline_contract.py:58-66",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "verifier",
+      "decided_round": 6,
+      "history": [
+        {
+          "round": 6,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 6,
+          "from": "open",
+          "to": "rejected",
+          "note": "verifier: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-053",
+      "round": 6,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:259",
+      "title": "\"Emit step 6's finish-task handoff, as step 8's all-skip path does\" is ambiguous on banner / PR comment",
+      "note": "Can be read either way; name step 8's all-skip banner and PR comment explicitly.",
+      "verdict": "PLAUSIBLE",
+      "evidence": "scripts/qs/agent_templates/qs-verify-task.md.j2:232-250",
+      "reproduces_when": "recovery in verify-task where the user rejects a must/should with --by user: following step 6's handoff literally prints 'No blocking findings.' and skips step 8's triage-summary PR comment and banner swap",
+      "relation": null,
+      "state": "accepted",
+      "rejected_by": null,
+      "decided_round": 6,
+      "history": [
+        {
+          "round": 6,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 6,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        }
+      ]
+    },
+    {
+      "id": "F-054",
+      "round": 6,
+      "source": "qs-review-coderabbit",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:234",
+      "title": "committed-unfinished `hint` strings still say \"commit the ledger, then start-round again\"",
+      "note": "Both hints still describe the pre-fix-#03 restart flow.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:233-234",
+      "reproduces_when": "recovered round with a finding accepted during recovery and no code change since the round head: following the hint (commit the ledger, start-round again) returns no-change, so no fix plan is written and the accepted fix is dropped",
+      "relation": null,
+      "state": "accepted",
+      "rejected_by": null,
+      "decided_round": 6,
+      "history": [
+        {
+          "round": 6,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 6,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
         }
       ]
     }
