@@ -63,7 +63,7 @@ def unfinished_block(body: str) -> str:
     """The step-1 bullet about a committed-unfinished round (normalised)."""
     flat = _norm(body)
     start = flat.index('"round N committed unfinished"')
-    return flat[start : start + 900]
+    return flat[start : flat.index("- `status: no-change`", start)]
 
 
 # --------------------------------------------------------------------------- #
@@ -172,8 +172,10 @@ def test_orchestrator_uses_every_ledger_subcommand(harness: str, filename: str) 
     # Fix #03 F-032: the empty-key case is spelled out.
     assert '--keys ""' in body
     # Fix #05 F-050: the recovery "none" branch hands off to finish-task, never restarts into no-change.
-    assert "restart at step 1" not in unfinished_block(body)
     assert "finish-task handoff" in unfinished_block(body)
+    # Fix #06 F-050 / F-053: restart only when code changed; otherwise step 8's all-skip finish, named explicitly.
+    assert "`changed_since_round`" in unfinished_block(body)
+    assert "all skipped" in unfinished_block(body)
     # Fix #03 F-037: recovery-accepted findings are routed to a fix plan.
     assert "recovery" in unfinished_block(body) and "fix plan" in unfinished_block(body)
     # Fix #02 F-016 / F-019: clean worktree checked and heads synced before the diff is fetched.

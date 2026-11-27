@@ -1470,3 +1470,23 @@ def test_fix04_f043_committed_unfinished_error_carries_round(led: Ledger, recove
     else:
         _commit(led.repo, "a.py", "two\n")
     assert led.fail("start-round", "--head", _head(led.repo))["round"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Review fix #06 (QS-453 round 6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("new_code", [False, True])
+@pytest.mark.parametrize("recovering", [False, True])
+def test_fix06_f050_committed_unfinished_reports_changed_since_round(
+    led: Ledger, new_code: bool, recovering: bool
+) -> None:
+    _committed_unfinished(led)
+    if new_code:
+        _commit(led.repo, "a.py", "new code\n")
+    if recovering:
+        led.set("F-001", "accepted")
+    err = led.fail("start-round", "--head", _head(led.repo))
+    assert err["changed_since_round"] is new_code
+    assert "start-round again" not in err["hint"]

@@ -179,6 +179,18 @@ def _note(fid_round: int, state: str | None, to: str, note: str) -> dict[str, An
 # --- start-round --------------------------------------------------------------
 
 
+def _changed_since(ctx: _Ctx, base: str, head: str) -> bool:
+    """Code (ledger + fix plans excluded) differs between ``base`` and ``head``; git error → changed."""
+    return _git(ctx.root, "diff", "--quiet", base, head, "--", ".", *ctx.excludes).returncode != 0
+
+
+_RECOVERY_HINT = (
+    "decide each open ID with `review_ledger.py set` and run check-round, then finish the round like "
+    "step 8 (accepted findings → fix plan + implement handoff; none → commit the ledger, then restart "
+    "only if changed_since_round, else the finish-task handoff)"
+)
+
+
 def _stale_fix_plans(ctx: _Ctx) -> list[str]:
     """Fix plans absent from ``HEAD``: untracked, or staged by a commit that failed (fix #02 F-028)."""
     untracked = _git(ctx.root, "ls-files", "--others", "--exclude-standard", "--", ctx.fix_glob).stdout.splitlines()
@@ -230,8 +242,8 @@ def cmd_start_round(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
             f"round {working['rounds'][-1]['n']} committed unfinished; recovery decisions are not committed yet",
             round=working["rounds"][-1]["n"],
             open=[f["id"] for f in working["findings"] if f["state"] == "open"],
-            hint="finish the recovery with `review_ledger.py set`, run check-round, commit the ledger, "
-            "then start-round again",
+            changed_since_round=_changed_since(ctx, working["rounds"][-1]["head"], head),
+            hint=_RECOVERY_HINT,
             discarded=False,
             stale_fix_plans=_stale_fix_plans(ctx),
         )
@@ -256,8 +268,8 @@ def cmd_start_round(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
                 f"round {rounds[-1]['n']} committed unfinished",
                 round=rounds[-1]["n"],
                 open=open_ids,
-                hint="decide each open ID with `review_ledger.py set`, run check-round, commit the ledger, "
-                "then start-round again",
+                changed_since_round=_changed_since(ctx, rounds[-1]["head"], head),
+                hint=_RECOVERY_HINT,
                 **common,
             )
     if not rounds:
@@ -265,7 +277,7 @@ def cmd_start_round(ctx: _Ctx, args: argparse.Namespace) -> dict[str, Any]:
         save(ctx.path, data)
         return {"status": "new", **common, "round": 1, "mode": "full", "base": None, "reason": None}
     last = rounds[-1]
-    changed = _git(ctx.root, "diff", "--quiet", last["head"], head, "--", ".", *ctx.excludes).returncode != 0
+    changed = _changed_since(ctx, last["head"], head)
     if not changed and not args.force_full:
         return {"status": "no-change", **common, "round": last["n"], "mode": None, "base": None, "reason": None}
     n = last["n"] + 1
