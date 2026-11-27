@@ -35,6 +35,11 @@
       "n": 7,
       "head": "ea0f5e03859b0ab69000a52a5bf5ea423271c0d9",
       "added": true
+    },
+    {
+      "n": 8,
+      "head": "7160fc662b2db93c0f44e4e17421e7dda4410e1c",
+      "added": true
     }
   ],
   "findings": [
@@ -299,6 +304,12 @@
           "from": "resolved",
           "to": "resolved",
           "note": "duplicate: qs-review-coderabbit (C-8)"
+        },
+        {
+          "round": 8,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-7)"
         }
       ]
     },
@@ -703,6 +714,12 @@
           "from": "resolved",
           "to": "resolved",
           "note": "duplicate: qs-review-coderabbit (C-5)"
+        },
+        {
+          "round": 8,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-4)"
         }
       ]
     },
@@ -803,6 +820,12 @@
           "from": "resolved",
           "to": "resolved",
           "note": "duplicate: qs-review-coderabbit (C-6)"
+        },
+        {
+          "round": 8,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-5)"
         }
       ]
     },
@@ -865,6 +888,12 @@
           "from": "resolved",
           "to": "resolved",
           "note": "duplicate: qs-review-coderabbit (C-7)"
+        },
+        {
+          "round": 8,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-6)"
         }
       ]
     },
@@ -927,6 +956,12 @@
           "from": "rejected",
           "to": "rejected",
           "note": "duplicate: qs-review-coderabbit (C-9)"
+        },
+        {
+          "round": 8,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-coderabbit (C-8)"
         }
       ]
     },
@@ -2182,7 +2217,7 @@
       "evidence": "scripts/qs/review_ledger.py:266-281",
       "reproduces_when": "user asks for a full re-review; HEAD holds a committed-unfinished ledger; no code changed since that round's head; start-round --force-full exits 1 before args.force_full is read; the user skips every open ID; ledger-only commit; changed_since_round false -> finish-task handoff, and no forced full round ever starts",
       "relation": null,
-      "state": "accepted",
+      "state": "resolved",
       "rejected_by": null,
       "decided_round": 7,
       "history": [
@@ -2197,6 +2232,12 @@
           "from": "open",
           "to": "accepted",
           "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 8,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/agent_templates/_macros.md.j2:259-263"
         }
       ]
     },
@@ -2293,6 +2334,108 @@
           "from": "open",
           "to": "rejected",
           "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-059",
+      "round": 8,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:187",
+      "title": "`_RECOVERY_HINT` contradicts the template's full-review restart (fix #07 F-055); story D2 start-round step 2 lags too",
+      "note": "Follow-on to F-055: the hint and story D2 step 2 were not updated.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:187-191",
+      "reproduces_when": "user asks for --force-full; start-round exits 1 committed unfinished with changed_since_round false and hint=_RECOVERY_HINT; user skips every open ID; an orchestrator following the hint goes to finish-task and the requested full round never starts",
+      "relation": null,
+      "state": "accepted",
+      "rejected_by": null,
+      "decided_round": 8,
+      "history": [
+        {
+          "round": 8,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 8,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        }
+      ]
+    },
+    {
+      "id": "F-060",
+      "round": 8,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:255",
+      "title": "Full-review request survives only the all-skip recovery branch; accepted branch's fix plan/handoff does not carry it",
+      "note": "Not promoted: --force-full is per session; the accepted branch ends the session.",
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 8,
+      "history": [
+        {
+          "round": 8,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 8,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-061",
+      "round": 8,
+      "source": "qs-review-acceptance-auditor",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "tests/qs/test_review_ledger.py:393",
+      "title": "test_set_outside_started_round_fails repeats the same set; the \"no round at all\" case never runs",
+      "note": "Same claim as F-025 (default-skip); region unchanged. Scenario-exempt source.",
+      "verdict": "CONFIRMED",
+      "evidence": "tests/qs/test_review_ledger.py:395-396",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "accepted",
+      "rejected_by": null,
+      "decided_round": 8,
+      "history": [
+        {
+          "round": 8,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 8,
+          "from": "open",
+          "to": "open",
+          "note": "relation-invalid: DUPLICATE F-025: severity escalated"
+        },
+        {
+          "round": 8,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
         }
       ]
     }
