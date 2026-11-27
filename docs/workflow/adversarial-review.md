@@ -6,7 +6,9 @@ goal is to catch issues a single reviewer would miss because lens bias is
 real: a "completeness" reviewer doesn't think about scope creep; a "scope"
 reviewer doesn't enumerate edge cases.
 
-`review-task` always fans out into **four** code reviewers.
+`review-task` always fans out into **four** code reviewers, then runs a
+single **finding verifier** over their consolidated output (QS-453 —
+see "Finding verification and the review ledger" below).
 `create-plan` is a **repeatable, on-demand** review inside its mode loop:
 **round 1** runs the **four global plan reviewers**; **round 2+** runs
 those four **plus a fifth, diff-aware** reviewer
@@ -19,9 +21,13 @@ reviewers (`verify-task`); see
 
 ## Why parallel, not serial
 
-All the round's subagents must be spawned in **one message with parallel
+All the round's reviewers must be spawned in **one message with parallel
 invocations** (four for a code review or a round-1 plan review; five for
-a round-2+ plan review), not one-by-one in sequence. Two reasons:
+a round-2+ plan review), not one-by-one in sequence. The one carve-out is
+the code-review **finding verifier** (`qs-review-finding-verifier`): it
+is not a reviewer but a sequential post-pass that runs once, *after* the
+fan-out and the consolidation — it needs their output. Two reasons for
+the parallel rule:
 
 1. **Independence**: serial spawning leaks earlier findings into later
    reviewers' context. They start agreeing instead of disagreeing.
@@ -106,18 +112,25 @@ Spawned with the PR diff. Each returns findings categorized as
 `must-fix` / `should-fix` / `nice-to-have`.
 
 ### `qs-review-blind-hunter`
-**Lens**: diff-only. **Input**: `gh pr diff <N>` output. **Looks for**:
+**Lens**: diff-only. **Input**: `gh pr diff <N>` output (in a delta
+round, the delta diff text pasted by the orchestrator). **Looks for**:
 obvious bugs visible from the diff alone — off-by-one, swapped args,
-broken string literals, missing error handling, security smells, lint
-violations. **Hard rule**: NEVER read repo files. NEVER fetch the issue
+broken string literals, missing error handling, security smells.
+**Muzzled (QS-453)**: reports only `must-fix` / `should-fix`, every
+finding with a `Reproduces when:` scenario (no scenario → not reported);
+TODO/FIXME and style/lint are left to ruff/mypy. Its independent
+diff-only lens stays — it still finds must-fix issues no other reviewer
+reports. **Hard rule**: NEVER read repo files. NEVER fetch the issue
 body or story file.
 
 ### `qs-review-edge-case-hunter`
 **Lens**: exhaustive boundaries. **Input**: PR diff + repo read-only.
 **Looks for**: unhandled edge cases — empty/None/0/negative/max inputs,
 cold start, concurrent state, partial failure, retry, cache miss, etc.
-Walks every branching path. **Hard rule**: never duplicate blind-hunter
-findings; stay in the edge-case lane.
+Walks every branching path; in a delta round it reviews the diff since
+`base` but still enumerates the boundaries of every function the delta
+touches. **Hard rule**: never duplicate blind-hunter findings; stay in
+the edge-case lane.
 
 ### `qs-review-acceptance-auditor`
 **Lens**: AC traceability. **Input**: PR diff + story file. **Looks
@@ -128,8 +141,68 @@ verify the PR does what the story says.
 ### `qs-review-coderabbit`
 **Lens**: external auto-review. **Input**: PR number. **Looks for**:
 whatever CodeRabbit flags, normalized to must-fix / should-fix /
-nice-to-have. **Hard rule**: never do your own analysis; if CodeRabbit
-didn't flag it, don't manufacture a finding.
+nice-to-have — parsing only comments **authored by CodeRabbit** (never
+the orchestrators' own PR comments). **Hard rule**: never do your own
+analysis; if CodeRabbit didn't flag it, don't manufacture a finding.
+
+## Finding verification and the review ledger (QS-453)
+
+Both code-review orchestrators (`qs-review-task` and, in the bug ×
+product lane, `qs-verify-task`) run the same round protocol around their
+reviewer fan-out:
+
+1. **Open the round** — `review_ledger.py start-round` on the PR head.
+   Rounds 1–2 are **full**; from round 3 on a round is a **delta**
+   against the last reviewed head (forced full by `--force-full`, a
+   non-ancestor base, or a merge commit). In a delta round only the
+   diff-scoped reviewers (blind-hunter, edge-case-hunter) see the delta;
+   the whole-PR reviewers (acceptance-auditor, coderabbit,
+   regression-proof) stay full. Nothing changed since the last round →
+   no round.
+2. **Fan out** the reviewers in parallel and **consolidate** (keys
+   `C-1…`).
+3. **Verify** — `qs-review-finding-verifier` (read-only, `deep` class)
+   reads the code and returns one JSON object: per finding a verdict
+   (`CONFIRMED` / `PLAUSIBLE` / `REFUTED`, evidence `file:line`), a
+   concrete `reproduces_when`, a `severity_action` (`keep`; `demote` a
+   verified must/should finding with no scenario; `promote` a
+   nice-to-have it verified) and a **relation** to the ledger (`NEW` /
+   `DUPLICATE` / `REOPENS` / `FLIP-FLOP`); plus a `RESOLVED` /
+   `STILL-PRESENT` check of every `accepted` finding. If the verifier
+   fails, the orchestrator records an **unverified** fallback round
+   instead (nothing auto-decided).
+4. **Record** — `review_ledger.py add` validates the object and
+   reconciles it deterministically against the ledger.
+5. **Triage** in six buckets, first match wins: `FLIP-FLOP` (explicit
+   decision), `Reopened` (fix), `Unverified` (explicit decision),
+   `Dropped by verifier` (reject, overridable), `Blocking` (fix),
+   `Nice-to-have` (reject — opt-in). "fix all" covers `Reopened` +
+   `Blocking`. A round with only dropped / nice-to-have findings takes
+   the zero-blocking fast path.
+6. **Decide and commit** — `review_ledger.py set` per decision,
+   `check-round`, then the fix plan (headings `### [must-fix] F-003 —
+   …`) and the ledger are committed together.
+
+**The ledger** — `docs/stories/QS-<N>.review_ledger.json`, written only
+by `scripts/qs/review_ledger.py` (the orchestrator is the single writer;
+implement phases never stage it). Findings get stable IDs (`F-001`…)
+and a state history: `open` → `accepted` / `rejected` (by `user`,
+`default-skip` or `verifier`); `accepted` → `resolved` (check) or back
+to `open` (still present / reopened); `rejected` by the user → `open`
+when a reviewer challenges it in changed code; `accepted` / `resolved`
+(or `open`, when reopened in the same round) → `superseded` when a
+FLIP-FLOP that undoes it is accepted. Repeats of
+decided findings are suppressed as duplicates, and **flip-flops** — a
+round asking to undo an earlier fix, or re-raising what the user
+rejected — are surfaced for an explicit decision. The round lifecycle is
+git: a committed ledger is a finished round; a dirty ledger is an
+unfinished one, discarded and redone by the next `start-round`.
+
+**Why not `/code-review`.** Claude Code's built-in `/code-review` was
+considered as a reviewer and rejected on harness parity alone: it is
+Claude-only, while both harnesses render the same reviewer roster. Its
+useful ideas — a CONFIRMED / PLAUSIBLE verdict and a concrete failure
+scenario per finding — are what the finding verifier reproduces.
 
 ## Triage model
 
@@ -141,7 +214,9 @@ findings:
    the **finding-state model** (`open`/`resolved`/`rejected`) so a
    rejected finding doesn't resurface and a regressed `resolved` finding
    flips back to `open`.
-2. **Bucket**: critical → must-fix; vague/inapplicable → invalid.
+2. **Bucket**: critical → must-fix; vague/inapplicable → invalid. Code
+   reviews then run the finding verifier and bucket by its verdicts
+   (see "Finding verification and the review ledger").
 3. **Present**: show a summary table to the user. For plan reviews,
    present **deltas first** (new / changed / resolved).
 4. **Triage**: ask "fix all / skip all / one by one?". If one by one,

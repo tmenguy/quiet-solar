@@ -159,7 +159,9 @@ auto-commits, pushes, opens PR after green quality gate.
 **Inputs**: PR number (resolved from branch).
 **Side effects**: writes fix-plan files under
 `docs/stories/QS-<N>.story_review_fix_#NN.md` (if fixes
-are needed).
+are needed) and records every round in the review ledger
+`docs/stories/QS-<N>.review_ledger.json` (via
+`scripts/qs/review_ledger.py`, committed at the end of the round).
 **Output**: triaged findings; either "ready for finish-task" or a fix
 plan + instructions for the user to apply fixes.
 **Next phase**: `claude --agent qs-finish-task` in the worktree
@@ -172,21 +174,35 @@ target (`target:factory` → `implement-setup-task`, `target:product` →
 `/implement-setup-task` as the slash-command fallback — then re-run
 `claude --agent qs-review-task` (or `/review-task`).
 
-**Phase protocol**:
-1. Fetch PR diff.
+**Phase protocol** (QS-453 — see
+[adversarial-review.md](adversarial-review.md) "Finding verification and
+the review ledger"):
+1. Fetch PR diff and open the round (`review_ledger.py start-round`):
+   rounds 1–2 full, then delta rounds against the last reviewed head;
+   nothing changed → no round.
 2. **Spawn 4 reviewer subagents in parallel** (one message, 4
    invocations):
    - `qs-review-blind-hunter` — diff only, no repo context
    - `qs-review-edge-case-hunter` — diff + repo read-only
    - `qs-review-acceptance-auditor` — diff + story file
    - `qs-review-coderabbit` — wraps CodeRabbit's review
-3. Consolidate into must-fix / should-fix / nice-to-have / invalid.
-4. **Zero-findings fast path**: if no must-fix or should-fix findings,
-   emit the launcher payload (preferred, `claude --agent
-   qs-finish-task`) plus the slash-command fallback (`/finish-task`).
-5. Interactive triage: present table → ask "fix all / skip all / one by
-   one?" → collect decisions → confirm.
-6. If fixes needed, write fix-plan file (auto-incremented suffix
+3. Consolidate (dedupe, key `C-1…`; doc-maintenance audit).
+4. **Verify findings**: spawn `qs-review-finding-verifier` once — a
+   sequential post-pass after the fan-out, not a fifth parallel
+   reviewer. Unverified fallback if it fails.
+5. Record findings in the ledger (`review_ledger.py add`).
+6. **Zero-blocking fast path** (verified rounds only): if every open
+   finding lands in the `Dropped by verifier` or `Nice-to-have` bucket
+   of step 7 — bucket precedence first, so a reopened or FLIP-FLOP
+   finding never takes this path — reject them with their defaults,
+   commit the ledger, and emit the launcher payload
+   (preferred, `claude --agent qs-finish-task`) plus the slash-command
+   fallback (`/finish-task`).
+7. Interactive triage in buckets (`FLIP-FLOP`, `Reopened`,
+   `Unverified`, `Dropped by verifier`, `Blocking`, `Nice-to-have`) →
+   ask "fix all / skip all / one by one?" → collect decisions → confirm.
+8. Record the decisions (`review_ledger.py set`, `check-round`), then,
+   if fixes are needed, write the fix-plan file (auto-incremented suffix
    `#01`, `#02`, …) and emit the launcher payload (`claude --agent
    qs-implement-task` or `claude --agent qs-implement-setup-task`,
    chosen by the task's declared target
@@ -194,15 +210,20 @@ target (`target:factory` → `implement-setup-task`, `target:product` →
    `implement-task`; QS-321 — never inferred from paths) — same
    rule as `/create-plan`)
    plus the matching slash-command fallback (`/implement-task` or
-   `/implement-setup-task`) for the user to apply the fix plan.
-7. When fixes pushed, the user re-runs `claude --agent qs-review-task`
+   `/implement-setup-task`) for the user to apply the fix plan; the
+   ledger and the fix plan are committed together. If every decision is
+   "skip", there is no fix plan: commit the ledger alone and emit the
+   finish-task launcher payload (as in step 6).
+9. When fixes pushed, the user re-runs `claude --agent qs-review-task`
    (or `/review-task` as fallback) — loop back to step 1 until clean.
 
 **Hard rules**:
 - This agent is an orchestrator — do not review code yourself. Always
-  delegate to the 4 subagents.
-- Edit scope is the fix-plan files only.
-- Sub-agent spawning must be parallel, not serial.
+  delegate to the 4 subagents and the finding verifier.
+- Edit scope is the fix-plan files only; the review ledger is written
+  only through `scripts/qs/review_ledger.py`.
+- Reviewer spawning must be parallel, not serial — the finding verifier
+  is the one sequential post-pass.
 
 ---
 

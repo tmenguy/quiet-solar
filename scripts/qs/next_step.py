@@ -213,10 +213,11 @@ def main() -> None:
     # QS-358: the lane feeds the Claude pin's effortLevel. Bound before the
     # ``try`` — ``render_context`` is unbound when the render raises, and the
     # handoff then falls back to the no-lane row. QS-367 N6: that fallback
-    # now degrades ``phase_model`` too, not just effort — ``deep`` and
-    # ``frontier`` no longer share a model, so a feature-lane ``create-plan``
-    # handoff on a failed render would name ``claude-opus-5-5`` instead of
-    # ``claude-fable-5-1``. Reachable, not latent: when the render at
+    # now degrades ``phase_model`` too, not just effort — when ``deep`` and
+    # ``frontier`` do not share a model (they do while QS-453 runs Claude
+    # ``frontier`` on Opus 5.5), a feature-lane ``create-plan`` handoff on a
+    # failed render would name the ``deep`` model instead of the
+    # ``frontier`` one. Reachable, not latent: when the render at
     # worktree birth fails, ``setup_task._fail_render`` tells the user to run
     # ``next_step.py --next-cmd create-plan`` by hand; that manual run
     # resolves ``lane`` via a ``gh`` issue lookup that returns ``None`` when

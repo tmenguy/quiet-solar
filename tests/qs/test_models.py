@@ -41,6 +41,7 @@ _FLAT_TABLE = [
     ("qs-review-acceptance-auditor", "frontier"),
     ("qs-review-regression-proof", "frontier"),
     ("qs-review-coderabbit", "fast"),
+    ("qs-review-finding-verifier", "deep"),
     ("qs-finish-task", "fast"),
     ("qs-setup-task", "light"),
     ("qs-release", "fast"),
@@ -50,7 +51,7 @@ _FLAT_TABLE = [
 _ROW_LITERALS = [
     ("claude", "build", "claude-opus-5-5"),
     ("claude", "deep", "claude-opus-5-5"),
-    ("claude", "frontier", "claude-fable-5-1"),
+    ("claude", "frontier", "claude-opus-5-5"),
     ("claude", "light", "claude-sonnet-5"),
     ("claude", "fast", "claude-haiku-5-5"),
     ("opencode", "build", "github-copilot/claude-opus-5.5"),
@@ -76,7 +77,7 @@ def test_classes_exact() -> None:
 
 
 def test_stems_match_registry_and_templates() -> None:
-    assert len(models.STEMS) == 22
+    assert len(models.STEMS) == 23
     assert models.STEMS == render_agents.ORCHESTRATORS | render_agents.SUBAGENTS
     assert set(render_agents._discover_stems(TEMPLATES_DIR)) == models.STEMS
 

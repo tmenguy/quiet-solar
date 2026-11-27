@@ -48,7 +48,7 @@ HARNESS_MODELS: dict[str, dict[str, str]] = {
     "claude": {  # Claude Code ≥ 2.1.280 (required by ``claude-opus-5-5``), first-party API
         "build": "claude-opus-5-5",  # maintainer 2026-10-04: build moves to Opus 5.5 (was 4.8, QS-367 E1)
         "deep": "claude-opus-5-5",  # QS-367 E2: analysis/review
-        "frontier": "claude-fable-5-1",
+        "frontier": "claude-opus-5-5",  # QS-453 temporary: Fable needs usage credits (was claude-fable-5-1)
         "light": "claude-sonnet-5",
         "fast": "claude-haiku-5-5",  # maintainer 2026-10-09: Haiku 4.5 deprecated; 5.5 has auto mode
     },
@@ -104,6 +104,7 @@ _FLAT: dict[str, str] = {
     "qs-review-acceptance-auditor": "frontier",
     "qs-review-regression-proof": "frontier",
     "qs-review-coderabbit": "fast",
+    "qs-review-finding-verifier": "deep",  # QS-453: sequential post-pass, code-grounded
     "qs-finish-task": "fast",
     "qs-setup-task": "light",
     "qs-release": "fast",

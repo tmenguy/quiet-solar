@@ -396,7 +396,7 @@ hand-sets a model.
   |---|---|---|---|
   | `build` | `claude-opus-5-5` | `claude-opus-5.5` | `high` |
   | `deep` | `claude-opus-5-5` | `claude-opus-5.5` | `high` |
-  | `frontier` | `claude-fable-5-1` | `gpt-6-astra` | `high` |
+  | `frontier` | `claude-opus-5-5` (temporary, QS-453) | `gpt-6-astra` | `high` |
   | `light` | `claude-sonnet-5` | `claude-sonnet-5` | `medium` |
   | `fast` | `claude-haiku-5-5` | `claude-haiku-4.5` | — |
 
@@ -407,7 +407,11 @@ hand-sets a model.
   renderer knows but the policy does not).
 - **Declared asymmetries.** On OpenCode the `frontier` class runs GPT-6
   Astra because the `github-copilot` provider offers no Claude Fable —
-  one `HARNESS_MODELS` cell to revert when it does. **Effort is
+  one `HARNESS_MODELS` cell to revert when it does. On Claude the
+  `frontier` class **temporarily** runs Opus 5.5 (`claude-opus-5-5`,
+  same as `deep`) because Fable needs usage credits (QS-453) — so on
+  Claude the planning / judgment agents share a model with the hunters
+  until it is switched back (one cell; `git revert` of that commit). **Effort is
   Claude-only** (OpenCode documents no per-agent effort): Claude
   sub-agents get frontmatter `effort:`, the Claude main session gets
   the pin's `effortLevel`; `fast` (`claude-haiku-5-5`) sets none.

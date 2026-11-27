@@ -127,12 +127,16 @@ input through a different lens:
   findings.
 - **review-task** always spawns four: `qs-review-blind-hunter`,
   `qs-review-edge-case-hunter`, `qs-review-acceptance-auditor`,
-  `qs-review-coderabbit`.
+  `qs-review-coderabbit` — then one `qs-review-finding-verifier`
+  post-pass over their consolidated findings (QS-453), recorded in the
+  per-PR review ledger.
 
 All of a round's reviewers must be spawned in **one message with
 parallel sub-agent invocations** (four, or five for a round-2+ plan
 review) — serial spawning defeats the design (later reviewers see
-earlier findings and conform to them). See
+earlier findings and conform to them). The code-review finding
+verifier is the one sequential step: it runs once, after the fan-out,
+because it judges the reviewers' output. See
 [adversarial-review.md](adversarial-review.md) for the full pattern.
 
 ## Orchestrators are interactive sessions; sub-agents are parallel fan-out
@@ -157,8 +161,8 @@ a `claude --agent qs-<phase>` invocation in the new_context for exactly
 this reason.
 
 **Sub-agents** are the plan reviewers spawned by `qs-create-plan` (4;
-5 in round 2+ with the delta-auditor) and the 4 code reviewers spawned
-by `qs-review-task`. They **stay as
+5 in round 2+ with the delta-auditor), the 4 code reviewers spawned
+by `qs-review-task`, and the finding verifier that follows them. They **stay as
 `Agent`-tool fan-out** — non-interactive, parallel, returning a final
 findings report. That's the right shape for them: they're independent
 parallel workers, which is exactly what the `Agent` tool is good at.

@@ -1429,11 +1429,11 @@ def test_fast_phase_without_prior_effort_level(tmp_path: Path) -> None:
         # QS-367 N4: the second ``build`` phase (implement-task) was
         # uncovered, and no row exercised an ``epic-*`` lane.
         ("implement-task", None, "claude-opus-5-5"),
-        ("create-plan", "feature-factory", "claude-fable-5-1"),
-        ("create-plan", "epic-factory", "claude-fable-5-1"),
+        ("create-plan", "feature-factory", "claude-opus-5-5"),
+        ("create-plan", "epic-factory", "claude-opus-5-5"),
         ("create-plan", "bug-product", "claude-opus-5-5"),
         ("create-plan", None, "claude-opus-5-5"),
-        ("review-task", None, "claude-fable-5-1"),
+        ("review-task", None, "claude-opus-5-5"),
         ("finish-task", None, "claude-haiku-5-5"),
     ],
 )
@@ -1450,6 +1450,26 @@ def test_payload_names_phase_model(
     assert payload["phase_model"] == expected
 
 
+@pytest.mark.parametrize(
+    ("lane", "cls"),
+    [("feature-factory", "frontier"), ("epic-factory", "frontier"), ("bug-product", "deep"), (None, "deep")],
+)
+def test_payload_phase_model_follows_lane_class_even_when_rows_coincide(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lane: str | None, cls: str,
+) -> None:
+    """QS-453 fix #02 F-023: while Claude ``frontier`` == ``deep`` the rows above
+    cannot tell a lane-aware render from the no-lane fallback, so pin each class
+    to a distinct sentinel and check ``create-plan`` resolves through the lane."""
+    import models  # type: ignore[import-not-found]
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    row = {**models.HARNESS_MODELS["claude"], "frontier": "sentinel-frontier", "deep": "sentinel-deep"}
+    monkeypatch.setitem(models.HARNESS_MODELS, "claude", row)
+    work_dir = _fake_worktree(tmp_path)
+    payload = claude_launcher.build_payload(str(work_dir), 367, "Title", next_cmd="create-plan", lane=lane)
+    assert payload["phase_model"] == f"sentinel-{cls}"
+
+
 # QS-367 N4: `phase_model` must be emitted regardless of whether the GUI pin
 # succeeded — the model handoff does not depend on the settings write. One
 # case with the agent file present (pinned True), one with it absent
@@ -1463,7 +1483,7 @@ def test_phase_model_emitted_when_pin_succeeds(tmp_path: Path) -> None:
         str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
     )
     assert payload["phase_agent_pinned"] is True
-    assert payload["phase_model"] == "claude-fable-5-1"
+    assert payload["phase_model"] == "claude-opus-5-5"
 
 
 def test_phase_model_emitted_when_pin_skipped(tmp_path: Path) -> None:
@@ -1698,7 +1718,7 @@ def test_build_payload_warns_on_old_cli(
     assert recorded["encoding"] == "utf-8"
     assert recorded["errors"] == "replace"
     # Payload is intact — the guard neither blocks nor alters it.
-    assert payload["phase_model"] == "claude-fable-5-1"
+    assert payload["phase_model"] == "claude-opus-5-5"
     assert payload["agent"] == "qs-create-plan"
     assert payload["phase_agent_pinned"] is True
 
@@ -1718,7 +1738,7 @@ def test_build_payload_silent_when_cli_missing(
         str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
     )
     assert capsys.readouterr().err == ""
-    assert payload["phase_model"] == "claude-fable-5-1"
+    assert payload["phase_model"] == "claude-opus-5-5"
     # N5: prove the silence is the real guard swallowing the error, not the
     # guard being a no-op — it must have spawned ``claude --version`` once.
     assert recorded["calls"] == 1
@@ -1743,7 +1763,7 @@ def test_build_payload_silent_on_cli_timeout(
         str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
     )
     assert capsys.readouterr().err == ""
-    assert payload["phase_model"] == "claude-fable-5-1"
+    assert payload["phase_model"] == "claude-opus-5-5"
     # N5: the guard really ran and swallowed the timeout (not a silent no-op).
     assert recorded["calls"] == 1
 
@@ -1772,7 +1792,7 @@ def test_build_payload_silent_on_unicode_decode_error(
         str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
     )
     assert capsys.readouterr().err == ""
-    assert payload["phase_model"] == "claude-fable-5-1"
+    assert payload["phase_model"] == "claude-opus-5-5"
     # N5: the guard really ran and swallowed the decode error (not a no-op).
     assert recorded["calls"] == 1
 
@@ -1801,7 +1821,7 @@ def test_build_payload_silent_on_unhelpful_cli(
         str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
     )
     assert capsys.readouterr().err == ""
-    assert payload["phase_model"] == "claude-fable-5-1"
+    assert payload["phase_model"] == "claude-opus-5-5"
     # N5: each unhelpful case still runs the real guard exactly once.
     assert recorded["calls"] == 1
 

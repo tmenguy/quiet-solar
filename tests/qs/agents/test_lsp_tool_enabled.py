@@ -60,6 +60,7 @@ LSP_INCLUDE_AGENTS: tuple[str, ...] = (
     "qs-verify-task",
     "qs-diag-root-cause-skeptic",
     "qs-decompose-epic",
+    "qs-review-finding-verifier",
 )
 
 # Context-starved (blind) reviewers, merge/release agents, and

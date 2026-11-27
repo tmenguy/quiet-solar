@@ -81,6 +81,7 @@ forbids reading the codebase / the repo) and the merge/release agents
 | `qs-plan-concrete-planner` | ✅ | Reads file tree + source snippets to verify diffs |
 | `qs-review-edge-case-hunter` | ✅ | Walks branching paths in the PR source |
 | `qs-review-acceptance-auditor` | ✅ | Builds a traceability matrix over source |
+| `qs-review-finding-verifier` | ✅ | Reads the code to confirm or refute each finding (QS-453) |
 | `qs-setup-task` | ✅ | Carries `LSP` for capability parity with the other code-reading agents — but see the note below |
 | `qs-plan-critic` | ❌ | **Blind** — reviews plan text only |
 | `qs-plan-dev-proxy` | ❌ | **Blind** — never reads source |

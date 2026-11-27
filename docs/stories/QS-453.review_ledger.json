@@ -1,0 +1,2508 @@
+{
+  "version": 1,
+  "rounds": [
+    {
+      "n": 1,
+      "head": "d2287ba2e27128b52ab2ae78e513ec53e5e229d7",
+      "added": true
+    },
+    {
+      "n": 2,
+      "head": "62e09d6d154f542e29aa6aa1339fabf69b73e598",
+      "added": true
+    },
+    {
+      "n": 3,
+      "head": "05a9ab00faf517b8e0d568c3a56c10540b1c1e89",
+      "added": true
+    },
+    {
+      "n": 4,
+      "head": "300438c04c5eb169ffc80938033b8a3f9dcfad3c",
+      "added": true
+    },
+    {
+      "n": 5,
+      "head": "9fdacb217d6bf1e48e674a5677286c022651e54e",
+      "added": true
+    },
+    {
+      "n": 6,
+      "head": "e075f9a721733cd6afe86b69b407de64fef68ae2",
+      "added": true
+    },
+    {
+      "n": 7,
+      "head": "ea0f5e03859b0ab69000a52a5bf5ea423271c0d9",
+      "added": true
+    },
+    {
+      "n": 8,
+      "head": "7160fc662b2db93c0f44e4e17421e7dda4410e1c",
+      "added": true
+    },
+    {
+      "n": 9,
+      "head": "04b3a652661a969e3eff35405eaf63050c71d396",
+      "added": true
+    }
+  ],
+  "findings": [
+    {
+      "id": "F-001",
+      "round": 1,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "must-fix",
+      "severity_action": "keep",
+      "severity": "must-fix",
+      "where": "scripts/qs/review_ledger.py:510",
+      "title": "cmd_set supersede depends on decision order",
+      "note": "Traced: line 514 only supersedes when the ref is accepted/resolved at set time; the code follows the D2 transition table (story.md:241) literally, so the gap is in the spec. The opposite order supersedes correctly.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:514",
+      "reproduces_when": "round 2 add with checks STILL-PRESENT F-001 + element FLIP-FLOP F-001 (F-001 -> open, F-002 created); set F-002 accepted (F-001 is open, not in _LIVE, nothing superseded) then set F-001 accepted; check-round passes with both accepted",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 2,
+          "from": "accepted",
+          "to": "accepted",
+          "note": "duplicate: qs-review-coderabbit (C-3)"
+        },
+        {
+          "round": 2,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:561"
+        }
+      ]
+    },
+    {
+      "id": "F-002",
+      "round": 1,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:325",
+      "title": "_superseder follows only one step of a supersede chain",
+      "note": "Downgrade path confirmed. The correct target is debatable: F-003 restates A, so re-raising A agrees with F-003 and is not a flip-flop. The verifier's 'most recent non-superseded' rule should also cite F-003, not F-001.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:332",
+      "reproduces_when": "F-001 accepted; F-002 = FLIP-FLOP F-001 accepted (F-001 superseded); F-003 = FLIP-FLOP F-002 accepted (F-002 superseded); round 4 sends REOPENS F-001 -> _superseder finds no live F-y -> new-downgraded (line 358-359)",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 2,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:363-379"
+        }
+      ]
+    },
+    {
+      "id": "F-003",
+      "round": 1,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:155",
+      "title": "No CLI recovery from a committed-unfinished ledger",
+      "note": "Designed behaviour: D4 step 1 (story.md:354) says STOP and the user resolves it. Reachable only when the ledger is committed outside the protocol, which commits only after check-round passes.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:192",
+      "reproduces_when": "ledger committed (clean vs HEAD) with a finding in state open: start-round exits 1 at line 192 and set/add exit 1 at line 157",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 2,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:166"
+        }
+      ]
+    },
+    {
+      "id": "F-004",
+      "round": 1,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:178",
+      "title": "start-round discard ignores git checkout/rm return codes",
+      "note": null,
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:180",
+      "reproduces_when": "dirty ledger present and the worktree index.lock exists: git checkout HEAD -- <ledger> fails silently, discarded:true is reported, load() at line 186 reads the dirty round (false 'committed unfinished' or a new round stacked on it)",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 2,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:200-201"
+        }
+      ]
+    },
+    {
+      "id": "F-005",
+      "round": 1,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:353",
+      "title": "DUPLICATE escalation compares reported vs effective severity",
+      "note": "The code matches D2's literal wording (story.md:295-297), so the fix needs a spec change too. Each new F-ID lands in Dropped-by-verifier: churn, not a wrong fix.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:353",
+      "reproduces_when": "round 1 must-fix with demote (effective nice-to-have) rejected --by verifier; round 2 same must-fix + demote with DUPLICATE F-001 -> rank 2 > 0 -> new-downgraded, a new F-ID every round",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 2,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:398"
+        }
+      ]
+    },
+    {
+      "id": "F-006",
+      "round": 1,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:269",
+      "title": "Non-string checks[].ref raises an uncaught TypeError",
+      "note": null,
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:269",
+      "reproduces_when": "add with checks: [{\"ref\": [\"F-001\"], \"status\": \"RESOLVED\", \"evidence\": \"x:1\"}] -> unhashable list in set membership -> traceback, no {\"error\"} JSON (main catches only LedgerError, line 635)",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 2,
+          "from": "accepted",
+          "to": "accepted",
+          "note": "duplicate: qs-review-coderabbit (C-7)"
+        },
+        {
+          "round": 2,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:293"
+        },
+        {
+          "round": 3,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-14)"
+        },
+        {
+          "round": 4,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-13)"
+        },
+        {
+          "round": 5,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-8)"
+        },
+        {
+          "round": 7,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-8)"
+        },
+        {
+          "round": 8,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-7)"
+        }
+      ]
+    },
+    {
+      "id": "F-007",
+      "round": 1,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:301",
+      "title": "promote accepted with REFUTED verdict or without reproduces_when",
+      "note": "Line 301 matches D2's validation list (story.md:282-283), which does not require a scenario for promote; REFUTED+promote is harmless at triage (the Dropped bucket wins). Only the null-scenario case matters.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:307",
+      "reproduces_when": "verified-mode nice-to-have with verdict CONFIRMED, reproduces_when null, severity_action promote -> passes validation (line 307 checks only the reported severity) and becomes a should-fix Blocking row without a scenario",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 2,
+          "from": "accepted",
+          "to": "accepted",
+          "note": "duplicate: qs-review-coderabbit (C-8)"
+        },
+        {
+          "round": 2,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:326-331"
+        }
+      ]
+    },
+    {
+      "id": "F-008",
+      "round": 1,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:539",
+      "title": "show --head is never validated",
+      "note": "Low impact: the only caller is the orchestrator, which passes the head start-round already validated, and null means unknown per the spec. Option injection needs a caller that already has a shell.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:576",
+      "reproduces_when": "show --head deadbeef (every decided finding gets file_changed null via git exit 128), or --head=--output=/tmp/x passed as a git diff argument before '--' at lines 539/544",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 2,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:624"
+        }
+      ]
+    },
+    {
+      "id": "F-009",
+      "round": 1,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "demote",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/agent_templates/qs-review-task.md.j2:45",
+      "title": "OpenCode bash allow-list lacks review_ledger.py",
+      "note": "Already covered by the existing \"python scripts/qs/*\": allow rule (qs-review-task.md.j2:56, qs-verify-task.md.j2:57).",
+      "verdict": "REFUTED",
+      "evidence": "scripts/qs/agent_templates/qs-review-task.md.j2:56",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "verifier",
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "rejected",
+          "note": "verifier: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-010",
+      "round": 1,
+      "source": "qs-review-acceptance-auditor",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:537",
+      "title": "file_changed cat-file pre-check not stated in D2",
+      "note": "The deviation protects against a false 'unchanged' that would wrongly turn a re-raise into a DUPLICATE. Documenting it in D2 is the cheaper resolution.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:537",
+      "reproduces_when": "a decided finding whose where path exists at neither revision (e.g. a bare 'charger.py:2471'): the code returns null, while D2 (story.md:324-325) maps git diff exit 0 to false",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 2,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: docs/stories/QS-453.story.md:338"
+        }
+      ]
+    },
+    {
+      "id": "F-011",
+      "round": 1,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/review_ledger.py:129",
+      "title": "load validates only the top-level shape",
+      "note": null,
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        },
+        {
+          "round": 2,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-edge-case-hunter (C-20)"
+        }
+      ]
+    },
+    {
+      "id": "F-012",
+      "round": 1,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/review_ledger.py:568",
+      "title": "_md does not escape newlines in cells",
+      "note": null,
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        },
+        {
+          "round": 2,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-edge-case-hunter (C-22)"
+        }
+      ]
+    },
+    {
+      "id": "F-013",
+      "round": 1,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/review_ledger.py:395",
+      "title": "duplicate history note records pre-reconcile state",
+      "note": "The note is appended before the later transition note in the same add, so the history stays in order; not stale.",
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-014",
+      "round": 1,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/review_ledger.py:474",
+      "title": "no lock or atomic write; concurrent set calls lose a decision",
+      "note": "Not promoted: a lost set leaves its finding open, and check-round (step 8) catches that and sends it back to triage.",
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 1,
+      "history": [
+        {
+          "round": 1,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 1,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        },
+        {
+          "round": 2,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-edge-case-hunter (C-21)"
+        }
+      ]
+    },
+    {
+      "id": "F-015",
+      "round": 2,
+      "source": "qs-review-coderabbit",
+      "reported_severity": "must-fix",
+      "severity_action": "keep",
+      "severity": "must-fix",
+      "where": "scripts/qs/review_ledger.py:284",
+      "title": "add does not enforce that the verifier returned every consolidated finding",
+      "note": "add has no input listing the consolidated keys, so it cannot detect a missing one. The verifier prompt says add rejects this case, but it does not.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:303-311",
+      "reproduces_when": "consolidated C-1+C-2, verifier object lists only C-1 -> _validate checks duplicate keys only, add exits 0, C-2 never enters the ledger (the verifier template at qs-review-finding-verifier.md.j2:134 claims add rejects this)",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 3,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:382-388"
+        },
+        {
+          "round": 9,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-5)"
+        }
+      ]
+    },
+    {
+      "id": "F-016",
+      "round": 2,
+      "source": "qs-review-coderabbit",
+      "reported_severity": "must-fix",
+      "severity_action": "keep",
+      "severity": "must-fix",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:192",
+      "title": "Verify findings against the PR head, not the local worktree",
+      "note": "No clean-worktree check exists in the review templates. The precondition (a dirty worktree at review time) is rare, and the reviewers that read the repo have the same exposure.",
+      "verdict": "PLAUSIBLE",
+      "evidence": "scripts/qs/agent_templates/_macros.md.j2:212-219",
+      "reproduces_when": "worktree has an uncommitted edit to a file a finding cites when the round opens; only HEAD SHAs are compared, and the verifier reads the edited file and can REFUTE a defect still present at the head",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 3,
+          "from": "accepted",
+          "to": "accepted",
+          "note": "duplicate: qs-review-coderabbit (C-10)"
+        },
+        {
+          "round": 3,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/agent_templates/_macros.md.j2:222-226"
+        },
+        {
+          "round": 4,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-9)"
+        },
+        {
+          "round": 5,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-5)"
+        },
+        {
+          "round": 6,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-6)"
+        },
+        {
+          "round": 7,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-5)"
+        },
+        {
+          "round": 8,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-4)"
+        },
+        {
+          "round": 9,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-1)"
+        }
+      ]
+    },
+    {
+      "id": "F-017",
+      "round": 2,
+      "source": "qs-review-coderabbit",
+      "reported_severity": "should-fix",
+      "severity_action": "demote",
+      "severity": "nice-to-have",
+      "where": "docs/workflow/phase-protocols.md:194",
+      "title": "Fast-path condition in phase-protocols.md omits bucket precedence",
+      "note": "The doc wording is loose. The rendered orchestrator template is exact: it excludes FLIP-FLOP and Reopened findings (_macros.md.j2:333-335), so runtime behaviour is unaffected.",
+      "verdict": "CONFIRMED",
+      "evidence": "docs/workflow/phase-protocols.md:194-195",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: override verifier default: cheap doc gap (delegated)"
+        },
+        {
+          "round": 3,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: docs/workflow/phase-protocols.md:194-198"
+        },
+        {
+          "round": 9,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-2)"
+        }
+      ]
+    },
+    {
+      "id": "F-018",
+      "round": 2,
+      "source": "qs-review-coderabbit",
+      "reported_severity": "should-fix",
+      "severity_action": "demote",
+      "severity": "nice-to-have",
+      "where": "docs/workflow/phase-protocols.md:202",
+      "title": "phase-protocols.md does not describe the all-skipped round completion",
+      "note": "Doc-only gap. The template covers this path: ledger-only commit plus finish-task handoff (qs-review-task.md.j2:273-284).",
+      "verdict": "CONFIRMED",
+      "evidence": "docs/workflow/phase-protocols.md:202-212",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: override verifier default: cheap doc gap (delegated)"
+        },
+        {
+          "round": 3,
+          "from": "accepted",
+          "to": "accepted",
+          "note": "duplicate: qs-review-coderabbit (C-12)"
+        },
+        {
+          "round": 3,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: docs/workflow/phase-protocols.md:214-216"
+        },
+        {
+          "round": 4,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-11)"
+        },
+        {
+          "round": 5,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-6)"
+        },
+        {
+          "round": 7,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-6)"
+        },
+        {
+          "round": 8,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-5)"
+        },
+        {
+          "round": 9,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-3)"
+        }
+      ]
+    },
+    {
+      "id": "F-019",
+      "round": 2,
+      "source": "qs-review-coderabbit",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:216",
+      "title": "review_open_round fetches gh pr diff before the push when local is ahead",
+      "note": "The reviewers fetch the diff themselves later, so they are not affected (qs-review-task.md.j2:110). Only a diff pasted to the verifier would be stale.",
+      "verdict": "PLAUSIBLE",
+      "evidence": "scripts/qs/agent_templates/_macros.md.j2:206",
+      "reproduces_when": "local head ahead of the PR head (an earlier push failed), full round: step 1's gh pr diff output predates the git push at line 216-217, and the orchestrator passes it to the verifier as the diff for this round",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 3,
+          "from": "accepted",
+          "to": "accepted",
+          "note": "duplicate: qs-review-coderabbit (C-13)"
+        },
+        {
+          "round": 3,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/agent_templates/_macros.md.j2:204-233"
+        },
+        {
+          "round": 4,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-12)"
+        },
+        {
+          "round": 5,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-7)"
+        },
+        {
+          "round": 7,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-7)"
+        },
+        {
+          "round": 8,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-6)"
+        },
+        {
+          "round": 9,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-4)"
+        }
+      ]
+    },
+    {
+      "id": "F-020",
+      "round": 2,
+      "source": "qs-review-coderabbit",
+      "reported_severity": "should-fix",
+      "severity_action": "demote",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/models.py:51",
+      "title": "Out-of-scope changes: Claude frontier model change and stale.yml test removal",
+      "note": "The story scopes the model change (D7, AC-10 at story.md:556). The stale.yml test was changed because main deleted the workflow in 9db87a91 (tests/qs/test_github_workflows.py:24-27), so CI needs it.",
+      "verdict": "REFUTED",
+      "evidence": "docs/stories/QS-453.story.md:485-488",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "verifier",
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "rejected",
+          "note": "verifier: skip"
+        },
+        {
+          "round": 3,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-coderabbit (C-11)"
+        },
+        {
+          "round": 4,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-coderabbit (C-10)"
+        },
+        {
+          "round": 5,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-coderabbit (C-9)"
+        },
+        {
+          "round": 6,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-coderabbit (C-7)"
+        },
+        {
+          "round": 7,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-coderabbit (C-9)"
+        },
+        {
+          "round": 8,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-coderabbit (C-8)"
+        },
+        {
+          "round": 9,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-coderabbit (C-8)"
+        }
+      ]
+    },
+    {
+      "id": "F-021",
+      "round": 2,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:334",
+      "title": "Fallback-mode validation accepts checks, demote and non-NEW relations",
+      "note": "Defence in depth: the template's fallback object always has checks [], keep and NEW (_macros.md.j2:297-301), but the CLI does not enforce that.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:301",
+      "reproduces_when": "a fallback object with checks [RESOLVED F-001] plus a finding with severity_action demote and relation DUPLICATE F-002 -> passes _validate (only a non-null verdict is rejected at line 334-335), F-001 is marked resolved and the finding is suppressed as a duplicate, with nothing verified",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 3,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:373-374"
+        }
+      ]
+    },
+    {
+      "id": "F-022",
+      "round": 2,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:411",
+      "title": "verdict REFUTED with relation REOPENS reopens F-x and defaults to fix",
+      "note": "Neither the validator nor the verifier prompt forbids pairing REFUTED with REOPENS.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:411-412",
+      "reproduces_when": "verifier emits verdict REFUTED, relation REOPENS F-001 for an accepted F-001 -> _resolve targets F-001 whatever the verdict, _reconcile reopens it with effect reopened, and triage row 2 (Reopened, default fix) wins over row 4 (Dropped by verifier)",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 3,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:375-376"
+        }
+      ]
+    },
+    {
+      "id": "F-023",
+      "round": 2,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "tests/qs/launchers/test_claude_launcher.py:1435",
+      "title": "create-plan lane rows can no longer tell a lane-aware render from the no-lane fallback",
+      "note": "No effort assertion separates the two cases either, since CLASS_EFFORT gives both deep and frontier 'high'.",
+      "verdict": "CONFIRMED",
+      "evidence": "tests/qs/launchers/test_claude_launcher.py:1432-1435",
+      "reproduces_when": "a regression where build_payload drops lane before models.resolve -> every create-plan row still expects claude-opus-5-5 and passes, because frontier == deep on Claude (models.py:50-51) and both have effort high (models.py:78-79)",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 3,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: tests/qs/launchers/test_claude_launcher.py:1457-1470"
+        }
+      ]
+    },
+    {
+      "id": "F-024",
+      "round": 2,
+      "source": "qs-review-acceptance-auditor",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "docs/workflow/adversarial-review.md:192",
+      "title": "Ledger-state summary omits open -> superseded",
+      "note": "Story D2 was updated (story.md:241) but this summary was not. The source is scenario-exempt, so no demote.",
+      "verdict": "CONFIRMED",
+      "evidence": "docs/workflow/adversarial-review.md:192-193",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 3,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: docs/workflow/adversarial-review.md:193"
+        }
+      ]
+    },
+    {
+      "id": "F-025",
+      "round": 2,
+      "source": "qs-review-acceptance-auditor",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "tests/qs/test_review_ledger.py:382",
+      "title": "Second fail(\"set\") repeats the first; the no-round case is never run",
+      "note": null,
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-026",
+      "round": 2,
+      "source": "qs-review-acceptance-auditor",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "docs/stories/QS-453.story.md:307",
+      "title": "Story should state DUPLICATE elements are never reported as merged",
+      "note": null,
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-027",
+      "round": 2,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:382",
+      "title": "review_decisions does not handle set exit 1 after an in-round supersede",
+      "note": "This follows from fix #01 F-001 (open -> superseded). The F-001 fix itself works; the template was not updated to handle it.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:544-545",
+      "reproduces_when": "F-001 accepted in round 1; round 2 has a STILL-PRESENT check on F-001 plus a FLIP-FLOP F-001 element (creates F-0xx); the user fixes F-0xx and picks fix all; set F-0xx supersedes F-001 (line 561), then set F-001 exits 1 'superseded' and review_decisions (_macros.md.j2:383-401) has no branch for it",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 3,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/agent_templates/_macros.md.j2:403-417"
+        }
+      ]
+    },
+    {
+      "id": "F-028",
+      "round": 2,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:203",
+      "title": "stale_fix_plans misses a staged-but-uncommitted fix plan",
+      "note": null,
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:203",
+      "reproduces_when": "step 8 git add succeeds, git commit fails, then start-round runs: ls-files --others skips the staged fix plan, so it is not reported, and next_review_fix_path (utils.py:196-201) counts it and skips its number",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 3,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:182-188"
+        }
+      ]
+    },
+    {
+      "id": "F-029",
+      "round": 2,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:193",
+      "title": "Committed-unfinished recovery sets are discarded by a premature start-round",
+      "note": "It only happens if the orchestrator skips the commit that the template asks for before restarting. The lost decisions can be redone.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:193-216",
+      "reproduces_when": "committed ledger has open F-001 and F-002; set F-001 accepted (ledger now dirty); start-round runs before the commit -> the dirty ledger is checked out from HEAD and the run fails 'committed unfinished' again with discarded:true, and the exit-1 bullet (_macros.md.j2:235-239) never says the decisions were lost",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 3,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:218-227"
+        }
+      ]
+    },
+    {
+      "id": "F-030",
+      "round": 2,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:569",
+      "title": "check-round exits 0 for a started round that was never added",
+      "note": "It requires an orchestrator to deviate from the protocol. --force-full can still open a new round.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:569-576",
+      "reproduces_when": "the orchestrator skips add and runs check-round -> exit 0 (no added/started check); once committed, start-round on the same head returns no-change (line 222-224), and add on the now-clean ledger fails",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 3,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:622-623"
+        }
+      ]
+    },
+    {
+      "id": "F-031",
+      "round": 2,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:230",
+      "title": "no-change branch guidance contradicts discarded:true and omits unimplemented accepted fixes",
+      "note": null,
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 2,
+      "history": [
+        {
+          "round": 2,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 2,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-032",
+      "round": 3,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:300",
+      "title": "review_record never says what to pass to the required --keys when consolidation produced no findings",
+      "note": "A gap in how F-015's fix is documented, not in its logic: `--keys \"\"` (or `--keys=`) works but is never mentioned. F-015 itself is checked RESOLVED.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:710",
+      "reproduces_when": "a round with zero consolidated findings (it still runs add, for the checks) where the orchestrator copies _macros.md.j2:329 with an empty key list, giving a bare `--keys`: argparse rejects it as usage exit 1, and the template then blames the verifier's object, so the round falls back, dropping every check",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 3,
+      "history": [
+        {
+          "round": 3,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 3,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 4,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/agent_templates/_macros.md.j2:330-331"
+        }
+      ]
+    },
+    {
+      "id": "F-033",
+      "round": 3,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "tests/qs/test_review_ledger.py:140",
+      "title": "Test helper builds --keys with duplicates, so _validate's duplicate-finding-key branch is no longer tested",
+      "note": "No other test sends duplicate finding keys, so the _validate branch has no test. The helper should dedupe the keys, or the case should pass --keys=C-1.",
+      "verdict": "CONFIRMED",
+      "evidence": "tests/qs/test_review_ledger.py:150-151",
+      "reproduces_when": "_VALIDATION_CASES['duplicate_finding_key'] runs through led.fail('add') with no explicit --keys: the helper passes --keys=C-1,C-1, add exits at '--keys lists a key twice', and the _validate duplicate branch is never reached",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 3,
+      "history": [
+        {
+          "round": 3,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 3,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 4,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: tests/qs/test_review_ledger.py:132"
+        }
+      ]
+    },
+    {
+      "id": "F-034",
+      "round": 3,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "demote",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/review_ledger.py:350",
+      "title": "seen_keys may be undefined in the new key-set check",
+      "note": "seen_keys is set unconditionally at line 340, before the findings loop. The check at line 382 always sees it, even for an empty findings list.",
+      "verdict": "REFUTED",
+      "evidence": "scripts/qs/review_ledger.py:340",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "verifier",
+      "decided_round": 3,
+      "history": [
+        {
+          "round": 3,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 3,
+          "from": "open",
+          "to": "rejected",
+          "note": "verifier: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-035",
+      "round": 3,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "must-fix",
+      "severity_action": "keep",
+      "severity": "must-fix",
+      "where": "scripts/qs/review_ledger.py:218",
+      "title": "Committed-unfinished guard indexes rounds[-1] without checking rounds is non-empty",
+      "note": "A regression in the new F-029 guard. Before the delta, a deleted working ledger was restored from HEAD. The trigger is narrow, but the crash is real.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:219-221",
+      "reproduces_when": "HEAD holds a committed-unfinished ledger and the working copy is deleted (_dirty true) or rewritten with rounds []: load() returns empty rounds, working['rounds'][-1] raises IndexError, and main catches only LedgerError, so you get a traceback instead of a JSON error",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 3,
+      "history": [
+        {
+          "round": 3,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 3,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 4,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:211"
+        }
+      ]
+    },
+    {
+      "id": "F-036",
+      "round": 3,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:218",
+      "title": "Corrupt working copy under a committed-unfinished HEAD now exits 2 instead of being restored",
+      "note": "Before fix #02 the dirty copy was checked out from HEAD first, so this state recovered by itself.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:219",
+      "reproduces_when": "HEAD ledger is committed-unfinished and the working ledger is truncated or invalid JSON: load() raises LedgerError(2) before the discard, and the macro says HALT on exit 2 without giving any recovery",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 3,
+      "history": [
+        {
+          "round": 3,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 3,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 4,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:207"
+        }
+      ]
+    },
+    {
+      "id": "F-037",
+      "round": 3,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:240",
+      "title": "Findings accepted during committed-unfinished recovery never reach a fix plan",
+      "note": "Related to F-031 (default-skipped), but the recovery bullet changed since that decision, so it counts as NEW. With --force-full the verifier would check F-001 STILL-PRESENT. Without it, the fix is silently lost.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/agent_templates/_macros.md.j2:251-259",
+      "reproduces_when": "round N committed with F-001 open; set F-001 accepted (decided_round = N); check-round reports accepted_unchecked [] since decided_round == n; ledger-only commit; restart at step 1 on the same code head: start-round returns no-change, the template stops, and no fix plan is ever written for F-001",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 3,
+      "history": [
+        {
+          "round": 3,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 3,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 4,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/agent_templates/_macros.md.j2:254-257"
+        }
+      ]
+    },
+    {
+      "id": "F-038",
+      "round": 3,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/review_ledger.py:575",
+      "title": "--keys entries are stripped but finding keys are compared raw",
+      "note": null,
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 3,
+      "history": [
+        {
+          "round": 3,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 3,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-039",
+      "round": 3,
+      "source": "qs-review-acceptance-auditor",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "docs/stories/QS-453.story.md:344",
+      "title": "Story drift: D1/D4 do not record fix #02's F-016, F-019, F-015, F-022, F-027; stale Status line",
+      "note": "D4 step 1 has no git status check and does not fetch the diff after the sync. Step 5 has no --keys and step 8 has no FLIP-FLOP-first rule. The D1 relations lack the REFUTED rule. The Status line is stale.",
+      "verdict": "CONFIRMED",
+      "evidence": "docs/stories/QS-453.story.md:370-383",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 3,
+      "history": [
+        {
+          "round": 3,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 3,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 4,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: docs/stories/QS-453.story.md:380"
+        }
+      ]
+    },
+    {
+      "id": "F-040",
+      "round": 3,
+      "source": "qs-review-acceptance-auditor",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "docs/stories/QS-453.story.md:549",
+      "title": "AC-14 is a process criterion; CI shard 1/4 still pending",
+      "note": "A process check that the code cannot settle: confirm CI is green before finish-task.",
+      "verdict": "PLAUSIBLE",
+      "evidence": "docs/stories/QS-453.story.md:575-577",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "user",
+      "decided_round": 3,
+      "history": [
+        {
+          "round": 3,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 3,
+          "from": "open",
+          "to": "rejected",
+          "note": "user: process check; finish-task verifies CI before merge (delegated)"
+        }
+      ]
+    },
+    {
+      "id": "F-041",
+      "round": 4,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "demote",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/review_ledger.py:207",
+      "title": "`except ValueError, LedgerError:` (PEP 758) is a SyntaxError on Python <=3.13",
+      "note": "Project targets Python 3.14 only (mypy 3.14, ruff py314, CI python-version 3.14); PEP 758 syntax is valid there.",
+      "verdict": "REFUTED",
+      "evidence": "pyproject.toml:55",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "verifier",
+      "decided_round": 4,
+      "history": [
+        {
+          "round": 4,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 4,
+          "from": "open",
+          "to": "rejected",
+          "note": "verifier: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-042",
+      "round": 4,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "demote",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/review_ledger.py:207",
+      "title": "Deleted working copy: load() may raise FileNotFoundError, uncaught",
+      "note": "load() returns an empty ledger for a missing path and never raises; the rounds mismatch sends it down the restore path; the parametrized 'deleted' test covers it.",
+      "verdict": "REFUTED",
+      "evidence": "scripts/qs/review_ledger.py:130-131",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "verifier",
+      "decided_round": 4,
+      "history": [
+        {
+          "round": 4,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 4,
+          "from": "open",
+          "to": "rejected",
+          "note": "verifier: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-043",
+      "round": 4,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:251",
+      "title": "Recovery bullet says 'finish that round exactly like step 8' but {{round}} is unbound on that path",
+      "note": "Low impact: N is in the error string. One clause ('{{round}} = N from the error') closes it.",
+      "verdict": "PLAUSIBLE",
+      "evidence": "scripts/qs/agent_templates/_macros.md.j2:264",
+      "reproduces_when": "start-round exits 1 'round 3 committed unfinished'; the user accepts a recovery decision; the orchestrator reaches the step-8 fix-plan 'Review round' line and commit message using {{round}}, which only the success bullet binds",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 4,
+      "history": [
+        {
+          "round": 4,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 4,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 5,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/agent_templates/_macros.md.j2:255"
+        }
+      ]
+    },
+    {
+      "id": "F-044",
+      "round": 4,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:255",
+      "title": "Recovery branches on 'any recovery decision accepted', dropping findings accepted in round N before the stray commit",
+      "note": "Adjacent case of F-037. Branch on 'any finding accepted with decided_round N'.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/agent_templates/_macros.md.j2:255-259",
+      "reproduces_when": "step 8 sets F-004 accepted (decided_round N); a stray commit captures the ledger with F-005 open; recovery skips F-005, so the all-skipped branch runs: ledger-only commit, restart, no-change, and check-round does not list F-004 (decided_round == n), so F-004 never gets a fix plan",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 4,
+      "history": [
+        {
+          "round": 4,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 4,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 5,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/agent_templates/_macros.md.j2:255-259"
+        },
+        {
+          "round": 9,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-6)"
+        }
+      ]
+    },
+    {
+      "id": "F-045",
+      "round": 4,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:246",
+      "title": "stale_fix_plans 'delete' advice conflicts with a recovery fix plan whose commit failed",
+      "note": null,
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 4,
+      "history": [
+        {
+          "round": 4,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 4,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        },
+        {
+          "round": 5,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-edge-case-hunter (C-4)"
+        }
+      ]
+    },
+    {
+      "id": "F-046",
+      "round": 4,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/review_ledger.py:209",
+      "title": "Malformed finding entry gives KeyError/TypeError in _recovery_copy",
+      "note": "Same class as F-011 (default-skipped). The region changed, so it counts as NEW.",
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 4,
+      "history": [
+        {
+          "round": 4,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 4,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-047",
+      "round": 4,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "tests/qs/agents/test_review_pipeline_contract.py:62",
+      "title": "unfinished_block uses a fixed 900-char window",
+      "note": null,
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 4,
+      "history": [
+        {
+          "round": 4,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 4,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        },
+        {
+          "round": 6,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-edge-case-hunter (C-4)"
+        }
+      ]
+    },
+    {
+      "id": "F-048",
+      "round": 4,
+      "source": "qs-review-acceptance-auditor",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "docs/stories/QS-453.story.md:257",
+      "title": "Story D2 start-round step 1 still says the dirty copy under a committed-unfinished HEAD 'is not discarded'",
+      "note": "D2 does not record the fix #03 F-035/F-036 narrowing; step 2 also lacks the F-037 fix-plan route. Scenario-exempt source.",
+      "verdict": "CONFIRMED",
+      "evidence": "docs/stories/QS-453.story.md:257-260",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 4,
+      "history": [
+        {
+          "round": 4,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 4,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 5,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: docs/stories/QS-453.story.md:259-272"
+        }
+      ]
+    },
+    {
+      "id": "F-049",
+      "round": 5,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "demote",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:255",
+      "title": "{{round}} in a .j2 file may render empty or fail under StrictUndefined",
+      "note": "_make_env uses [[ ]] delimiters, so {{round}} is literal; it renders verbatim.",
+      "verdict": "REFUTED",
+      "evidence": "scripts/qs/render_agents.py:262",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "verifier",
+      "decided_round": 5,
+      "history": [
+        {
+          "round": 5,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 5,
+          "from": "open",
+          "to": "rejected",
+          "note": "verifier: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-050",
+      "round": 5,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "must-fix",
+      "severity_action": "keep",
+      "severity": "must-fix",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:259",
+      "title": "Recovery 'none' branch: ledger-only commit + restart returns no-change, so the all-skip finish-task handoff is never given",
+      "note": "Fix #05 fixed F-050's own case but routes every all-skip recovery to finish-task. Restart unless git diff --quiet <round head> <head> -- . <excludes> is clean.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:252-268",
+      "reproduces_when": "round N head H; a git commit -a captures the dirty round-N ledger (open findings) together with new code as H'; review-task on H' -> start-round exits 1 'committed unfinished' before the head diff; the user skips every open ID; ledger-only commit, then finish-task handoff; the code in H..H' is never reviewed",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 6,
+      "history": [
+        {
+          "round": 5,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 5,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 6,
+          "from": "accepted",
+          "to": "open",
+          "note": "reopened: qs-review-edge-case-hunter (C-2); previous: {\"reported_severity\": \"should-fix\", \"severity_action\": \"keep\", \"severity\": \"should-fix\", \"where\": \"scripts/qs/agent_templates/_macros.md.j2:261\", \"verdict\": \"CONFIRMED\", \"evidence\": \"scripts/qs/review_ledger.py:268-270\", \"reproduces_when\": \"round N head H; a stray commit captures only the dirty ledger with open findings; the user rejects every open ID, check-round, ledger-only commit L; start-round --head L returns no-change, so the orchestrator stops with no finish-task handoff\", \"note\": \"The none branch should emit step 8's all-skip finish-task handoff instead of restarting.\"}"
+        },
+        {
+          "round": 6,
+          "from": "open",
+          "to": "open",
+          "note": "merged: RESOLVED from check, REOPENS applied"
+        },
+        {
+          "round": 6,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 7,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/agent_templates/_macros.md.j2:259-261"
+        }
+      ]
+    },
+    {
+      "id": "F-051",
+      "round": 5,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:255",
+      "title": "Widened recovery criterion re-plans findings that already have a committed fix plan for round N",
+      "note": null,
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 5,
+      "history": [
+        {
+          "round": 5,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 5,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-052",
+      "round": 6,
+      "source": "qs-review-blind-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "demote",
+      "severity": "nice-to-have",
+      "where": "tests/qs/agents/test_review_pipeline_contract.py:175",
+      "title": "`restart at step 1` not-in assertion would have passed on the old text too",
+      "note": "unfinished_block() normalises whitespace (_norm), so the old split phrase became 'restart at step 1' and the assertion would have failed on it.",
+      "verdict": "REFUTED",
+      "evidence": "tests/qs/agents/test_review_pipeline_contract.py:58-66",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "verifier",
+      "decided_round": 6,
+      "history": [
+        {
+          "round": 6,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 6,
+          "from": "open",
+          "to": "rejected",
+          "note": "verifier: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-053",
+      "round": 6,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:259",
+      "title": "\"Emit step 6's finish-task handoff, as step 8's all-skip path does\" is ambiguous on banner / PR comment",
+      "note": "Can be read either way; name step 8's all-skip banner and PR comment explicitly.",
+      "verdict": "PLAUSIBLE",
+      "evidence": "scripts/qs/agent_templates/qs-verify-task.md.j2:232-250",
+      "reproduces_when": "recovery in verify-task where the user rejects a must/should with --by user: following step 6's handoff literally prints 'No blocking findings.' and skips step 8's triage-summary PR comment and banner swap",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 6,
+      "history": [
+        {
+          "round": 6,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 6,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 7,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/agent_templates/_macros.md.j2:262-266"
+        }
+      ]
+    },
+    {
+      "id": "F-054",
+      "round": 6,
+      "source": "qs-review-coderabbit",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:234",
+      "title": "committed-unfinished `hint` strings still say \"commit the ledger, then start-round again\"",
+      "note": "Both hints still describe the pre-fix-#03 restart flow.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:233-234",
+      "reproduces_when": "recovered round with a finding accepted during recovery and no code change since the round head: following the hint (commit the ledger, start-round again) returns no-change, so no fix plan is written and the accepted fix is dropped",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 6,
+      "history": [
+        {
+          "round": 6,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 6,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 7,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:187-191"
+        },
+        {
+          "round": 9,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-7)"
+        }
+      ]
+    },
+    {
+      "id": "F-055",
+      "round": 7,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:259",
+      "title": "Recovery bullet, `changed_since_round: false` branch: a user request for a full review (`--force-full`) is lost",
+      "note": "The false branch never re-offers or re-runs --force-full. Fix #05, not #06, removed the restart.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:266-281",
+      "reproduces_when": "user asks for a full re-review; HEAD holds a committed-unfinished ledger; no code changed since that round's head; start-round --force-full exits 1 before args.force_full is read; the user skips every open ID; ledger-only commit; changed_since_round false -> finish-task handoff, and no forced full round ever starts",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 7,
+      "history": [
+        {
+          "round": 7,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 7,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 8,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/agent_templates/_macros.md.j2:259-263"
+        }
+      ]
+    },
+    {
+      "id": "F-056",
+      "round": 7,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:259",
+      "title": "`changed_since_round: true` branch: the recovered round's all-skip outcome is never reported",
+      "note": null,
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 7,
+      "history": [
+        {
+          "round": 7,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 7,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-057",
+      "round": 7,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:259",
+      "title": "`changed_since_round` is read from the earlier error and can go stale after a pull or rebase during recovery",
+      "note": null,
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 7,
+      "history": [
+        {
+          "round": 7,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 7,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-058",
+      "round": 7,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/review_ledger.py:245",
+      "title": "A malformed round entry (no `head`, or a non-string `head`) crashes the committed-unfinished error path",
+      "note": "Same class as F-011 / F-046, but on new code, so NEW.",
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 7,
+      "history": [
+        {
+          "round": 7,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 7,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-059",
+      "round": 8,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/review_ledger.py:187",
+      "title": "`_RECOVERY_HINT` contradicts the template's full-review restart (fix #07 F-055); story D2 start-round step 2 lags too",
+      "note": "Follow-on to F-055: the hint and story D2 step 2 were not updated.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:187-191",
+      "reproduces_when": "user asks for --force-full; start-round exits 1 committed unfinished with changed_since_round false and hint=_RECOVERY_HINT; user skips every open ID; an orchestrator following the hint goes to finish-task and the requested full round never starts",
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 8,
+      "history": [
+        {
+          "round": 8,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 8,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 9,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:189"
+        }
+      ]
+    },
+    {
+      "id": "F-060",
+      "round": 8,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:255",
+      "title": "Full-review request survives only the all-skip recovery branch; accepted branch's fix plan/handoff does not carry it",
+      "note": "Not promoted: --force-full is per session; the accepted branch ends the session.",
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 8,
+      "history": [
+        {
+          "round": 8,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 8,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-061",
+      "round": 8,
+      "source": "qs-review-acceptance-auditor",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "tests/qs/test_review_ledger.py:393",
+      "title": "test_set_outside_started_round_fails repeats the same set; the \"no round at all\" case never runs",
+      "note": "Same claim as F-025 (default-skip); region unchanged. Scenario-exempt source.",
+      "verdict": "CONFIRMED",
+      "evidence": "tests/qs/test_review_ledger.py:395-396",
+      "reproduces_when": null,
+      "relation": null,
+      "state": "resolved",
+      "rejected_by": null,
+      "decided_round": 8,
+      "history": [
+        {
+          "round": 8,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 8,
+          "from": "open",
+          "to": "open",
+          "note": "relation-invalid: DUPLICATE F-025: severity escalated"
+        },
+        {
+          "round": 8,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 9,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: tests/qs/test_review_ledger.py:398"
+        }
+      ]
+    }
+  ]
+}

@@ -255,7 +255,7 @@ explaining why the docs are unaffected. See
 ### 5. Commit, push, open PR (automatic)
 
 ```bash
-git add scripts/ tests/qs/ tests/test_quality_gate.py .claude/ .opencode/ legacy/ docs/ .github/ CLAUDE.md AGENTS.md opencode.json
+git add scripts/ tests/qs/ tests/test_quality_gate.py .claude/ .opencode/ legacy/ docs/ .github/ CLAUDE.md AGENTS.md opencode.json ':(exclude)docs/stories/*.review_ledger.json'
 git commit -m "QS-{{issue}}: {{short summary}}"
 git push origin {{branch}}
 

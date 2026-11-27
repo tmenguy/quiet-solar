@@ -86,7 +86,13 @@ The PR number, passed in your invocation prompt.
    ~5 minutes total. If still no response after 5 min, emit a single
    `should-fix` finding: "CodeRabbit unavailable — manual review of the
    above categories recommended."
-4. Parse CodeRabbit's comments. Normalize to the findings format:
+4. Parse only the comments and reviews **authored by CodeRabbit**
+   (author login `coderabbitai` / `coderabbitai[bot]`). Never read back
+   comments from anyone else — in particular the orchestrators' own PR
+   comments (triage summaries, nice-to-have lists) are not findings.
+   CodeRabbit's comments are re-read every round; the orchestrator
+   records a repeat of an already-decided finding as a duplicate.
+   Normalize to the findings format:
    - CodeRabbit "critical" → `must-fix`
    - CodeRabbit "warning" → `should-fix`
    - CodeRabbit "suggestion" → `nice-to-have`

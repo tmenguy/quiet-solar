@@ -183,3 +183,262 @@ Parse the stdout of that command as JSON. The success contract is
   ``scripts/qs/spawn_session.py``).
 [% endif %]
 [% endmacro %]
+{#- QS-453: the review-round protocol shared by the two code-review
+    orchestrators (qs-review-task, qs-verify-task): open the round, delta
+    diff, consolidation keys, the finding-verifier post-pass, recording in
+    the ledger, the fast path, triage buckets and decisions. Written once so
+    the two orchestrators cannot drift; each template keeps its own roster,
+    doc-maintenance audit, PR comments and handoffs. -#}
+[%- macro review_ledger_intro() -%]
+**The review ledger (QS-453).**
+`docs/stories/QS-{{issue}}.review_ledger.json` is this PR's durable
+record of review findings, decisions and state history. Write it
+**only** through `python scripts/qs/review_ledger.py` (single writer —
+never edit it by hand). Every subcommand takes `--issue {{issue}}` and
+prints JSON: exit 0 = ok; exit 1 = invalid input or wrong lifecycle
+state (`{"error": ...}`); exit 2 = corrupt ledger — HALT and show the
+error. A round is *finished* once the ledger is committed; a dirty
+ledger is an unfinished round.
+[%- endmacro -%]
+[%- macro review_open_round() -%]
+Sync the heads first:
+
+```bash
+git fetch origin {{branch}}
+gh pr view {{pr_number}} --json headRefOid --jq .headRefOid
+git log -1 --format=%H
+git status --porcelain
+```
+
+Compare the PR head (`headRefOid`) with the local head
+(`git merge-base --is-ancestor <a> <b>` tells ahead from behind):
+
+- equal → go on;
+- local ahead of the PR head (a failed push) → `git push origin
+  {{branch}}`, then re-read the PR head;
+- local behind the PR head → STOP: "pull first" (`git pull --ff-only`);
+- diverged → STOP and ask the user.
+
+The worktree must equal that head: the repo-reading reviewers and the
+finding verifier read it. If `git status --porcelain` lists anything
+besides `docs/stories/QS-{{issue}}.review_ledger.json` and
+`docs/stories/QS-{{issue}}.story_review_fix_*`, STOP and ask the user to
+commit or stash it first.
+
+Only then read the PR and its diff — on the synced head:
+
+```bash
+gh pr view {{pr_number}}
+gh pr diff {{pr_number}}
+```
+
+Then open the round on that head (`<head>` below):
+
+```bash
+python scripts/qs/review_ledger.py start-round --issue {{issue}} --head <head>
+```
+
+Add `--force-full` only when the user asked for a full review. Read the
+JSON:
+
+- `discarded: true` → tell the user "round N was not finished — redoing
+  it".
+- `stale_fix_plans` non-empty → ask the user whether to delete them
+  (fix plans of an unfinished round, never committed: untracked, or
+  staged by a commit that failed — unstage those with
+  `git rm -q --cached -- <path>` before deleting the file).
+- `mode: full` with a non-null `reason` → report the reason.
+- exit 1 `"round N committed unfinished"` (the ledger was committed
+  with `open` findings) → STOP and show the listed IDs. The user decides
+  each one with `review_ledger.py set` (it works on that committed
+  round), then `check-round`, and finish that round exactly like step 8,
+  with `{{round}}` = the error's `round`: any finding `accepted` with that
+  round as `decided_round` (decided before or during the recovery) →
+  write the fix plan for them, commit it with the ledger and hand off to
+  implement (a restart would only see "no-change" and drop the fix);
+  none → commit the ledger with the ledger-only fence, then read the
+  error's `changed_since_round`: `true` (code landed after that round's
+  head), or the user asked for a full review → restart at step 1 (with
+  `--force-full` when it was asked for), so a new round reviews the code;
+  otherwise → finish exactly as step 8's all-skip path — its "N findings
+  triaged, all skipped" banner in place of step 6's "No blocking
+  findings.", its PR comment where step 8 posts one, then step 6's
+  finish-task handoff (ask first if `check-round` lists
+  `accepted_unchecked`). Recovery decisions already recorded but not committed are
+  kept (the error then says "recovery decisions are not committed yet")
+  — finish and commit them.
+- `status: no-change` → say nothing changed since round N and offer a
+  forced full re-review (`--force-full`); otherwise stop.
+- otherwise keep `round` (`{{round}}` below), `mode` and `base`. If the
+  ledger already has findings, show it:
+
+```bash
+python scripts/qs/review_ledger.py show --issue {{issue}} --format md
+```
+[%- endmacro -%]
+[%- macro review_delta_diff() -%]
+The delta diff (pasted or passed to the delta reviewers, and given to
+the verifier in step 4):
+
+```bash
+git diff <base>..<head> -- . ':(exclude)docs/stories/QS-{{issue}}.review_ledger.json' ':(exclude)docs/stories/QS-{{issue}}.story_review_fix_*'
+```
+
+Rounds 1–2 are always full; a forced, non-ancestor or merge-crossing
+round is full too (`start-round` says why).
+[%- endmacro -%]
+[%- macro review_consolidate() -%]
+Deduplicate across reviewers (`file:line` + similar text → one entry)
+and key each consolidated finding `C-1`, `C-2`, … with its source (the
+reviewer's agent name — a co-sourced finding keeps the first and names
+the others in its body), severity (`must-fix` / `should-fix` /
+`nice-to-have`), `where` (repo-relative `path:line`), title and body.
+
+- Drop as **invalid** any finding whose `where` is the review ledger or
+  a fix plan.
+- The "CodeRabbit unavailable" meta-finding is an info line for the
+  user, never a finding.
+[%- endmacro -%]
+[%- macro review_verify() -%]
+Spawn `qs-review-finding-verifier` **once**, after the fan-out and the
+consolidation — a sequential post-pass, not a parallel reviewer. Pass
+it:
+
+- PR number, worktree path, head SHA;
+- the diff reviewed this round (full, or the delta diff) — above 3,000
+  lines, only the changed-file list plus the hunks of the files the
+  findings cite (it reads the rest itself);
+- the consolidated findings (key, source, severity, where, title,
+  body);
+- the ledger, with each decided finding's file changes since its
+  decision:
+
+```bash
+python scripts/qs/review_ledger.py show --issue {{issue}} --format json --head <head>
+```
+
+It answers with exactly one fenced `json` block holding one object
+(`"mode": "verified"`): per finding a verdict, `reproduces_when`,
+`severity_action` and ledger `relation`; one check per `accepted`
+ledger finding.
+
+**Fallback** — the verifier crashed, returned no JSON block, or `add`
+rejected its object a second time (step 5): build the object yourself,
+verifying nothing — `{"mode": "fallback", "checks": [], "findings":
+[...]}`, each finding with its `key`, `source`, `severity`, `where`,
+`title` copied and `"verdict": null`, `"evidence": null`,
+`"reproduces_when": null`, `"severity_action": "keep"`,
+`"relation": {"kind": "NEW", "ref": null}`, `"note": "unverified"`.
+Fallback findings are never refuted, and accepted ledger findings stay
+`accepted` (unchecked this round).
+[%- endmacro -%]
+[%- macro review_record() -%]
+Paste the block's **inner** JSON (without the fence) into `add`, and
+pass every consolidated key with `--keys` — `add` rejects an object that
+drops or invents a finding. With no consolidated findings, pass
+`--keys ""` (the round still records its checks):
+
+```bash
+python scripts/qs/review_ledger.py add --issue {{issue}} --keys <C-1,C-2,…> <<'QS_LEDGER'
+<the JSON object>
+QS_LEDGER
+```
+
+- exit 0 → keep the per-key `effect` (`new`, `new-downgraded`,
+  `duplicate`, `reopened`, `challenged`, `flip-flop`, `merged`) and the
+  per-ID `checks` results (`resolved`, `reopened`, `merged`).
+- exit 2 → HALT and show the error (corrupt ledger).
+- exit 1 on the verifier's object → show the error and re-ask the
+  verifier once with it; a second exit 1 → fall back (step 4).
+- exit 1 on the fallback object, or a lifecycle error → HALT with the
+  error. You never edit findings to make `add` pass.
+
+Then load the round's findings (state, severity, verdict, evidence,
+note, relation, history):
+
+```bash
+python scripts/qs/review_ledger.py show --issue {{issue}} --format json
+```
+[%- endmacro -%]
+[%- macro review_fast_path() -%]
+Take this path only in `verified` mode (there `accepted_unchecked` is
+always empty — every accepted finding was checked; a `fallback` round
+always goes to triage). If every `open` finding falls in the
+`Dropped by verifier` or `Nice-to-have` bucket of step 7 — none in
+`FLIP-FLOP`, `Reopened`, `Unverified` or `Blocking` — reject them with
+their defaults:
+
+```bash
+python scripts/qs/review_ledger.py set --issue {{issue}} --id <F-x> --to rejected --by verifier
+python scripts/qs/review_ledger.py set --issue {{issue}} --id <F-y> --to rejected --by default-skip
+```
+
+(`--by verifier` for `Dropped by verifier`, `--by default-skip` for
+`Nice-to-have`).
+[%- endmacro -%]
+[%- macro review_triage() -%]
+Place each `open` finding in exactly one bucket — the first row that
+matches (severities are the ledger's `severity`, i.e. after the
+verifier's `severity_action`):
+
+| # | bucket | content | default |
+|---|---|---|---|
+| 1 | `FLIP-FLOP` | effects `flip-flop` / `challenged`, shown with F-x's history | none — explicit decision |
+| 2 | `Reopened` | effect `reopened` or check `reopened` | fix |
+| 3 | `Unverified` | `mode: fallback` must-fix / should-fix | none — explicit decision |
+| 4 | `Dropped by verifier` | verdict `REFUTED` or `severity_action: demote`, shown with evidence + note | reject (overridable) |
+| 5 | `Blocking` | must-fix / should-fix with verdict `CONFIRMED`, `PLAUSIBLE` (marked `?`), or doc-maintenance (marked `deterministic`); promoted marked `↑` | fix |
+| 6 | `Nice-to-have` | the rest, collapsed | reject (opt-in) |
+
+Info lines, not buckets: "N repeats of decided findings, suppressed"
+(`duplicate` effects), every `merged` and `new-downgraded` effect with
+its history note, and — after step 8's `check-round` — any
+`accepted_unchecked` IDs.
+
+Present the summary:
+
+```text
+Findings for PR #{{pr_number}}, round {{round}} (<mode>):
+  FLIP-FLOP: A  Reopened: B  Unverified: C
+  Dropped by verifier: D  Blocking: E  Nice-to-have: F (collapsed)
+```
+
+Ask: "fix all / skip all / one by one?". "fix all" covers rows 2 + 5
+(`Reopened` + `Blocking`) and keeps the defaults of rows 4 and 6;
+"skip all" skips rows 2 + 5 and keeps the same defaults. `FLIP-FLOP`
+and `Unverified` findings are never covered by either: walk each one,
+show its ledger history, and ask the user to decide (fix or skip). One
+by one: walk each finding, ask "fix or skip?" (a `Nice-to-have` is
+fixed only when the user picks it; a `Dropped by verifier` default can
+be overridden). Collect all decisions, then ask "confirm decisions?".
+[%- endmacro -%]
+[%- macro review_decisions() -%]
+Record every decision — `FLIP-FLOP` decisions first:
+
+```bash
+python scripts/qs/review_ledger.py set --issue {{issue}} --id <F-x> --to accepted
+python scripts/qs/review_ledger.py set --issue {{issue}} --id <F-x> --to rejected --by user
+```
+
+`--by user` for the user's explicit skips; `--by verifier` /
+`--by default-skip` for the `Dropped by verifier` / `Nice-to-have`
+defaults kept as-is. Accepting a `FLIP-FLOP` finding supersedes the one
+it undoes (`superseded` in the output) — even when that one was reopened
+this round, so a later `set` on it is refused because it is
+`superseded`: that is expected, and it drops out of the fix plan (never
+"fix A" and "undo A" together). The fix plan lists exactly the findings
+`show` reports `accepted` with this round as `decided_round`. Then:
+
+```bash
+python scripts/qs/review_ledger.py check-round --issue {{issue}}
+```
+
+Exit 1 → some findings are still `open`: back to step 7 for the listed
+IDs. Exit 0 → report any `accepted_unchecked` IDs; if there are some
+and the user chose no fix, ask before routing to finish-task.
+[%- endmacro -%]
+[%- macro review_round_notes() -%]
+Each ledger push re-runs CI (accepted). A crash before the commit
+leaves the ledger dirty; the next `start-round` discards it and the
+round is redone.
+[%- endmacro -%]

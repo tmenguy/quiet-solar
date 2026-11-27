@@ -1,6 +1,7 @@
 """QS-332: pins on the workflow-bot fixes (B4) and the lane-check CI job (B1).
 
-``stale.yml`` / ``issue-triage.yml`` were previously pinned by nothing;
+``issue-triage.yml`` was previously pinned by nothing (``stale.yml`` was since
+deleted);
 these tests pin the D6 decisions so a later edit is a deliberate act.
 """
 
@@ -20,20 +21,10 @@ def _load(name: str) -> dict:
     return yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
 
 
-# ---------------------------------------------------------------------------
-# stale.yml — scale:epic exemption (B4)
-# ---------------------------------------------------------------------------
-
-
-def test_stale_exempts_epics() -> None:
-    doc = _load("stale.yml")
-    step = doc["jobs"]["stale"]["steps"][0]
-    issue_exemptions = step["with"]["exempt-issue-labels"].split(",")
-    assert "scale:epic" in issue_exemptions
-    # The pre-existing exemptions survive.
-    assert {"pinned", "security", "critical"} <= set(issue_exemptions)
-    # PR exemptions unchanged — epics have no PRs.
-    assert step["with"]["exempt-pr-labels"] == "pinned,security,critical"
+# stale.yml was deleted on main (9db87a91): the bot is gone, so its
+# scale:epic exemption pin (B4) went with it.
+def test_stale_workflow_removed() -> None:
+    assert not (WORKFLOWS / "stale.yml").exists()
 
 
 # ---------------------------------------------------------------------------

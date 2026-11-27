@@ -412,7 +412,7 @@ def test_render_policy_path_translates_per_harness(tmp_path: Path) -> None:
     assert (agents_o / "qs-finish-task.md").read_text() == (
         "model=github-copilot/claude-haiku-4.5 effort=None\n"
     )
-    assert (agents_c / "qs-create-plan.md").read_text() == "model=claude-fable-5-1 effort=high\n"
+    assert (agents_c / "qs-create-plan.md").read_text() == "model=claude-opus-5-5 effort=high\n"
     assert (agents_o / "qs-create-plan.md").read_text() == (
         "model=github-copilot/gpt-6-astra effort=high\n"
     )
@@ -551,7 +551,7 @@ def test_main_in_process(tmp_path: Path, capsys, monkeypatch) -> None:
     assert rc == 0
     out = capsys.readouterr().out
     assert str(tmp_path / ".claude" / "agents") in out
-    assert len(list((tmp_path / ".claude" / "agents").glob("*.md"))) == 22
+    assert len(list((tmp_path / ".claude" / "agents").glob("*.md"))) == 23
 
 
 def test_main_render_error(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -570,7 +570,7 @@ def test_main_subprocess(tmp_path: Path) -> None:
         cwd=REPO_ROOT, capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
-    assert len(list((tmp_path / ".opencode" / "agents").glob("*.md"))) == 22
+    assert len(list((tmp_path / ".opencode" / "agents").glob("*.md"))) == 23
 
 
 # ---------------------------------------------------------------------------
@@ -582,11 +582,11 @@ def test_registry_invariants() -> None:
     assert r.LANE_AWARE <= r.ORCHESTRATORS
     assert set() == r.ORCHESTRATORS & r.SUBAGENTS
     union = r.ORCHESTRATORS | r.SUBAGENTS
-    assert len(union) == 22
+    assert len(union) == 23
     glob = {p.name.removesuffix(".md.j2") for p in TEMPLATES_DIR.glob("*.md.j2") if not p.name.startswith("_")}
     assert glob == union
     assert len(r.ORCHESTRATORS) == 10
-    assert len(r.SUBAGENTS) == 12
+    assert len(r.SUBAGENTS) == 13
 
 
 # ---------------------------------------------------------------------------
@@ -616,7 +616,7 @@ def test_all_templates_render_both_modes(tmp_path: Path) -> None:
         out = _render_real(tmp_path, bound=bound)
         for hdir in (".claude", ".opencode"):
             files = list((out / hdir / "agents").glob("*.md"))
-            assert len(files) == 22
+            assert len(files) == 23
             for f in files:
                 text = f.read_text()
                 assert "[[" not in text
@@ -632,7 +632,7 @@ def test_all_templates_render_bound_to_an_epic_factory_context(tmp_path: Path) -
     out = _render_real(tmp_path, bound=True, labels=_EPIC_FACTORY_LABELS)
     for hdir in (".claude", ".opencode"):
         files = list((out / hdir / "agents").glob("*.md"))
-        assert len(files) == 22
+        assert len(files) == 23
         for f in files:
             text = f.read_text()
             assert "[[" not in text
@@ -675,9 +675,9 @@ def test_claude_frontmatter_contract(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("labels", "stem", "expected"),
     [
-        (["kind:feature", "target:factory", "scale:task"], "qs-create-plan", "claude-fable-5-1"),
+        (["kind:feature", "target:factory", "scale:task"], "qs-create-plan", "claude-opus-5-5"),
         (["kind:bug", "target:product", "scale:task"], "qs-diagnose-task", "claude-opus-5-5"),
-        (["target:factory", "scale:epic"], "qs-create-plan", "claude-fable-5-1"),
+        (["target:factory", "scale:epic"], "qs-create-plan", "claude-opus-5-5"),
     ],
 )
 def test_claude_frontmatter_model_by_lane(

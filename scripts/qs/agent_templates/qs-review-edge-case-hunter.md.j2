@@ -60,13 +60,28 @@ unhandled** edge cases.
 ## Input
 
 The PR number, passed in your invocation prompt. You have full
-read-only access to the repo.
+read-only access to the repo. In a **delta round** the orchestrator also
+passes a `base` SHA (the last reviewed head) and the exclude pathspecs.
+Always ignore `docs/stories/QS-<N>.review_ledger.json` and
+`docs/stories/QS-<N>.story_review_fix_*` (review bookkeeping, not code).
 
 ## What to do
+
+Full round:
 
 ```bash
 gh pr diff {{pr_number}}
 ```
+
+Delta round — review only what changed since `base`:
+
+```bash
+git diff {{base}}..HEAD -- . ':(exclude)docs/stories/QS-<N>.review_ledger.json' ':(exclude)docs/stories/QS-<N>.story_review_fix_*'
+```
+
+In a delta round, still enumerate the boundaries of every function the
+delta touches — read the surrounding code, not only the changed lines,
+since a fix can break an unchanged caller.
 
 For each new or modified function in the diff:
 

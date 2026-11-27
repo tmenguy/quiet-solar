@@ -92,6 +92,7 @@ SUB_AGENT_NAMES: tuple[str, ...] = (
     "qs-diag-root-cause-skeptic",
     "qs-diag-fix-minimalist",
     "qs-review-regression-proof",
+    "qs-review-finding-verifier",
 )
 
 ALL_STATIC_AGENT_NAMES: tuple[str, ...] = PHASE_AGENT_NAMES + SUB_AGENT_NAMES
