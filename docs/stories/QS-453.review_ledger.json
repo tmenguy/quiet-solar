@@ -30,6 +30,11 @@
       "n": 6,
       "head": "e075f9a721733cd6afe86b69b407de64fef68ae2",
       "added": true
+    },
+    {
+      "n": 7,
+      "head": "ea0f5e03859b0ab69000a52a5bf5ea423271c0d9",
+      "added": true
     }
   ],
   "findings": [
@@ -285,6 +290,12 @@
         },
         {
           "round": 5,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-8)"
+        },
+        {
+          "round": 7,
           "from": "resolved",
           "to": "resolved",
           "note": "duplicate: qs-review-coderabbit (C-8)"
@@ -686,6 +697,12 @@
           "from": "resolved",
           "to": "resolved",
           "note": "duplicate: qs-review-coderabbit (C-6)"
+        },
+        {
+          "round": 7,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-5)"
         }
       ]
     },
@@ -780,6 +797,12 @@
           "from": "resolved",
           "to": "resolved",
           "note": "duplicate: qs-review-coderabbit (C-6)"
+        },
+        {
+          "round": 7,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-6)"
         }
       ]
     },
@@ -833,6 +856,12 @@
         },
         {
           "round": 5,
+          "from": "resolved",
+          "to": "resolved",
+          "note": "duplicate: qs-review-coderabbit (C-7)"
+        },
+        {
+          "round": 7,
           "from": "resolved",
           "to": "resolved",
           "note": "duplicate: qs-review-coderabbit (C-7)"
@@ -892,6 +921,12 @@
           "from": "rejected",
           "to": "rejected",
           "note": "duplicate: qs-review-coderabbit (C-7)"
+        },
+        {
+          "round": 7,
+          "from": "rejected",
+          "to": "rejected",
+          "note": "duplicate: qs-review-coderabbit (C-9)"
         }
       ]
     },
@@ -1951,7 +1986,7 @@
       "evidence": "scripts/qs/review_ledger.py:252-268",
       "reproduces_when": "round N head H; a git commit -a captures the dirty round-N ledger (open findings) together with new code as H'; review-task on H' -> start-round exits 1 'committed unfinished' before the head diff; the user skips every open ID; ledger-only commit, then finish-task handoff; the code in H..H' is never reviewed",
       "relation": null,
-      "state": "accepted",
+      "state": "resolved",
       "rejected_by": null,
       "decided_round": 6,
       "history": [
@@ -1984,6 +2019,12 @@
           "from": "open",
           "to": "accepted",
           "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 7,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/agent_templates/_macros.md.j2:259-261"
         }
       ]
     },
@@ -2065,7 +2106,7 @@
       "evidence": "scripts/qs/agent_templates/qs-verify-task.md.j2:232-250",
       "reproduces_when": "recovery in verify-task where the user rejects a must/should with --by user: following step 6's handoff literally prints 'No blocking findings.' and skips step 8's triage-summary PR comment and banner swap",
       "relation": null,
-      "state": "accepted",
+      "state": "resolved",
       "rejected_by": null,
       "decided_round": 6,
       "history": [
@@ -2080,6 +2121,12 @@
           "from": "open",
           "to": "accepted",
           "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 7,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/agent_templates/_macros.md.j2:262-266"
         }
       ]
     },
@@ -2097,7 +2144,7 @@
       "evidence": "scripts/qs/review_ledger.py:233-234",
       "reproduces_when": "recovered round with a finding accepted during recovery and no code change since the round head: following the hint (commit the ledger, start-round again) returns no-change, so no fix plan is written and the accepted fix is dropped",
       "relation": null,
-      "state": "accepted",
+      "state": "resolved",
       "rejected_by": null,
       "decided_round": 6,
       "history": [
@@ -2112,6 +2159,140 @@
           "from": "open",
           "to": "accepted",
           "note": "user: fix all (delegated)"
+        },
+        {
+          "round": 7,
+          "from": "accepted",
+          "to": "resolved",
+          "note": "check RESOLVED: scripts/qs/review_ledger.py:187-191"
+        }
+      ]
+    },
+    {
+      "id": "F-055",
+      "round": 7,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "should-fix",
+      "severity_action": "keep",
+      "severity": "should-fix",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:259",
+      "title": "Recovery bullet, `changed_since_round: false` branch: a user request for a full review (`--force-full`) is lost",
+      "note": "The false branch never re-offers or re-runs --force-full. Fix #05, not #06, removed the restart.",
+      "verdict": "CONFIRMED",
+      "evidence": "scripts/qs/review_ledger.py:266-281",
+      "reproduces_when": "user asks for a full re-review; HEAD holds a committed-unfinished ledger; no code changed since that round's head; start-round --force-full exits 1 before args.force_full is read; the user skips every open ID; ledger-only commit; changed_since_round false -> finish-task handoff, and no forced full round ever starts",
+      "relation": null,
+      "state": "accepted",
+      "rejected_by": null,
+      "decided_round": 7,
+      "history": [
+        {
+          "round": 7,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 7,
+          "from": "open",
+          "to": "accepted",
+          "note": "user: fix all (delegated)"
+        }
+      ]
+    },
+    {
+      "id": "F-056",
+      "round": 7,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:259",
+      "title": "`changed_since_round: true` branch: the recovered round's all-skip outcome is never reported",
+      "note": null,
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 7,
+      "history": [
+        {
+          "round": 7,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 7,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-057",
+      "round": 7,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/agent_templates/_macros.md.j2:259",
+      "title": "`changed_since_round` is read from the earlier error and can go stale after a pull or rebase during recovery",
+      "note": null,
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 7,
+      "history": [
+        {
+          "round": 7,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 7,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
+        }
+      ]
+    },
+    {
+      "id": "F-058",
+      "round": 7,
+      "source": "qs-review-edge-case-hunter",
+      "reported_severity": "nice-to-have",
+      "severity_action": "keep",
+      "severity": "nice-to-have",
+      "where": "scripts/qs/review_ledger.py:245",
+      "title": "A malformed round entry (no `head`, or a non-string `head`) crashes the committed-unfinished error path",
+      "note": "Same class as F-011 / F-046, but on new code, so NEW.",
+      "verdict": null,
+      "evidence": null,
+      "reproduces_when": null,
+      "relation": null,
+      "state": "rejected",
+      "rejected_by": "default-skip",
+      "decided_round": 7,
+      "history": [
+        {
+          "round": 7,
+          "from": null,
+          "to": "open",
+          "note": "added"
+        },
+        {
+          "round": 7,
+          "from": "open",
+          "to": "rejected",
+          "note": "default-skip: skip"
         }
       ]
     }
