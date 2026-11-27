@@ -1505,5 +1505,5 @@ def test_fix06_f050_committed_unfinished_reports_changed_since_round(
 def test_fix08_f059_recovery_hint_points_to_step1_without_restating_routing(mod: ModuleType) -> None:
     hint = mod._RECOVERY_HINT
     assert "step 1" in hint
-    for rule in ("changed_since_round", "finish-task", "restart", "start-round again"):
+    for rule in ("finish-task", "restart", "start-round again", "fix plan"):  # routing lives in the template only
         assert rule not in hint, rule
