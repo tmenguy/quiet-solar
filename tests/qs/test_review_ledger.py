@@ -393,7 +393,12 @@ def test_set_before_add_fails(led: Ledger) -> None:
 def test_set_outside_started_round_fails(led: Ledger) -> None:
     led.round(_obj([_finding()]), {"F-001": ("accepted", None)})
     led.fail("set", "--id", "F-001", "--to", "accepted")
-    led.fail("set", "--id", "F-001", "--to", "accepted")  # no round at all is the same class
+
+
+def test_set_without_any_round_fails(led: Ledger) -> None:
+    """No ledger at all (fix #08 F-061): ``set`` is outside a started round too."""
+    assert "start-round" in led.fail("set", "--id", "F-001", "--to", "accepted")["error"]
+    assert not led.path.exists()
 
 
 def test_add_outside_started_round_fails(led: Ledger) -> None:
@@ -1490,3 +1495,15 @@ def test_fix06_f050_committed_unfinished_reports_changed_since_round(
     err = led.fail("start-round", "--head", _head(led.repo))
     assert err["changed_since_round"] is new_code
     assert "start-round again" not in err["hint"]
+
+
+# ---------------------------------------------------------------------------
+# Review fix #08 (QS-453 round 8)
+# ---------------------------------------------------------------------------
+
+
+def test_fix08_f059_recovery_hint_points_to_step1_without_restating_routing(mod: ModuleType) -> None:
+    hint = mod._RECOVERY_HINT
+    assert "step 1" in hint
+    for rule in ("changed_since_round", "finish-task", "restart", "start-round again"):
+        assert rule not in hint, rule

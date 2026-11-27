@@ -184,10 +184,12 @@ def _changed_since(ctx: _Ctx, base: str, head: str) -> bool:
     return _git(ctx.root, "diff", "--quiet", base, head, "--", ".", *ctx.excludes).returncode != 0
 
 
+# The routing after recovery lives in one place — the orchestrators' step-1
+# recovery bullet (``_macros.md.j2``); the hint only points there (fix #08 F-059).
 _RECOVERY_HINT = (
-    "decide each open ID with `review_ledger.py set` and run check-round, then finish the round like "
-    "step 8 (accepted findings → fix plan + implement handoff; none → commit the ledger, then restart "
-    "only if changed_since_round, else the finish-task handoff)"
+    "decide each open ID with `review_ledger.py set` and run check-round, then finish the round as the "
+    "orchestrator's step 1 \"committed unfinished\" recovery says (use this error's `round` and "
+    "`changed_since_round`)"
 )
 
 
